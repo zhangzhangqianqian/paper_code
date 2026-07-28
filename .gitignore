@@ -203,6 +203,11 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Project-generated data and experiment artifacts
+frame/data/raw/*
+!frame/data/raw/README.md
+frame/reports/
+
 # Ruff stuff:
 .ruff_cache/
 
