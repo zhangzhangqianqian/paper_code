@@ -19,9 +19,11 @@ Cooling     → cooling
 Heat        → heating
 ```
 
-时间范围为 2014—2022 年小时数据。全年协议为：2014—2019 年训练、2020 年验证、2021—2022 年测试；小样本协议为 2018 年 7 月 1 日至 8 月 31 日的夏季切分。
+时间范围为 2014—2022 年小时数据。全年协议为：2014—2019 年训练、2020 年验证、2021—2022 年测试；小样本协议为 2018 年 7 月 1 日至 8 月 31 日，其中 7 月 1 日—8 月 17 日训练、8 月 18 日—8 月 24 日验证、8 月 25 日—8 月 31 日测试。
 
 ## 已实现阶段
+
+以下内容已经完成代码实现，并通过单元测试或 CPU 冒烟验证；冒烟结果不等同于正式实验结论。
 
 已完成：
 
@@ -36,7 +38,7 @@ Heat        → heating
 - 结构匹配的独立单任务 DS-TCN 模型；
 - 训练集专属标准化、逆变换和 PyTorch DataLoader；
 - Hard-Share MTL 模型；
-- 统一 CPU 训练、验证、最佳 checkpoint 保存和测试预测导出接口。
+- 统一 CPU 训练、验证、最佳 checkpoint 保存和测试预测导出接口；
 - 静态有向任务门控、跨任务消息投影和残差融合；
 - 静态门控矩阵约束测试与导出。
 - 独立状态编码器和状态相关动态对称门控；
@@ -48,8 +50,8 @@ Heat        → heating
 
 暂未完成：
 
-- 统一接口下的正式全量训练、消融实验和负迁移分析（阶段6—7）；
-- 正式全量训练、消融实验和负迁移分析（阶段6—7）。
+- 阶段 6.2—6.5 的正式预实验、候选模型选择和门控诊断；
+- 阶段 6.6 的冻结决策、阶段 7 的正式实验、消融实验和负迁移分析。
 
 ## 模型接口
 
@@ -100,7 +102,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\train_models.py `
   --max-test-samples 256 --batch-size 128 --threads 2
 ```
 
-`--model stl` 用于结构匹配的独立单任务参照；`--model hard_share` 用于硬共享多任务参照；`--model static_gate` 用于静态有向门控模型；`--model dynamic_symmetric` 用于样本级动态对称门控模型。正式运行时去掉 `--max-*-samples` 限制，并固定输出目录。每次运行会生成：
+`--model stl` 用于结构匹配的独立单任务参照；`--model hard_share` 用于硬共享多任务参照；`--model static_gate` 用于静态有向门控模型；`--model dynamic_symmetric` 用于样本级动态对称门控模型；`--model dynamic_directed` 用于样本级动态有向门控模型。上面的命令是 CPU 冒烟配置（batch size=128、threads=2）；正式实验使用阶段 6 契约规定的资源配置，并去掉 `--max-*-samples` 限制。每次运行会生成：
 
 - `normalization_stats.npz`：仅由训练集拟合的均值和尺度；
 - `best_model.pt`：按验证集 Smooth L1 损失保存的最佳模型；
@@ -128,7 +130,7 @@ PyTorch 2.8.0+cpu
 & D:\anaconda\envs\pytorch\python.exe -m unittest discover -s frame/tests -v
 ```
 
-当前已实现：静态有向门控、独立状态编码器、动态对称门控、动态有向门控和阶段4.5统一接口。后续实现顺序：外部轻量基线 → 预实验决策门 → 消融和正式实验。
+当前代码已覆盖阶段 0—5.5 的主要实现与统一接口，并完成阶段 6.1 的验证协议冻结。阶段 5.1—5.5 的外部基线和阶段 6.2—6.5 的编排脚本均已具备，但目前仍需运行正式实验；下一步是执行阶段 6.2—6.5，随后完成阶段 6.6 冻结决策和阶段 7 正式实验。
 
 ### 阶段5.1：外部基线公平性契约
 
@@ -229,3 +231,16 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\validate_stage6_selection.py
 
 契约文件为 `frame/configs/stage6_selection_contract.json`，规定全年2020验证集为
 主要选择依据，小样本验证集为鲁棒性检查，并固定五个候选核心模型和四组有限超参数。
+
+### 阶段6.2—6.5：正式预实验编排
+
+以下脚本用于正式预实验，当前仅完成统一接口和冒烟链路，尚未形成正式论文结论：
+
+```powershell
+D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_selection.py
+D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_robustness.py
+D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_gate_diagnostics.py
+D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_transfer_analysis.py
+```
+
+阶段 6 的模型选择只读取训练集和验证集；测试集在阶段 7 前封存，不用于选模型、调超参数或诊断门控行为。
