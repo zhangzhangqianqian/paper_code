@@ -1,0 +1,120 @@
+{
+  "contract_version": "stage5.1",
+  "purpose": "Fix a fair and reproducible comparison contract for external lightweight baselines.",
+  "tasks": [
+    "electricity",
+    "cooling",
+    "heating"
+  ],
+  "data_protocol": {
+    "sampling": "1h",
+    "lookback": 24,
+    "horizon": 4,
+    "splits": {
+      "full": {
+        "train_start": "2014-01-01 00:00:00",
+        "train_end": "2019-12-31 23:00:00",
+        "validation_start": "2020-01-01 00:00:00",
+        "validation_end": "2020-12-31 23:00:00",
+        "test_start": "2021-01-01 00:00:00",
+        "test_end": "2022-12-31 23:00:00"
+      },
+      "small_sample": {
+        "train_start": "2018-07-01 00:00:00",
+        "train_end": "2018-08-17 23:00:00",
+        "validation_start": "2018-08-18 00:00:00",
+        "validation_end": "2018-08-24 23:00:00",
+        "test_start": "2018-08-25 00:00:00",
+        "test_end": "2018-08-31 23:00:00"
+      }
+    },
+    "standardization": {
+      "fit_on": "train_split_only",
+      "apply_to": [
+        "train",
+        "validation",
+        "test"
+      ],
+      "fit_targets_and_exog": true
+    }
+  },
+  "input_output": {
+    "loads_shape": [
+      "batch",
+      24,
+      3
+    ],
+    "exog_shape": [
+      "batch",
+      24,
+      "F"
+    ],
+    "prediction_shape": [
+      "batch",
+      4,
+      3
+    ],
+    "future_exogenous_allowed": false,
+    "input_modes": {
+      "loads_only": {
+        "description": "Use only the 24-hour historical electricity, cooling and heating loads."
+      },
+      "loads_and_exog": {
+        "description": "Use historical loads together with the available historical weather and calendar variables."
+      }
+    }
+  },
+  "training": {
+    "loss": "SmoothL1Loss",
+    "optimizer": "AdamW",
+    "early_stopping_monitor": "validation_loss",
+    "checkpoint_policy": "save_and_restore_best_validation_loss",
+    "device": "cpu"
+  },
+  "evaluation": {
+    "metrics": [
+      "MAE",
+      "RMSE",
+      "WAPE",
+      "MAPE"
+    ],
+    "report_per_task": true,
+    "report_per_horizon": true,
+    "report_overall_equal_task_mean": true
+  },
+  "resource_recording": {
+    "parameter_count": true,
+    "fit_seconds": true,
+    "test_evaluation_seconds": true,
+    "test_samples_per_second": true
+  },
+  "baseline_specs": [
+    {
+      "name": "DLinear",
+      "family": "linear_forecasting",
+      "input_mode": "loads_only",
+      "exog_support": "loads_only",
+      "future_exog_allowed": false,
+      "exact_reimplementation": false,
+      "relation_to_shao": "Independent lightweight linear baseline; not a Shao model reproduction."
+    },
+    {
+      "name": "MMoE-lite",
+      "family": "expert_routing",
+      "input_mode": "loads_and_exog",
+      "exog_support": "yes",
+      "future_exog_allowed": false,
+      "exact_reimplementation": false,
+      "relation_to_shao": "Retains the MMoE expert-routing idea but omits the Frequency and STIM modules; it is not the complete Frequency-STIM-MMoE model."
+    },
+    {
+      "name": "SOFTS",
+      "family": "multivariate_channel_mixing",
+      "input_mode": "loads_only",
+      "exog_support": "minimal_adapter_loads_only",
+      "future_exog_allowed": false,
+      "exact_reimplementation": false,
+      "relation_to_shao": "STAR-based multivariate channel-mixing adapter; not a Shao model reproduction."
+    }
+  ]
+}

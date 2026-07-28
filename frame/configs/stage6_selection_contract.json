@@ -1,0 +1,149 @@
+{
+  "contract_version": "stage6.1",
+  "purpose": "Freeze validation-only model selection rules before formal test evaluation.",
+  "dataset": "heew_total",
+  "tasks": [
+    "electricity",
+    "cooling",
+    "heating"
+  ],
+  "data_protocol": {
+    "sampling": "1h",
+    "lookback": 24,
+    "horizon": 4,
+    "full": {
+      "train_start": "2014-01-01 00:00:00",
+      "train_end": "2019-12-31 23:00:00",
+      "validation_start": "2020-01-01 00:00:00",
+      "validation_end": "2020-12-31 23:00:00",
+      "test_start": "2021-01-01 00:00:00",
+      "test_end": "2022-12-31 23:00:00"
+    },
+    "small_sample": {
+      "train_start": "2018-07-01 00:00:00",
+      "train_end": "2018-08-17 23:00:00",
+      "validation_start": "2018-08-18 00:00:00",
+      "validation_end": "2018-08-24 23:00:00",
+      "test_start": "2018-08-25 00:00:00",
+      "test_end": "2018-08-31 23:00:00"
+    }
+  },
+  "validation_policy": {
+    "primary_protocol": "full",
+    "primary_validation_split": "2020-01-01 00:00:00/2020-12-31 23:00:00",
+    "secondary_protocol": "small_sample",
+    "secondary_validation_split": "2018-08-18 00:00:00/2018-08-24 23:00:00",
+    "secondary_role": "robustness_only",
+    "test_set_status": "sealed_until_stage7",
+    "test_metrics_may_be_read": false,
+    "test_predictions_may_be_read": false
+  },
+  "candidate_models": [
+    "stl",
+    "hard_share",
+    "static_gate",
+    "dynamic_symmetric",
+    "dynamic_directed"
+  ],
+  "input_output": {
+    "input_mode": "loads_and_exog",
+    "loads_shape": [
+      "batch",
+      24,
+      3
+    ],
+    "exog_shape": [
+      "batch",
+      24,
+      14
+    ],
+    "prediction_shape": [
+      "batch",
+      4,
+      3
+    ],
+    "future_exogenous_allowed": false,
+    "standardization": "train_split_only_zscore"
+  },
+  "training_policy": {
+    "random_seed": 2026,
+    "device": "cpu",
+    "loss": "SmoothL1Loss",
+    "optimizer": "AdamW",
+    "batch_size": 256,
+    "weight_decay": 0.0001,
+    "max_epochs": 100,
+    "early_stopping_patience": 12,
+    "early_stopping_monitor": "validation_loss",
+    "checkpoint_policy": "restore_best_validation_loss",
+    "gradient_clip_norm": 1.0
+  },
+  "finite_hyperparameter_candidates": [
+    {
+      "candidate_id": "H1",
+      "hidden_dim": 16,
+      "kernel_size": 3,
+      "dropout": 0.0,
+      "learning_rate": 0.001
+    },
+    {
+      "candidate_id": "H2",
+      "hidden_dim": 32,
+      "kernel_size": 3,
+      "dropout": 0.1,
+      "learning_rate": 0.001
+    },
+    {
+      "candidate_id": "H3",
+      "hidden_dim": 32,
+      "kernel_size": 5,
+      "dropout": 0.1,
+      "learning_rate": 0.001
+    },
+    {
+      "candidate_id": "H4",
+      "hidden_dim": 32,
+      "kernel_size": 3,
+      "dropout": 0.1,
+      "learning_rate": 0.0005
+    }
+  ],
+  "selection_rule": {
+    "primary_metric": "validation_overall_equal_task_mean.WAPE",
+    "primary_direction": "minimize",
+    "primary_dataset": "full_validation",
+    "tie_tolerance_percentage_points": 0.1,
+    "tie_breakers_in_order": [
+      "validation_max_per_task_WAPE",
+      "validation_negative_transfer_rate",
+      "trainable_parameter_count",
+      "fit_seconds"
+    ],
+    "small_sample_cannot_override_primary_selection": true,
+    "test_result_cannot_override_selection": true
+  },
+  "negative_transfer_reference": {
+    "reference_model": "stl",
+    "formula": "G_i=(E_i_STL-E_i_MTL)/E_i_STL*100",
+    "error_metrics": [
+      "MAE",
+      "RMSE",
+      "WAPE",
+      "MAPE"
+    ],
+    "validation_only": true
+  },
+  "stage6_outputs": [
+    "stage6_selection_contract.json",
+    "validation_model_comparison.csv",
+    "validation_per_task.csv",
+    "validation_per_horizon.csv",
+    "stage6_selected_config.json"
+  ],
+  "failure_policy": {
+    "max_recorded_structure_corrections": 1,
+    "if_gate_is_constant_or_no_negative_transfer_reduction": "stop_and_discuss_with_advisor",
+    "module_stacking_after_failed_gate": false,
+    "premature_claim_of_negative_transfer_mitigation": false
+  }
+}
