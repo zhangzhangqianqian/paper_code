@@ -31,18 +31,23 @@ class StandardizationStats:
     exog_mean: np.ndarray
     exog_scale: np.ndarray
     exog_columns: Tuple[str, ...]
+    task_columns: Tuple[str, ...] = TASKS
 
     @classmethod
     def fit(
         cls,
         train_frame: pd.DataFrame,
         exog_columns: Sequence[str] = (),
+        task_columns: Sequence[str] = TASKS,
     ) -> "StandardizationStats":
-        required = [*TASKS, *exog_columns]
+        task_columns = tuple(str(column) for column in task_columns)
+        if not task_columns:
+            raise ValueError("task_columns不能为空")
+        required = [*task_columns, *exog_columns]
         missing = [column for column in required if column not in train_frame.columns]
         if missing:
             raise ValueError(f"标准化拟合缺少字段：{missing}")
-        load_values = train_frame[list(TASKS)].to_numpy(dtype=np.float32)
+        load_values = train_frame[list(task_columns)].to_numpy(dtype=np.float32)
         exog_values = train_frame[list(exog_columns)].to_numpy(dtype=np.float32)
         if not np.isfinite(load_values).all() or not np.isfinite(exog_values).all():
             raise ValueError("训练集标准化拟合不能包含 NaN 或 Inf")
@@ -52,6 +57,7 @@ class StandardizationStats:
             exog_mean=exog_values.mean(axis=0).astype(np.float32),
             exog_scale=_safe_scale(exog_values),
             exog_columns=tuple(exog_columns),
+            task_columns=task_columns,
         )
 
     def transform_windows(self, windows: Mapping[str, np.ndarray]) -> Dict[str, np.ndarray]:
@@ -60,12 +66,16 @@ class StandardizationStats:
         loads = np.asarray(windows["loads"], dtype=np.float32)
         exog = np.asarray(windows["exog"], dtype=np.float32)
         target = np.asarray(windows["target"], dtype=np.float32)
-        if loads.ndim != 3 or loads.shape[-1] != len(TASKS):
-            raise ValueError("loads必须为[样本,时间,3]")
+        if loads.ndim != 3 or loads.shape[-1] != len(self.task_columns):
+            raise ValueError(
+                f"loads必须为[样本,时间,{len(self.task_columns)}]"
+            )
         if exog.ndim != 3 or exog.shape[-1] != len(self.exog_columns):
             raise ValueError("exog维度与标准化参数不一致")
-        if target.ndim != 3 or target.shape[-1] != len(TASKS):
-            raise ValueError("target必须为[样本,预测步,3]")
+        if target.ndim != 3 or target.shape[-1] != len(self.task_columns):
+            raise ValueError(
+                f"target必须为[样本,预测步,{len(self.task_columns)}]"
+            )
         return {
             "loads": ((loads - self.load_mean) / self.load_scale).astype(np.float32),
             "exog": ((exog - self.exog_mean) / self.exog_scale).astype(np.float32),
@@ -75,16 +85,18 @@ class StandardizationStats:
 
     def inverse_targets(self, values: np.ndarray) -> np.ndarray:
         targets = np.asarray(values, dtype=np.float32)
-        if targets.ndim != 3 or targets.shape[-1] != len(TASKS):
-            raise ValueError("预测目标必须为[样本,预测步,3]")
+        if targets.ndim != 3 or targets.shape[-1] != len(self.task_columns):
+            raise ValueError(
+                f"预测目标必须为[样本,预测步,{len(self.task_columns)}]"
+            )
         return (targets * self.load_scale + self.load_mean).astype(np.float32)
 
     def transform_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
         """将规范 DataFrame 转为标准化 DataFrame，便于检查训练统计量。"""
 
         working = frame.copy()
-        working.loc[:, list(TASKS)] = (
-            working[list(TASKS)] - self.load_mean
+        working.loc[:, list(self.task_columns)] = (
+            working[list(self.task_columns)] - self.load_mean
         ) / self.load_scale
         if self.exog_columns:
             working.loc[:, list(self.exog_columns)] = (
@@ -102,22 +114,29 @@ class StandardizationStats:
             exog_mean=self.exog_mean,
             exog_scale=self.exog_scale,
             exog_columns=np.asarray(self.exog_columns, dtype="U"),
+            task_columns=np.asarray(self.task_columns, dtype="U"),
         )
 
     @classmethod
     def load(cls, path: str | Path) -> "StandardizationStats":
         with np.load(path, allow_pickle=False) as values:
+            task_columns = (
+                tuple(str(value) for value in values["task_columns"])
+                if "task_columns" in values.files
+                else TASKS
+            )
             return cls(
                 load_mean=values["load_mean"].astype(np.float32),
                 load_scale=values["load_scale"].astype(np.float32),
                 exog_mean=values["exog_mean"].astype(np.float32),
                 exog_scale=values["exog_scale"].astype(np.float32),
                 exog_columns=tuple(str(value) for value in values["exog_columns"]),
+                task_columns=task_columns,
             )
 
     def summary(self) -> Dict[str, object]:
         return {
-            "tasks": list(TASKS),
+            "tasks": list(self.task_columns),
             "exog_columns": list(self.exog_columns),
             "load_mean": self.load_mean.tolist(),
             "load_scale": self.load_scale.tolist(),

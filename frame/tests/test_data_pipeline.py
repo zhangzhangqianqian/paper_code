@@ -278,6 +278,44 @@ class DataPipelineTest(unittest.TestCase):
             windows["target_times"][0], np.datetime64("2015-01-03T00:00:00")
         )
 
+    def test_protocol_windows_do_not_cross_split_end(self):
+        frame = make_synthetic_frame(96).rename(
+            columns={
+                "Date Time": "timestamp",
+                "Electric Load": "electricity",
+                "Cooling Load": "cooling",
+                "Heating Load": "heating",
+                "Temperature": "temperature",
+            }
+        )
+        from src.data_pipeline import SplitSpec, build_protocol_windows
+
+        spec = SplitSpec(
+            "2015-01-01 00:00:00",
+            "2015-01-02 23:00:00",
+            "2015-01-03 00:00:00",
+            "2015-01-03 23:00:00",
+            "2015-01-04 00:00:00",
+            "2015-01-04 23:00:00",
+        )
+        windows = build_protocol_windows(
+            frame,
+            spec,
+            split_name="validation",
+            lookback=24,
+            horizon=4,
+            exog_columns=("temperature",),
+        )
+        self.assertEqual(
+            windows["target_times"][-1], np.datetime64("2015-01-03T20:00:00")
+        )
+        self.assertTrue(
+            np.all(
+                windows["target_times"] + np.timedelta64(3, "h")
+                <= np.datetime64("2015-01-03T23:00:00")
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -26,16 +26,16 @@ class FairnessContractTest(unittest.TestCase):
     def test_contract_has_fixed_protocol_and_external_baselines(self):
         self.assertEqual(self.contract.lookback, 24)
         self.assertEqual(self.contract.horizon, 4)
-        self.assertEqual(self.contract.task_count, 3)
+        self.assertEqual(self.contract.task_count, 4)
         self.assertEqual(
             tuple(spec.name for spec in self.contract.baseline_specs), BASELINE_NAMES
         )
         self.assertEqual(INPUT_MODES, ("loads_only", "loads_and_exog"))
 
     def test_prediction_shape_contract(self):
-        self.contract.validate_prediction_shape((8, 4, 3))
+        self.contract.validate_prediction_shape((8, 4, 4))
         with self.assertRaises(ValueError):
-            self.contract.validate_prediction_shape((8, 3, 3))
+            self.contract.validate_prediction_shape((8, 3, 4))
         with self.assertRaises(ValueError):
             self.contract.validate_prediction_shape((8, 4))
 

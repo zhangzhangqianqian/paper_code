@@ -354,6 +354,7 @@ def audit_dataframe(
     frame: pd.DataFrame,
     required_columns: Sequence[str] = ("timestamp",) + TASKS,
     frequency: str = "1h",
+    task_columns: Sequence[str] = TASKS,
 ) -> Dict[str, object]:
     """生成原始或清洗后数据的质量报告。"""
 
@@ -380,7 +381,7 @@ def audit_dataframe(
             "missing_count": int(series.isna().sum()),
             "missing_ratio": float(series.isna().mean()),
         }
-        if column in TASKS:
+        if column in task_columns:
             numeric = pd.to_numeric(series, errors="coerce")
             report["negative_count"] = int((numeric < 0).sum())
             report["min"] = _json_value(numeric.min())
@@ -422,6 +423,7 @@ def audit_dataframe(
 def clean_dataframe(
     frame: pd.DataFrame,
     max_interpolation_hours: int = 3,
+    task_columns: Sequence[str] = TASKS,
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
     """执行阶段1约定的最小清洗。
 
@@ -441,7 +443,7 @@ def clean_dataframe(
         working[column] = pd.to_numeric(working[column], errors="coerce")
 
     negative_counts = {}
-    for task in TASKS:
+    for task in task_columns:
         if task in working.columns:
             negative_counts[task] = int((working[task] < 0).sum())
             working.loc[working[task] < 0, task] = np.nan
@@ -534,6 +536,7 @@ def build_windows(
     lookback: int = 24,
     horizon: int = 4,
     exog_columns: Sequence[str] = (),
+    task_columns: Sequence[str] = TASKS,
 ) -> Dict[str, np.ndarray]:
     """从一个连续时间片段构造24→4监督学习窗口。
 
@@ -543,7 +546,9 @@ def build_windows(
 
     if lookback <= 0 or horizon <= 0:
         raise ValueError("lookback和horizon必须为正整数")
-    required = ["timestamp", *TASKS, *exog_columns]
+    if not task_columns:
+        raise ValueError("task_columns不能为空")
+    required = ["timestamp", *task_columns, *exog_columns]
     missing = [column for column in required if column not in frame.columns]
     if missing:
         raise ValueError(f"构造滑窗缺少字段：{missing}")
@@ -551,7 +556,7 @@ def build_windows(
     working = frame.copy().sort_values("timestamp").reset_index(drop=True)
     working["timestamp"] = pd.to_datetime(working["timestamp"], errors="raise")
     timestamps = working["timestamp"].to_numpy()
-    load_values = working[list(TASKS)].to_numpy(dtype=np.float32)
+    load_values = working[list(task_columns)].to_numpy(dtype=np.float32)
     exog_values = (
         working[list(exog_columns)].to_numpy(dtype=np.float32)
         if exog_columns
@@ -585,7 +590,7 @@ def build_windows(
 
     sample_count = len(loads)
     loads_array = np.asarray(loads, dtype=np.float32).reshape(
-        sample_count, lookback, len(TASKS)
+        sample_count, lookback, len(task_columns)
     )
     if exog_columns:
         exog_array = np.asarray(exogs, dtype=np.float32).reshape(
@@ -594,7 +599,7 @@ def build_windows(
     else:
         exog_array = np.empty((sample_count, lookback, 0), dtype=np.float32)
     target_array = np.asarray(targets, dtype=np.float32).reshape(
-        sample_count, horizon, len(TASKS)
+        sample_count, horizon, len(task_columns)
     )
     return {
         "loads": loads_array,
@@ -611,6 +616,7 @@ def build_protocol_windows(
     lookback: int = 24,
     horizon: int = 4,
     exog_columns: Sequence[str] = (),
+    task_columns: Sequence[str] = TASKS,
 ) -> Dict[str, np.ndarray]:
     """为指定时间切分构造窗口，同时保留边界前的历史上下文。
 
@@ -639,9 +645,16 @@ def build_protocol_windows(
         lookback=lookback,
         horizon=horizon,
         exog_columns=exog_columns,
+        task_columns=task_columns,
     )
     target_times = pd.to_datetime(windows["target_times"])
-    mask = (target_times >= target_start) & (target_times <= target_end)
+    target_end_times = target_times + pd.Timedelta(hours=horizon - 1)
+    # 预测起点和整个预测区间都必须落在当前切分内，避免验证窗口跨入测试集。
+    mask = (
+        (target_times >= target_start)
+        & (target_times <= target_end)
+        & (target_end_times <= target_end)
+    )
     return {key: value[mask] for key, value in windows.items()}
 
 

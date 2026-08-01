@@ -26,15 +26,17 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.baselines import regression_metrics  # noqa: E402
 from src.data_pipeline import (  # noqa: E402
-    FULL_SPLIT,
-    HEEW_EXOG_COLUMNS,
-    SMALL_SAMPLE_SPLIT,
-    TASKS,
     build_protocol_windows,
-    clean_dataframe,
-    read_heew_canonical,
     save_json,
     select_training_frame,
+)
+from src.kitakyushu_pipeline import (  # noqa: E402
+    KITAKYUSHU_EXOG_COLUMNS,
+    KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+    KITAKYUSHU_SPLIT,
+    KITAKYUSHU_TASKS,
+    clean_kitakyushu_dataframe,
+    read_kitakyushu_canonical,
 )
 from src.external_models import (  # noqa: E402
     DLinearBaseline,
@@ -58,6 +60,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--protocol", choices=("full", "small_sample"), default="full"
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=("kitakyushu_energy_station", "heew_total"),
+        default="kitakyushu_energy_station",
+        help="数据协议；默认使用 Kitakyushu 四任务数据",
+    )
+    parser.add_argument(
+        "--kitakyushu-data-dir",
+        default="Kitakyushu dataset",
+        help="Kitakyushu 原始 ZIP/解压文件目录",
     )
     parser.add_argument("--energy-file", help="HEEW负荷CSV路径")
     parser.add_argument("--weather-file", help="HEEW气象CSV路径")
@@ -114,6 +127,10 @@ def _limit_windows(
 
 def main() -> None:
     args = parse_args()
+    if args.dataset != "kitakyushu_energy_station":
+        raise ValueError(
+            "阶段5外部基线当前统一迁移到 Kitakyushu；如需复现旧 HEEW 结果，请使用旧提交版本"
+        )
     contract = load_fairness_contract()
     baseline_name = {
         "dlinear": "DLinear",
@@ -133,18 +150,19 @@ def main() -> None:
     assert output_dir is not None
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    energy_path = _resolve_path(args.energy_file) or (
-        REPOSITORY_ROOT / "dataset/HEEW/cleaned_data/Total_energy.csv"
+    if args.energy_file or args.weather_file:
+        raise ValueError(
+            "Kitakyushu 协议不接受 HEEW 的 --energy-file/--weather-file 参数"
+        )
+    frame, dataset_metadata = read_kitakyushu_canonical(
+        _resolve_path(args.kitakyushu_data_dir), years=tuple(range(2015, 2022))
     )
-    weather_path = _resolve_path(args.weather_file) or (
-        REPOSITORY_ROOT / "dataset/HEEW/cleaned_data/Total_weather.csv"
-    )
-    frame, _ = read_heew_canonical(energy_path, weather_path)
-    cleaned, cleaning_report = clean_dataframe(frame)
+    cleaned, cleaning_report = clean_kitakyushu_dataframe(frame)
+    task_columns = KITAKYUSHU_TASKS
     exog_columns = tuple(
-        column for column in HEEW_EXOG_COLUMNS if column in cleaned.columns
+        column for column in KITAKYUSHU_EXOG_COLUMNS if column in cleaned.columns
     )
-    spec = FULL_SPLIT if args.protocol == "full" else SMALL_SAMPLE_SPLIT
+    spec = KITAKYUSHU_SPLIT if args.protocol == "full" else KITAKYUSHU_SMALL_SAMPLE_SPLIT
     raw_windows = {
         split_name: build_protocol_windows(
             cleaned,
@@ -153,6 +171,7 @@ def main() -> None:
             lookback=args.lookback,
             horizon=args.horizon,
             exog_columns=exog_columns,
+            task_columns=task_columns,
         )
         for split_name in ("train", "validation", "test")
     }
@@ -167,7 +186,9 @@ def main() -> None:
         raise ValueError("至少一个数据切分没有可用滑动窗口")
 
     train_frame = select_training_frame(cleaned, spec)
-    stats = StandardizationStats.fit(train_frame, exog_columns)
+    stats = StandardizationStats.fit(
+        train_frame, exog_columns, task_columns=task_columns
+    )
     standardized = {
         name: stats.transform_windows(value) for name, value in windows.items()
     }
@@ -183,14 +204,14 @@ def main() -> None:
         model = DLinearBaseline(
             lookback=args.lookback,
             horizon=args.horizon,
-            task_count=len(TASKS),
+            task_count=len(task_columns),
             moving_avg=args.moving_avg,
         )
     elif args.model == "mmoe-lite":
         model = MMoELiteBaseline(
             lookback=args.lookback,
             horizon=args.horizon,
-            task_count=len(TASKS),
+            task_count=len(task_columns),
             exog_dim=len(exog_columns),
             expert_count=args.expert_count,
             expert_hidden_dim=args.expert_hidden_dim,
@@ -202,7 +223,7 @@ def main() -> None:
         model = SOFTSBaseline(
             lookback=args.lookback,
             horizon=args.horizon,
-            task_count=len(TASKS),
+            task_count=len(task_columns),
             d_model=args.d_model,
             d_core=args.d_core,
             d_ff=args.d_ff,
@@ -240,7 +261,7 @@ def main() -> None:
     evaluation_seconds = time.perf_counter() - evaluation_started
     prediction = stats.inverse_targets(prediction_std)
     target = stats.inverse_targets(target_std)
-    metrics = regression_metrics(target, prediction)
+    metrics = regression_metrics(target, prediction, task_names=task_columns)
 
     gate_path = None
     if isinstance(model, MMoELiteBaseline):
@@ -262,7 +283,7 @@ def main() -> None:
         model_config = {
             "lookback": args.lookback,
             "horizon": args.horizon,
-            "task_count": len(TASKS),
+            "task_count": len(task_columns),
             "moving_avg": args.moving_avg,
             "channel_shared_linear": True,
         }
@@ -273,7 +294,7 @@ def main() -> None:
         model_config = {
             "lookback": args.lookback,
             "horizon": args.horizon,
-            "task_count": len(TASKS),
+            "task_count": len(task_columns),
             "exog_dim": len(exog_columns),
             "expert_count": args.expert_count,
             "expert_hidden_dim": args.expert_hidden_dim,
@@ -291,7 +312,7 @@ def main() -> None:
         model_config = {
             "lookback": args.lookback,
             "horizon": args.horizon,
-            "task_count": len(TASKS),
+            "task_count": len(task_columns),
             "d_model": args.d_model,
             "d_core": args.d_core,
             "d_ff": args.d_ff,
@@ -318,21 +339,22 @@ def main() -> None:
     )
     save_json(
         {
-            "dataset_kind": "heew_total",
+            "dataset_kind": "kitakyushu_energy_station",
+            "dataset_metadata": dataset_metadata,
             "model": args.model,
             "baseline_name": baseline_name,
             "baseline_family": baseline_family,
             "protocol": args.protocol,
-            "tasks": list(TASKS),
+            "tasks": list(task_columns),
             "input_mode": input_mode,
             "exog_used": exog_used,
             "future_exogenous_used": False,
             "model_config": model_config,
             "window": {"lookback": args.lookback, "horizon": args.horizon},
             "model_interface": {
-                "loads": f"[batch, {args.lookback}, {len(TASKS)}]",
+                "loads": f"[batch, {args.lookback}, {len(task_columns)}]",
                 "exog": exog_interface,
-                "prediction": f"[batch, {args.horizon}, {len(TASKS)}]",
+                "prediction": f"[batch, {args.horizon}, {len(task_columns)}]",
                 "device": trainer_config.device,
             },
             "sample_counts": {

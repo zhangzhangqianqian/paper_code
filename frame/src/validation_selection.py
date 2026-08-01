@@ -27,6 +27,10 @@ from .data_pipeline import (
     select_training_frame,
 )
 from .models import count_trainable_parameters, build_forecasting_model
+from .kitakyushu_pipeline import (
+    KITAKYUSHU_SPLIT,
+    clean_kitakyushu_dataframe,
+)
 from .stage6_contract import load_stage6_selection_contract
 from .training import (
     StandardizationStats,
@@ -38,7 +42,6 @@ from .training import (
 
 
 METRICS: Tuple[str, ...] = ("MAE", "RMSE", "WAPE", "MAPE")
-EXPECTED_PREDICTION_TAIL = (4, 3)
 
 
 def _limit_windows(
@@ -68,15 +71,16 @@ def _write_validation_gates(
     loader,
     target_times: np.ndarray,
     output_path: Path,
+    task_names: Sequence[str] = TASKS,
 ) -> Dict[str, object] | None:
     """保存动态模型验证集门控，供阶段 6.4 使用；其他模型不输出。"""
 
     if model_name == "static_gate":
         static_gate = model.get_gate_matrix().detach().cpu().numpy().astype(np.float32)
-        if static_gate.shape != (len(TASKS), len(TASKS)):
+        if static_gate.shape != (len(task_names), len(task_names)):
             raise ValueError(f"静态门控矩阵形状错误：{static_gate.shape}")
         gate_array = np.broadcast_to(
-            static_gate, (len(target_times), len(TASKS), len(TASKS))
+            static_gate, (len(target_times), len(task_names), len(task_names))
         ).copy()
         np.savez_compressed(
             output_path,
@@ -108,7 +112,7 @@ def _write_validation_gates(
     if not gates:
         raise ValueError("验证集门控导出为空")
     gate_array = np.concatenate(gates, axis=0).astype(np.float32)
-    if gate_array.shape[1:] != (len(TASKS), len(TASKS)):
+    if gate_array.shape[1:] != (len(task_names), len(task_names)):
         raise ValueError(f"门控矩阵形状错误：{gate_array.shape}")
     np.savez_compressed(
         output_path,
@@ -129,6 +133,7 @@ def _metric_rows(
     model_name: str,
     candidate_id: str,
     metrics: Mapping[str, object],
+    task_names: Sequence[str] = TASKS,
 ) -> Tuple[Dict[str, object], list[Dict[str, object]], list[Dict[str, object]]]:
     overall = metrics.get("overall_equal_task_mean")
     per_task = metrics.get("per_task")
@@ -144,7 +149,7 @@ def _metric_rows(
         **{metric: overall.get(metric) for metric in METRICS},
     }
     task_rows: list[Dict[str, object]] = []
-    for task in TASKS:
+    for task in task_names:
         values = per_task.get(task)
         if not isinstance(values, Mapping):
             raise ValueError(f"{model_name}/{candidate_id}缺少任务指标：{task}")
@@ -175,6 +180,7 @@ def _metric_rows(
 def write_validation_summaries(
     output_root: str | Path,
     completed_runs: Sequence[Mapping[str, object]],
+    task_names: Sequence[str] = TASKS,
 ) -> None:
     """把每个运行的验证 JSON 汇总为阶段 6.2 的三张 CSV 表。"""
 
@@ -188,7 +194,10 @@ def write_validation_summaries(
         with metrics_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         overall, tasks, horizons = _metric_rows(
-            str(payload["model"]), str(payload["candidate_id"]), payload["metrics_original_scale"]
+            str(payload["model"]),
+            str(payload["candidate_id"]),
+            payload["metrics_original_scale"],
+            task_names=task_names,
         )
         runtime = payload.get("runtime_seconds", {})
         if not isinstance(runtime, Mapping):
@@ -318,6 +327,7 @@ def run_protocol_sweep(
     hyperparameter_candidates: Sequence[Mapping[str, object]],
     model_names: Sequence[str],
     exog_columns: Sequence[str] = HEEW_EXOG_COLUMNS,
+    task_names: Sequence[str] = TASKS,
     dataset_kind: str = "heew_total",
     split_spec: SplitSpec = FULL_SPLIT,
     protocol_name: str = "full",
@@ -344,14 +354,19 @@ def run_protocol_sweep(
     if not hyperparameter_candidates:
         raise ValueError("至少需要一组超参数候选")
 
+    task_names = tuple(str(name) for name in task_names)
+    if not task_names:
+        raise ValueError("task_names不能为空")
+
     source = frame.copy()
     source["timestamp"] = pd.to_datetime(source["timestamp"], errors="raise")
-    validation_cutoff = pd.Timestamp(split_spec.validation_end) + pd.Timedelta(
-        hours=horizon - 1
-    )
+    validation_cutoff = pd.Timestamp(split_spec.validation_end)
     # 阶段 6.2 只保留训练集和验证集所需的历史/目标范围，主动丢弃验证截止日之后的数据。
     source = source.loc[source["timestamp"] <= validation_cutoff].copy()
-    cleaned, cleaning_report = clean_dataframe(source)
+    if dataset_kind == "kitakyushu_energy_station":
+        cleaned, cleaning_report = clean_kitakyushu_dataframe(source)
+    else:
+        cleaned, cleaning_report = clean_dataframe(source, task_columns=task_names)
     available_exog = tuple(column for column in exog_columns if column in cleaned.columns)
     if not available_exog:
         raise ValueError("阶段 6.2 需要至少一个外生变量")
@@ -365,6 +380,7 @@ def run_protocol_sweep(
             lookback=lookback,
             horizon=horizon,
             exog_columns=available_exog,
+            task_columns=task_names,
         )
         for split_name in ("train", "validation")
     }
@@ -378,7 +394,9 @@ def run_protocol_sweep(
         raise ValueError("训练集或验证集没有可用窗口")
 
     stats = StandardizationStats.fit(
-        select_training_frame(cleaned, split_spec), available_exog
+        select_training_frame(cleaned, split_spec),
+        available_exog,
+        task_columns=task_names,
     )
     standardized = {
         name: stats.transform_windows(value) for name, value in windows.items()
@@ -407,6 +425,7 @@ def run_protocol_sweep(
                 dilations=(1, 2),
                 dropout=float(candidate["dropout"]),
                 horizon=horizon,
+                task_count=len(task_names),
             )
             trainer_config = TrainerConfig(
                 learning_rate=float(candidate["learning_rate"]),
@@ -438,7 +457,7 @@ def run_protocol_sweep(
             evaluation_seconds = time.perf_counter() - evaluation_started
             prediction = stats.inverse_targets(prediction_std)
             target = stats.inverse_targets(target_std)
-            metrics = regression_metrics(target, prediction)
+            metrics = regression_metrics(target, prediction, task_names=task_names)
             np.savez_compressed(
                 run_dir / "predictions_validation.npz",
                 target=target,
@@ -453,6 +472,7 @@ def run_protocol_sweep(
                 validation_loader,
                 windows["validation"]["target_times"],
                 run_dir / "gate_matrix_validation.npz",
+                task_names=task_names,
             )
             checkpoint = torch.load(
                 checkpoint_path, map_location="cpu", weights_only=False
@@ -463,7 +483,7 @@ def run_protocol_sweep(
                 "model": model_name,
                 "candidate_id": candidate_id,
                 "protocol": protocol_name,
-                "tasks": list(TASKS),
+                "tasks": list(task_names),
                 "exog_columns": list(available_exog),
                 "window": {"lookback": lookback, "horizon": horizon},
                 "input_mode": "loads_and_exog",
@@ -504,13 +524,14 @@ def run_protocol_sweep(
             )
             completed_runs.append({"model": model_name, "candidate_id": candidate_id, "run_dir": str(run_dir)})
 
-    write_validation_summaries(root, completed_runs)
+    write_validation_summaries(root, completed_runs, task_names=task_names)
     save_json(
         {
             "stage": stage_name,
             "protocol": protocol_name,
             "candidate_run_count": len(completed_runs),
             "models": list(model_names),
+            "tasks": list(task_names),
             "hyperparameter_candidates": [dict(value) for value in hyperparameter_candidates],
             "test_set_accessed": False,
             "sample_counts": {
@@ -528,19 +549,30 @@ def run_validation_sweep(
     output_root: str | Path,
     hyperparameter_candidates: Sequence[Mapping[str, object]],
     model_names: Sequence[str],
+    dataset_kind: str = "heew_total",
+    task_names: Sequence[str] = TASKS,
+    split_spec: SplitSpec | None = None,
     **kwargs,
 ) -> list[Dict[str, object]]:
     """阶段 6.2 全年验证集 sweep 的兼容包装器。"""
 
+    if split_spec is None:
+        split_spec = (
+            KITAKYUSHU_SPLIT
+            if dataset_kind == "kitakyushu_energy_station"
+            else FULL_SPLIT
+        )
     return run_protocol_sweep(
         frame=frame,
         output_root=output_root,
         hyperparameter_candidates=hyperparameter_candidates,
         model_names=model_names,
-        split_spec=FULL_SPLIT,
+        split_spec=split_spec,
         protocol_name="full",
         stage_name="6.2",
         manifest_name="stage6_2_manifest.json",
+        dataset_kind=dataset_kind,
+        task_names=task_names,
         **kwargs,
     )
 

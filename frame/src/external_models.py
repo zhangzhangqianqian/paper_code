@@ -9,6 +9,9 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 
+KITAKYUSHU_TASK_COUNT = 4
+
+
 class MovingAverageDecomposition(nn.Module):
     """使用边界复制的滑动平均分解趋势和季节项。"""
 

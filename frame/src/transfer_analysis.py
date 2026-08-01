@@ -77,6 +77,7 @@ def load_validation_run(
     root: str | Path,
     model: str,
     candidate_id: str,
+    task_names: Sequence[str] = TASKS,
 ) -> ValidationRun:
     run_dir = Path(root) / "runs" / model / candidate_id
     prediction_path = run_dir / "predictions_validation.npz"
@@ -95,8 +96,10 @@ def load_validation_run(
             f"{model}/{candidate_id}预测形状必须相同且为[N,H,T]："
             f"target={target.shape}, prediction={prediction.shape}"
         )
-    if target.shape[2] != len(TASKS) or target.shape[1] != 4:
-        raise ValueError(f"{model}/{candidate_id}不是约定的[N,4,3]输出")
+    if target.shape[2] != len(task_names) or target.shape[1] != 4:
+        raise ValueError(
+            f"{model}/{candidate_id}不是约定的[N,4,{len(task_names)}]输出"
+        )
     if len(target_times) != target.shape[0]:
         raise ValueError(f"{model}/{candidate_id}时间戳数量与样本数不一致")
     if not np.isfinite(target).all() or not np.isfinite(prediction).all():
@@ -203,6 +206,7 @@ def _gain_row(
     bootstrap_granularities: Sequence[str],
     bootstrap_replicates: int,
     rng: np.random.Generator,
+    task_names: Sequence[str] = TASKS,
 ) -> Dict[str, object]:
     reference_actual, reference_prediction = _unit_data(
         reference, granularity, task_index, horizon_step, season
@@ -243,7 +247,7 @@ def _gain_row(
                 "reference_model": reference.model,
                 "reference_candidate_id": reference.candidate_id,
                 "granularity": granularity,
-                "task": "" if task_index is None else TASKS[task_index],
+                "task": "" if task_index is None else task_names[task_index],
                 "horizon_step": "" if horizon_step is None else horizon_step + 1,
                 "season": "" if season is None else season,
                 "metric": metric,
@@ -278,11 +282,15 @@ def analyze_transfer(
     bootstrap_replicates: int = 500,
     bootstrap_granularities: Sequence[str] = ("task",),
     seed: int = 2026,
+    task_names: Sequence[str] = TASKS,
 ) -> Dict[str, object]:
     if error_metric not in METRICS:
         raise ValueError(f"error_metric必须是{METRICS}")
     if bootstrap_replicates < 0:
         raise ValueError("bootstrap_replicates不能为负数")
+    task_names = tuple(str(name) for name in task_names)
+    if not task_names:
+        raise ValueError("task_names不能为空")
     invalid_granularities = set(bootstrap_granularities) - {
         "task",
         "horizon",
@@ -299,13 +307,13 @@ def analyze_transfer(
 
     candidate_ids = ("H1", "H2", "H3", "H4")
     for candidate_id in candidate_ids:
-        reference = load_validation_run(root, "stl", candidate_id)
+        reference = load_validation_run(root, "stl", candidate_id, task_names)
         for model in MTL_MODELS:
-            joint = load_validation_run(root, model, candidate_id)
+            joint = load_validation_run(root, model, candidate_id, task_names)
             if not np.array_equal(reference.target_times, joint.target_times):
                 raise ValueError(f"{model}/{candidate_id}与STL验证时间戳不一致")
             unit_specs = []
-            for task_index in range(len(TASKS)):
+            for task_index in range(len(task_names)):
                 unit_specs.append(("task", task_index, None, None))
             for horizon_step in range(reference.target.shape[1]):
                 unit_specs.append(("horizon", None, horizon_step, None))
@@ -331,6 +339,7 @@ def analyze_transfer(
                         bootstrap_granularities,
                         bootstrap_replicates,
                         rng,
+                        task_names,
                     )
                 )
             for row in candidate_rows:
@@ -399,6 +408,7 @@ def analyze_transfer(
         "reference_model": "stl",
         "joint_models": list(MTL_MODELS),
         "candidate_ids": list(candidate_ids),
+        "tasks": list(task_names),
         "error_metric_for_significance": error_metric,
         "bootstrap_replicates": int(bootstrap_replicates),
         "bootstrap_granularities": list(bootstrap_granularities),

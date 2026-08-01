@@ -44,6 +44,14 @@ from src.data_pipeline import (  # noqa: E402
     save_json,
     select_training_frame,
 )
+from src.kitakyushu_pipeline import (  # noqa: E402
+    KITAKYUSHU_EXOG_COLUMNS,
+    KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+    KITAKYUSHU_SPLIT,
+    KITAKYUSHU_TASKS,
+    clean_kitakyushu_dataframe,
+    read_kitakyushu_canonical,
+)
 from src.models import (  # noqa: E402
     DynamicDirectedMTLModel,
     DynamicSymmetricMTLModel,
@@ -71,6 +79,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--protocol", choices=("full", "small_sample"), default="full"
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=("kitakyushu_energy_station", "heew_total"),
+        default="kitakyushu_energy_station",
+        help="数据协议；默认使用 Kitakyushu 四任务数据",
+    )
+    parser.add_argument(
+        "--kitakyushu-data-dir",
+        default="Kitakyushu dataset",
+        help="Kitakyushu 数据目录（包含三个核心 ZIP）",
     )
     parser.add_argument("--input", help="兼容旧格式的单个规范 CSV 路径")
     parser.add_argument("--energy-file", help="HEEW 负荷 CSV 路径")
@@ -102,11 +121,21 @@ def _resolve_path(value: str | None) -> Path | None:
 
 
 def _read_input(args: argparse.Namespace):
+    if args.dataset == "kitakyushu_energy_station":
+        if args.input or args.energy_file or args.weather_file:
+            raise ValueError(
+                "Kitakyushu 协议使用 --kitakyushu-data-dir，不能同时提供 HEEW 文件参数"
+            )
+        frame, metadata = read_kitakyushu_canonical(
+            _resolve_path(args.kitakyushu_data_dir),
+            years=tuple(range(2015, 2022)),
+        )
+        return frame, "kitakyushu_energy_station", metadata
     if args.input and (args.energy_file or args.weather_file):
         raise ValueError("--input 与 --energy-file/--weather-file 不能同时使用")
     if args.input:
         frame, _ = read_csv_canonical(_resolve_path(args.input))
-        return frame, "legacy_single_csv"
+        return frame, "legacy_single_csv", {}
     if bool(args.energy_file) != bool(args.weather_file):
         raise ValueError("HEEW 输入必须同时提供 --energy-file 和 --weather-file")
     energy_path = _resolve_path(args.energy_file) or (
@@ -115,7 +144,7 @@ def _read_input(args: argparse.Namespace):
     weather_path = _resolve_path(args.weather_file) or (
         REPOSITORY_ROOT / "dataset/HEEW/cleaned_data/Total_weather.csv"
     )
-    return read_heew_canonical(energy_path, weather_path)[0], "heew_total"
+    return read_heew_canonical(energy_path, weather_path)[0], "heew_total", {}
 
 
 def _limit_windows(
@@ -128,7 +157,11 @@ def _limit_windows(
     return {key: value[:limit] for key, value in windows.items()}
 
 
-def _make_model(args: argparse.Namespace, exog_dim: int):
+def _make_model(
+    args: argparse.Namespace,
+    exog_dim: int,
+    task_count: int,
+):
     common = dict(
         exog_dim=exog_dim,
         hidden_dim=args.hidden_dim,
@@ -136,6 +169,7 @@ def _make_model(args: argparse.Namespace, exog_dim: int):
         dilations=(1, 2),
         dropout=args.dropout,
         horizon=args.horizon,
+        task_count=task_count,
     )
     return build_forecasting_model(args.model, **common)
 
@@ -153,24 +187,48 @@ def main() -> None:
     assert output_dir is not None
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    frame, dataset_kind = _read_input(args)
-    cleaned, cleaning_report = clean_dataframe(frame)
-    # HEEW 使用完整的14维天气+日历输入；旧版单CSV则只使用其中实际存在的列，
-    # 从而保持脚本的兼容性而不凭空创建外生变量。
-    exog_columns = tuple(column for column in HEEW_EXOG_COLUMNS if column in cleaned.columns)
-    spec = FULL_SPLIT if args.protocol == "full" else SMALL_SAMPLE_SPLIT
-
-    raw_windows = {
-        split_name: build_protocol_windows(
-            cleaned,
-            spec,
-            split_name=split_name,
-            lookback=args.lookback,
-            horizon=args.horizon,
-            exog_columns=exog_columns,
+    frame, dataset_kind, dataset_metadata = _read_input(args)
+    if dataset_kind == "kitakyushu_energy_station":
+        cleaned, cleaning_report = clean_kitakyushu_dataframe(frame)
+        task_columns = KITAKYUSHU_TASKS
+        exog_columns = tuple(
+            column for column in KITAKYUSHU_EXOG_COLUMNS if column in cleaned.columns
         )
-        for split_name in ("train", "validation", "test")
-    }
+        spec = KITAKYUSHU_SPLIT if args.protocol == "full" else KITAKYUSHU_SMALL_SAMPLE_SPLIT
+        # 统一使用通用协议构造器，以便 full 和 small_sample 都严格遵守
+        # 当前选择的时间切分；适配器中的固定 full 版本仍保留给独立审计脚本使用。
+        window_builder = None
+    else:
+        cleaned, cleaning_report = clean_dataframe(frame)
+        # HEEW 使用完整的14维天气+日历输入；旧版单CSV则只使用其中实际存在的列，
+        # 从而保持脚本的兼容性而不凭空创建外生变量。
+        task_columns = TASKS
+        exog_columns = tuple(
+            column for column in HEEW_EXOG_COLUMNS if column in cleaned.columns
+        )
+        spec = FULL_SPLIT if args.protocol == "full" else SMALL_SAMPLE_SPLIT
+        window_builder = None
+
+    raw_windows = {}
+    for split_name in ("train", "validation", "test"):
+        if window_builder is not None:
+            raw_windows[split_name] = window_builder(
+                cleaned,
+                split_name=split_name,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                exog_columns=exog_columns,
+            )
+        else:
+            raw_windows[split_name] = build_protocol_windows(
+                cleaned,
+                spec,
+                split_name=split_name,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                exog_columns=exog_columns,
+                task_columns=task_columns,
+            )
     windows = {
         "train": _limit_windows(raw_windows["train"], args.max_train_samples),
         "validation": _limit_windows(
@@ -183,7 +241,11 @@ def main() -> None:
 
     # 标准化参数严格只从训练区间拟合，验证/测试仅使用已拟合参数。
     train_frame = select_training_frame(cleaned, spec)
-    stats = StandardizationStats.fit(train_frame, exog_columns)
+    stats = StandardizationStats.fit(
+        train_frame,
+        exog_columns,
+        task_columns=task_columns,
+    )
     standardized = {name: stats.transform_windows(value) for name, value in windows.items()}
     stats.save(output_dir / "normalization_stats.npz")
 
@@ -192,7 +254,7 @@ def main() -> None:
         standardized["validation"], args.batch_size, shuffle=False
     )
     test_loader = make_dataloader(standardized["test"], args.batch_size, shuffle=False)
-    model = _make_model(args, len(exog_columns))
+    model = _make_model(args, len(exog_columns), len(task_columns))
     trainer_config = TrainerConfig(
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
@@ -216,7 +278,7 @@ def main() -> None:
     evaluation_seconds = time.perf_counter() - evaluation_started
     prediction = stats.inverse_targets(prediction_std)
     target = stats.inverse_targets(target_std)
-    metrics = regression_metrics(target, prediction)
+    metrics = regression_metrics(target, prediction, task_names=task_columns)
     gate_matrix = None
     dynamic_gate_matrix_file = None
     gate_export = None
@@ -226,7 +288,7 @@ def main() -> None:
             {
                 "row_semantics": "target_task",
                 "column_semantics": "source_task",
-                "tasks": list(TASKS),
+                "tasks": list(task_columns),
                 "gate_matrix": gate_matrix,
             },
             output_dir / "gate_matrix.json",
@@ -234,7 +296,7 @@ def main() -> None:
         gate_export = {
             "kind": "static",
             "file": "gate_matrix.json",
-            "shape": [len(TASKS), len(TASKS)],
+            "shape": [len(task_columns), len(task_columns)],
             "row_semantics": "target_task",
             "column_semantics": "source_task",
         }
@@ -259,7 +321,11 @@ def main() -> None:
         gate_export = {
             "kind": "dynamic",
             "file": dynamic_gate_matrix_file,
-            "shape": [int(len(windows["test"]["target_times"])), len(TASKS), len(TASKS)],
+            "shape": [
+                int(len(windows["test"]["target_times"])),
+                len(task_columns),
+                len(task_columns),
+            ],
             "row_semantics": "target_task",
             "column_semantics": "source_task",
         }
@@ -275,15 +341,16 @@ def main() -> None:
     save_json(
         {
             "dataset_kind": dataset_kind,
+            "dataset_metadata": dataset_metadata,
             "model": args.model,
             "protocol": args.protocol,
-            "tasks": list(TASKS),
+            "tasks": list(task_columns),
             "exog_columns": list(exog_columns),
             "window": {"lookback": args.lookback, "horizon": args.horizon},
             "model_interface": {
-                "loads": f"[batch, {args.lookback}, {len(TASKS)}]",
+                "loads": f"[batch, {args.lookback}, {len(task_columns)}]",
                 "exog": f"[batch, {args.lookback}, {len(exog_columns)}]",
-                "prediction": f"[batch, {args.horizon}, {len(TASKS)}]",
+                "prediction": f"[batch, {args.horizon}, {len(task_columns)}]",
                 "device": trainer_config.device,
             },
             "sample_counts": {

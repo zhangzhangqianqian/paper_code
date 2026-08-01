@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
 from .data_pipeline import FULL_SPLIT, SMALL_SAMPLE_SPLIT, TASKS
+from .kitakyushu_pipeline import (
+    KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+    KITAKYUSHU_SPLIT,
+    KITAKYUSHU_TASKS,
+)
 
 
 BASELINE_NAMES: Tuple[str, ...] = ("DLinear", "MMoE-lite", "SOFTS")
@@ -46,7 +51,7 @@ class FairnessContract:
 
     @property
     def task_count(self) -> int:
-        return len(TASKS)
+        return len(self.raw["tasks"])
 
     @property
     def baseline_specs(self) -> Tuple[BaselineSpec, ...]:
@@ -112,12 +117,21 @@ def _expected_split_values(split: object) -> Dict[str, str]:
     }
 
 
+def _dataset_protocol(dataset: str) -> Tuple[Tuple[str, ...], object, object]:
+    if dataset == "kitakyushu_energy_station":
+        return KITAKYUSHU_TASKS, KITAKYUSHU_SPLIT, KITAKYUSHU_SMALL_SAMPLE_SPLIT
+    if dataset == "heew_total":
+        return TASKS, FULL_SPLIT, SMALL_SAMPLE_SPLIT
+    raise ValueError(f"不支持的数据集协议：{dataset!r}")
+
+
 def validate_contract(data: Mapping[str, Any]) -> None:
     """校验契约中的固定实验条件。"""
 
     required_top = {
         "contract_version",
         "tasks",
+        "dataset",
         "data_protocol",
         "input_output",
         "training",
@@ -128,8 +142,11 @@ def validate_contract(data: Mapping[str, Any]) -> None:
     missing = sorted(required_top - set(data))
     if missing:
         raise ValueError(f"公平性契约缺少字段：{missing}")
-    if list(data["tasks"]) != list(TASKS):
-        raise ValueError(f"任务顺序必须固定为{TASKS}")
+    expected_tasks, full_split, small_sample_split = _dataset_protocol(
+        str(data["dataset"])
+    )
+    if list(data["tasks"]) != list(expected_tasks):
+        raise ValueError(f"任务顺序必须固定为{expected_tasks}")
 
     protocol = data["data_protocol"]
     if protocol["sampling"] != "1h":
@@ -137,7 +154,7 @@ def validate_contract(data: Mapping[str, Any]) -> None:
     if int(protocol["lookback"]) != 24 or int(protocol["horizon"]) != 4:
         raise ValueError("当前公平性契约固定使用24→4预测协议")
     splits = protocol["splits"]
-    for name, expected in (("full", FULL_SPLIT), ("small_sample", SMALL_SAMPLE_SPLIT)):
+    for name, expected in (("full", full_split), ("small_sample", small_sample_split)):
         actual = _split_mapping(splits[name])
         if actual != _expected_split_values(expected):
             raise ValueError(f"{name}时间切分与项目固定协议不一致")
@@ -150,12 +167,16 @@ def validate_contract(data: Mapping[str, Any]) -> None:
         raise ValueError("负荷和外生变量必须使用训练切分分别拟合标准化参数")
 
     input_output = data["input_output"]
-    if input_output["loads_shape"] != ["batch", 24, 3]:
-        raise ValueError("loads输入协议必须为[batch,24,3]")
+    if input_output["loads_shape"] != ["batch", 24, len(expected_tasks)]:
+        raise ValueError(
+            f"loads输入协议必须为[batch,24,{len(expected_tasks)}]"
+        )
     if input_output["exog_shape"] != ["batch", 24, "F"]:
         raise ValueError("exog输入协议必须为[batch,24,F]")
-    if input_output["prediction_shape"] != ["batch", 4, 3]:
-        raise ValueError("预测输出协议必须为[batch,4,3]")
+    if input_output["prediction_shape"] != ["batch", 4, len(expected_tasks)]:
+        raise ValueError(
+            f"预测输出协议必须为[batch,4,{len(expected_tasks)}]"
+        )
     if input_output["future_exogenous_allowed"] is not False:
         raise ValueError("不得使用未来真实外生变量")
     if set(input_output["input_modes"]) != set(INPUT_MODES):

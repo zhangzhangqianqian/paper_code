@@ -55,6 +55,23 @@ class GateDiagnosticsTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_gate_array(path)
 
+    def test_four_task_gate_diagnostics(self):
+        gates = np.zeros((5, 4, 4), dtype=np.float32)
+        for target in range(4):
+            for source in range(4):
+                if target != source:
+                    gates[:, target, source] = 0.1
+        names = ("electricity", "cooling", "heating", "gas")
+        summary, edges, matrices = compute_gate_diagnostics(
+            gates,
+            "dynamic_directed",
+            "H1",
+            task_names=names,
+        )
+        self.assertEqual(summary["edge_count_for_entropy"], 12)
+        self.assertEqual(len(edges), 6)
+        self.assertEqual(matrices["mean"].shape, (4, 4))
+
 
 if __name__ == "__main__":
     unittest.main()

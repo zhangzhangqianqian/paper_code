@@ -1,25 +1,38 @@
 # 多能源负荷预测算法框架
 
-本目录按照 `plan/Methodology与算法框架_分阶段执行计划.md` 实现论文算法框架。
+本目录的当前实现、方案 2-R 优化及后续阶段安排统一以 `plan/Methodology与算法框架-分阶段执行计划.md` 为准。方案 2-R 尚未进入代码，README 中的“已实现”只指当前模型。
 
-## 当前数据集：HEEW 区域级汇总
+## 当前数据集：Kitakyushu Energy Station Data
 
-正式数据位于项目根目录：
-
-```text
-dataset/HEEW/cleaned_data/Total_energy.csv
-dataset/HEEW/cleaned_data/Total_weather.csv
-```
-
-两个文件合并后得到三个预测任务：
+官方数据与说明：
 
 ```text
-Electricity → electricity
-Cooling     → cooling
-Heat        → heating
+数据论文：A twenty-year dataset of hourly energy generation and consumption from district campus building energy systems
+论文 DOI：10.1038/s41597-024-04244-6
+Figshare DOI：10.6084/m9.figshare.24978645
+官方页面：https://figshare.com/articles/dataset/Energy_Station_Data/24978645
 ```
 
-时间范围为 2014—2022 年小时数据。全年协议为：2014—2019 年训练、2020 年验证、2021—2022 年测试；小样本协议为 2018 年 7 月 1 日至 8 月 31 日，其中 7 月 1 日—8 月 17 日训练、8 月 18 日—8 月 24 日验证、8 月 25 日—8 月 31 日测试。
+原始 ZIP 数据位于项目根目录的 `Kitakyushu dataset/`，审计和清洗后的统一文件为：
+
+```text
+frame/reports/data_audit/kitakyushu/cleaned_canonical.csv
+```
+
+统一数据包含四个预测任务：
+
+```text
+electricity → 园区/能源站电力需求
+cooling     → 建筑群供冷需求
+heating     → 建筑群供热需求
+gas         → 能源站系统侧天然气消耗/购气量
+```
+
+`gas` 汇总燃气发动机、燃料电池、吸收式冷热机组和燃气锅炉等能源站设备的天然气使用量，不解释为单栋建筑用户端独立计量的天然气负荷。
+
+正式时间范围为 2015—2021 年小时数据。全年协议为：2015—2019 年训练、2020 年验证、2021 年测试；小样本协议为 2018 年 7 月 1 日至 8 月 31 日，其中 7 月 1 日—8 月 17 日训练、8 月 18 日—8 月 24 日验证、8 月 25 日—8 月 31 日测试。
+
+数据论文说明 2011 年 3 月存在地震造成的数据缺口；本地审计发现 2014 年部分负荷字段异常。两个时期均不进入正式实验范围，目标负荷缺失不得填充为 0。
 
 ## 已实现阶段
 
@@ -28,9 +41,9 @@ Heat        → heating
 已完成：
 
 - CPU-only PyTorch 环境和随机种子设置；
-- 三任务顺序、24 小时历史输入和 4 小时预测输出；
-- HEEW 双文件时间构造、字段映射和时间对齐；
-- HEEW 气象与日历外生变量；
+- 四任务顺序、24 小时历史输入和 4 小时预测输出；
+- Kitakyushu 三个核心 ZIP 数据包读取、年度字段映射和时间对齐；
+- Kitakyushu 气象与日历外生变量；
 - 数据质量审计、最小清洗、时间切分和连续滑窗；
 - Persistence 和 Seasonal Naive 基线；
 - MAE、RMSE、WAPE 和 MAPE；
@@ -42,9 +55,9 @@ Heat        → heating
 - 静态有向任务门控、跨任务消息投影和残差融合；
 - 静态门控矩阵约束测试与导出。
 - 独立状态编码器和状态相关动态对称门控；
-- 动态对称门控的对称性、零门控退化、梯度测试和 HEEW CPU 冒烟训练。
+- 动态对称门控的对称性、零门控退化、梯度测试和 Kitakyushu CPU 冒烟训练。
 - 状态相关动态有向门控、目标/来源任务嵌入和有序任务对门控网络；
-- 动态有向门控的方向性、零门控退化、梯度测试和 HEEW CPU 冒烟训练。
+- 动态有向门控的方向性、零门控退化、梯度测试和 Kitakyushu CPU 冒烟训练。
 - 五种内部模型的统一构造、输入输出接口、训练配置和结果导出；
 - 参数量、训练耗时、测试评估耗时和门控导出元数据记录。
 
@@ -60,34 +73,34 @@ prediction = model(loads, exog)
 ```
 
 ```text
-loads      [batch, 24, 3]
+loads      [batch, 24, 4]
 exog       [batch, 24, F]
-prediction [batch, 4, 3]
+prediction [batch, 4, 4]
 ```
 
-当前 HEEW 默认外生变量维度为 14：7 个气象变量和 7 个日历特征。模型代码不硬编码该维度，实例化时传入实际 `exog_dim`。
+当前 Kitakyushu 默认外生变量维度为 12：温度、湿度、太阳辐照度、风速、风向 5 个气象变量，以及小时、星期、月份的正余弦和周末标记 7 个日历特征。模型代码不硬编码该维度，实例化时传入实际 `exog_dim`。
 
 ## 运行命令
 
 ### 质量审计
 
 ```powershell
-D:\anaconda\envs\pytorch\python.exe frame\scripts\audit_data.py `
-  --energy-file dataset\HEEW\cleaned_data\Total_energy.csv `
-  --weather-file dataset\HEEW\cleaned_data\Total_weather.csv `
-  --output-dir frame\reports\phase1
+D:\anaconda\envs\pytorch\python.exe frame\scripts\audit_kitakyushu.py `
+  --data-dir "Kitakyushu dataset" `
+  --output-dir frame\reports\data_audit\kitakyushu
 ```
 
 ### 基线
 
 ```powershell
 D:\anaconda\envs\pytorch\python.exe frame\scripts\run_baselines.py `
-  --energy-file dataset\HEEW\cleaned_data\Total_energy.csv `
-  --weather-file dataset\HEEW\cleaned_data\Total_weather.csv `
-  --output-dir frame\reports\phase2
+  --dataset kitakyushu_energy_station `
+  --kitakyushu-data-dir "Kitakyushu dataset" `
+  --protocol both `
+  --output-dir frame\reports\phase2\kitakyushu
 ```
 
-两个脚本不要求把数据复制到 `frame/data/raw`。不带文件参数时，它们会尝试读取上述 HEEW 默认路径。
+两个脚本不要求把数据复制到 `frame/data/raw`。Kitakyushu 协议默认读取项目根目录的 `Kitakyushu dataset/`；如数据位于其他目录，使用 `--data-dir` 或 `--kitakyushu-data-dir` 显式指定。
 
 ### 阶段3训练、验证和保存
 
@@ -95,6 +108,8 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_baselines.py `
 
 ```powershell
 D:\anaconda\envs\pytorch\python.exe frame\scripts\train_models.py `
+  --dataset kitakyushu_energy_station `
+  --kitakyushu-data-dir "Kitakyushu dataset" `
   --model hard_share --protocol full `
   --output-dir frame\reports\phase3\smoke `
   --max-epochs 2 --patience 1 `
@@ -111,7 +126,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\train_models.py `
 - `predictions_test.npz`：测试目标、预测值及目标时间。
 
 静态门控模型还会额外生成 `gate_matrix.json`，其中行是目标任务、列是来源任务，对角线固定为0。
-动态对称和动态有向门控模型额外生成 `gate_matrix_test.npz`，保存测试样本的 `[样本, 3, 3]` 门控矩阵。
+动态对称和动态有向门控模型额外生成 `gate_matrix_test.npz`，保存测试样本的 `[样本, 4, 4]` 门控矩阵。方案 2-R 尚未实现；其未来门控将增加预测步维度，形状为 `[样本, 4, 4, 4]`。
 `metrics_test.json` 还会记录统一模型接口、模型参数量、训练/测试评估耗时和门控文件元数据。
 
 ## 环境和测试
@@ -147,7 +162,7 @@ Smooth L1损失、评价指标、CPU资源记录和三个外部基线的输入�
 D:\anaconda\envs\pytorch\python.exe frame\scripts\validate_fairness_contract.py
 ```
 
-当前契约明确：`MMoE-lite`保留MMoE专家路由思想但不是Shao完整模型；DLinear使用
+当前契约明确：`MMoE-lite`只保留 MMoE 专家路由思想，不包含 Shao 等人完整模型中的 Frequency 和 STIM 模块，不标注为 “Shao model” 或完整复现；DLinear使用
 负荷历史；SOFTS当前以负荷历史最小兼容版本适配，不接入外生变量。
 
 ### 阶段5.2：DLinear
@@ -164,17 +179,16 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\train_external_baseline.py `
 ```
 
 当前冒烟结果位于 [dlinear_smoke](/D:/Paper/frame/reports/phase5/dlinear_smoke)，
-预测和目标形状均为 `[256, 4, 3]`，模型参数量为200。该结果仅用于验证基线链路，
+预测和目标形状均为 `[256, 4, 4]`；参数量和耗时以对应 Kitakyushu 结果目录中的配置与指标文件为准。该结果仅用于验证基线链路，
 不代表正式实验结论。训练统计量会严格限制在当前协议的训练起止边界内，小样本协议
 不会把训练开始日期以前的数据混入标准化参数。
 
 ### 阶段5.3：MMoE-lite
 
-已实现 `MMoELiteBaseline`，使用4个共享小型 MLP 专家、3个任务专属门控和3个任务
+已实现 `MMoELiteBaseline`，使用4个共享小型 MLP 专家、4个任务专属门控和4个任务
 专属预测头。每个任务门控对4个专家输出 softmax 权重，再对专家表示加权组合并预测
-未来4步。该模型使用24小时历史负荷和历史气象/日历变量，输出固定为 `[batch, 4, 3]`，
-不使用未来外生变量；它只保留 MMoE 专家路由思想，不包含 Shao 完整模型的 Frequency
-和 STIM 模块。
+未来4步。该模型使用24小时历史负荷和历史气象/日历变量，输出固定为 `[batch, 4, 4]`，
+不使用未来外生变量；它只保留 MMoE 专家路由思想，不包含 Shao 等人完整 Frequency-STIM-MMoE 模型中的 Frequency 和 STIM 模块，也不声称复现该完整模型。
 
 CPU 冒烟训练命令：
 
@@ -185,14 +199,13 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\train_external_baseline.py `
 ```
 
 冒烟结果会额外导出 `gate_weights_test.npz`，其形状为
-`[测试样本数, 3, 4]`，分别对应样本、任务和专家。当前小样本冒烟模型参数量约为
-63272；该结果只用于验证实现和输出链路，不代表正式论文结论。
+`[测试样本数, 4, 4]`，分别对应样本、任务和专家。参数量以对应运行目录的结果配置为准；该结果只用于验证实现和输出链路，不代表正式论文结论。
 
 ### 阶段5.4：SOFTS最小适配
 
 已核验 SOFTS 官方 PyTorch 代码，并在 `external_models.py` 中实现本地最小适配
 `SOFTSBaseline`。该版本保留反转时间嵌入、STAR 全局核心聚合—通道分发、残差 MLP
-和多步线性投影，仅使用历史电/冷/热负荷，显式拒绝外生变量；不引入官方仓库的
+和多步线性投影，仅使用历史电/冷/热/气负荷，显式拒绝外生变量；不引入官方仓库的
 旧版依赖、独立数据加载器或 GPU 配置，因此不称为 SOFTS 原论文完整复现。
 
 运行命令：
@@ -204,7 +217,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\train_external_baseline.py `
 ```
 
 默认配置为 `d_model=32`、`d_core=16`、`d_ff=64`、1个 STAR 残差块；结果配置会记录
-实例归一化和随机核心池化开关。当前冒烟模型参数量为9460，预测输出为 `[64, 4, 3]`。
+实例归一化和随机核心池化开关。参数量以对应运行目录的结果配置为准，预测输出遵循 `[batch, 4, 4]`。
 
 ### 阶段5.5：统一外部基线报告
 

@@ -8,6 +8,7 @@ import torch
 
 from src.data_pipeline import HEEW_EXOG_COLUMNS, TASKS, build_windows
 from src.external_models import DLinearBaseline, MMoELiteBaseline, SOFTSBaseline
+from src.kitakyushu_pipeline import KITAKYUSHU_EXOG_COLUMNS, KITAKYUSHU_TASKS
 from src.models import HardShareMTLModel
 from src.training import (
     StandardizationStats,
@@ -51,6 +52,59 @@ class TrainingTest(unittest.TestCase):
         np.testing.assert_allclose(restored.load_mean, stats.load_mean)
         np.testing.assert_allclose(restored.exog_scale, stats.exog_scale)
         self.assertEqual(restored.exog_columns, stats.exog_columns)
+        self.assertEqual(restored.task_columns, stats.task_columns)
+
+    def test_four_task_standardization_and_cpu_fit(self):
+        timestamps = pd.date_range("2018-07-01", periods=128, freq="h")
+        frame = pd.DataFrame({"timestamp": timestamps})
+        for task_index, task in enumerate(KITAKYUSHU_TASKS):
+            frame[task] = 20.0 + task_index + np.arange(128, dtype=np.float32) * 0.05
+        for index, column in enumerate(KITAKYUSHU_EXOG_COLUMNS):
+            frame[column] = np.cos(np.arange(128, dtype=np.float32) / (index + 2))
+
+        stats = StandardizationStats.fit(
+            frame.iloc[:80],
+            KITAKYUSHU_EXOG_COLUMNS,
+            task_columns=KITAKYUSHU_TASKS,
+        )
+        train = stats.transform_windows(
+            build_windows(
+                frame.iloc[:80],
+                24,
+                4,
+                KITAKYUSHU_EXOG_COLUMNS,
+                task_columns=KITAKYUSHU_TASKS,
+            )
+        )
+        validation = stats.transform_windows(
+            build_windows(
+                frame.iloc[48:112],
+                24,
+                4,
+                KITAKYUSHU_EXOG_COLUMNS,
+                task_columns=KITAKYUSHU_TASKS,
+            )
+        )
+        model = HardShareMTLModel(
+            exog_dim=len(KITAKYUSHU_EXOG_COLUMNS),
+            task_count=len(KITAKYUSHU_TASKS),
+            hidden_dim=8,
+            dropout=0.0,
+        )
+        train_loader = make_dataloader(train, batch_size=8, shuffle=True)
+        validation_loader = make_dataloader(validation, batch_size=8, shuffle=False)
+        config = TrainerConfig(
+            torch_threads=1,
+            max_epochs=1,
+            early_stopping_patience=1,
+            seed=7,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "best_model.pt"
+            fit_model(model, train_loader, validation_loader, config, checkpoint)
+            _, prediction, target = evaluate_model(model, validation_loader, "cpu")
+        self.assertEqual(prediction.shape, (len(validation["target"]), 4, 4))
+        self.assertEqual(target.shape, prediction.shape)
 
     def test_cpu_fit_validation_checkpoint_and_evaluation(self):
         frame = synthetic_frame(128)

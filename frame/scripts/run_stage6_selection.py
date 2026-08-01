@@ -27,6 +27,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data_pipeline import read_heew_canonical  # noqa: E402
+from src.kitakyushu_pipeline import (  # noqa: E402
+    KITAKYUSHU_EXOG_COLUMNS,
+    KITAKYUSHU_SPLIT,
+    KITAKYUSHU_TASKS,
+    read_kitakyushu_canonical,
+)
 from src.stage6_contract import load_stage6_selection_contract  # noqa: E402
 from src.validation_selection import run_validation_sweep  # noqa: E402
 
@@ -41,6 +47,17 @@ def parse_args() -> argparse.Namespace:
         description="在全年训练/验证协议上执行阶段6.2候选模型筛选"
     )
     parser.add_argument(
+        "--dataset",
+        choices=("kitakyushu_energy_station", "heew_total"),
+        default="kitakyushu_energy_station",
+        help="阶段 6 数据协议；默认使用 Kitakyushu 四任务",
+    )
+    parser.add_argument(
+        "--kitakyushu-data-dir",
+        default="Kitakyushu dataset",
+        help="Kitakyushu 原始 ZIP/解压文件目录",
+    )
+    parser.add_argument(
         "--energy-file",
         default="dataset/HEEW/cleaned_data/Total_energy.csv",
         help="HEEW负荷CSV路径",
@@ -52,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="frame/reports/stage6_2/full",
+        default="frame/reports/stage6_2/kitakyushu/full",
         help="阶段6.2输出目录",
     )
     parser.add_argument(
@@ -90,9 +107,20 @@ def main() -> None:
 
     contract = load_stage6_selection_contract()
     training = contract.raw["training_policy"]
-    energy_path = _resolve_path(args.energy_file)
-    weather_path = _resolve_path(args.weather_file)
-    frame, _ = read_heew_canonical(energy_path, weather_path)
+    if args.dataset == "kitakyushu_energy_station":
+        if args.energy_file != "dataset/HEEW/cleaned_data/Total_energy.csv" or args.weather_file != "dataset/HEEW/cleaned_data/Total_weather.csv":
+            raise ValueError("Kitakyushu 协议不接受 HEEW 的 --energy-file/--weather-file 参数")
+        frame, _ = read_kitakyushu_canonical(
+            _resolve_path(args.kitakyushu_data_dir), years=tuple(range(2015, 2022))
+        )
+        task_names = KITAKYUSHU_TASKS
+        exog_columns = KITAKYUSHU_EXOG_COLUMNS
+    else:
+        energy_path = _resolve_path(args.energy_file)
+        weather_path = _resolve_path(args.weather_file)
+        frame, _ = read_heew_canonical(energy_path, weather_path)
+        task_names = None
+        exog_columns = None
     completed = run_validation_sweep(
         frame=frame,
         output_root=_resolve_path(args.output_dir),
@@ -109,6 +137,8 @@ def main() -> None:
         seed=int(overrides.get("seed", training["random_seed"])),
         max_train_samples=args.max_train_samples,
         max_validation_samples=args.max_validation_samples,
+        dataset_kind=args.dataset,
+        **({"task_names": task_names, "exog_columns": exog_columns} if task_names is not None else {}),
     )
     print(
         json.dumps(

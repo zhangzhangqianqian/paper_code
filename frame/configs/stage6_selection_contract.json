@@ -1,23 +1,24 @@
 {
   "contract_version": "stage6.1",
   "purpose": "Freeze validation-only model selection rules before formal test evaluation.",
-  "dataset": "heew_total",
+  "dataset": "kitakyushu_energy_station",
   "tasks": [
     "electricity",
     "cooling",
-    "heating"
+    "heating",
+    "gas"
   ],
   "data_protocol": {
     "sampling": "1h",
     "lookback": 24,
     "horizon": 4,
     "full": {
-      "train_start": "2014-01-01 00:00:00",
+      "train_start": "2015-01-01 00:00:00",
       "train_end": "2019-12-31 23:00:00",
       "validation_start": "2020-01-01 00:00:00",
       "validation_end": "2020-12-31 23:00:00",
       "test_start": "2021-01-01 00:00:00",
-      "test_end": "2022-12-31 23:00:00"
+      "test_end": "2021-12-31 23:00:00"
     },
     "small_sample": {
       "train_start": "2018-07-01 00:00:00",
@@ -47,20 +48,20 @@
   ],
   "input_output": {
     "input_mode": "loads_and_exog",
-    "loads_shape": [
+      "loads_shape": [
       "batch",
       24,
-      3
+      4
     ],
-    "exog_shape": [
+      "exog_shape": [
       "batch",
       24,
-      14
+      12
     ],
-    "prediction_shape": [
+      "prediction_shape": [
       "batch",
       4,
-      3
+      4
     ],
     "future_exogenous_allowed": false,
     "standardization": "train_split_only_zscore"

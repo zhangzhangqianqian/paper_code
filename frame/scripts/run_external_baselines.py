@@ -19,6 +19,7 @@ from src.external_report import (  # noqa: E402
     load_and_validate_runs,
     write_unified_report,
 )
+from src.kitakyushu_pipeline import KITAKYUSHU_TASKS  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,6 +28,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--protocol", choices=("full", "small_sample"), default="small_sample"
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=("kitakyushu_energy_station",),
+        default="kitakyushu_energy_station",
+        help="外部基线统一使用 Kitakyushu 四任务协议",
+    )
+    parser.add_argument(
+        "--kitakyushu-data-dir",
+        default="Kitakyushu dataset",
+        help="Kitakyushu 原始 ZIP/解压文件目录",
     )
     parser.add_argument("--output-dir", required=True, help="统一报告输出目录")
     parser.add_argument("--batch-size", type=int, default=128)
@@ -63,6 +75,10 @@ def main() -> None:
     common = [
         sys.executable,
         str(train_script),
+        "--dataset",
+        args.dataset,
+        "--kitakyushu-data-dir",
+        args.kitakyushu_data_dir,
         "--protocol",
         args.protocol,
         "--batch-size",
@@ -100,8 +116,12 @@ def main() -> None:
         print("Running:", " ".join(command))
         subprocess.run(command, cwd=REPOSITORY_ROOT, check=True)
 
-    runs = load_and_validate_runs(output_dir, args.protocol)
-    summary = write_unified_report(output_dir, args.protocol, runs)
+    runs = load_and_validate_runs(
+        output_dir, args.protocol, task_names=KITAKYUSHU_TASKS
+    )
+    summary = write_unified_report(
+        output_dir, args.protocol, runs, task_names=KITAKYUSHU_TASKS
+    )
     print(json.dumps(summary["consistency_checks"], ensure_ascii=False, indent=2))
     print(f"统一报告已写入：{output_dir}")
 

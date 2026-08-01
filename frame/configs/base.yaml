@@ -1,38 +1,37 @@
 project:
   name: dynamic_directed_multienergy_forecasting
-  version: heew_total_stage6
+  version: kitakyushu_stage5
 
 data:
-  dataset: HEEW
-  aggregation_level: total_region
-  energy_file: dataset/HEEW/cleaned_data/Total_energy.csv
-  weather_file: dataset/HEEW/cleaned_data/Total_weather.csv
-  report_dir: reports/phase1
+  dataset: kitakyushu_energy_station
+  aggregation_level: energy_station
+  raw_data_dir: Kitakyushu dataset
+  canonical_file: frame/reports/data_audit/kitakyushu/cleaned_canonical.csv
+  report_dir: frame/reports/data_audit/kitakyushu
   tasks:
     - electricity
     - cooling
     - heating
-  task_count: 3
+    - gas
+  task_count: 4
   lookback: 24
   horizon: 4
   sampling: 1h
   split: chronological
   full_split:
-    train: ["2014-01-01 00:00:00", "2019-12-31 23:00:00"]
+    train: ["2015-01-01 00:00:00", "2019-12-31 23:00:00"]
     validation: ["2020-01-01 00:00:00", "2020-12-31 23:00:00"]
-    test: ["2021-01-01 00:00:00", "2022-12-31 23:00:00"]
+    test: ["2021-01-01 00:00:00", "2021-12-31 23:00:00"]
   small_sample_split:
     train: ["2018-07-01 00:00:00", "2018-08-17 23:00:00"]
     validation: ["2018-08-18 00:00:00", "2018-08-24 23:00:00"]
     test: ["2018-08-25 00:00:00", "2018-08-31 23:00:00"]
   exog_columns:
     - temperature
-    - dew_point
     - humidity
+    - solar_irradiance
     - wind_speed
-    - wind_gust
-    - pressure
-    - precip
+    - wind_direction
     - hour_sin
     - hour_cos
     - dow_sin

@@ -13,6 +13,12 @@ from .data_pipeline import (
     SMALL_SAMPLE_SPLIT,
     TASKS,
 )
+from .kitakyushu_pipeline import (
+    KITAKYUSHU_EXOG_COLUMNS,
+    KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+    KITAKYUSHU_SPLIT,
+    KITAKYUSHU_TASKS,
+)
 from .models import MODEL_NAMES
 
 
@@ -36,6 +42,19 @@ def _expected_split(split: object) -> dict[str, str]:
         "test_start": split.test_start,
         "test_end": split.test_end,
     }
+
+
+def _dataset_protocol(dataset: str) -> tuple[tuple[str, ...], object, object, int]:
+    if dataset == "kitakyushu_energy_station":
+        return (
+            KITAKYUSHU_TASKS,
+            KITAKYUSHU_SPLIT,
+            KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+            len(KITAKYUSHU_EXOG_COLUMNS),
+        )
+    if dataset == "heew_total":
+        return TASKS, FULL_SPLIT, SMALL_SAMPLE_SPLIT, len(HEEW_EXOG_COLUMNS)
+    raise ValueError(f"不支持的数据集协议：{dataset!r}")
 
 
 @dataclass(frozen=True)
@@ -81,10 +100,11 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
         raise ValueError(f"阶段6.1契约缺少字段：{missing}")
     if data["contract_version"] != "stage6.1":
         raise ValueError("contract_version必须为stage6.1")
-    if data["dataset"] != "heew_total":
-        raise ValueError("阶段6.1当前固定使用HEEW数据")
-    if list(data["tasks"]) != list(TASKS):
-        raise ValueError(f"任务顺序必须固定为{TASKS}")
+    expected_tasks, full_split, small_sample_split, exog_count = _dataset_protocol(
+        str(data["dataset"])
+    )
+    if list(data["tasks"]) != list(expected_tasks):
+        raise ValueError(f"任务顺序必须固定为{expected_tasks}")
 
     protocol = data["data_protocol"]
     if not isinstance(protocol, Mapping):
@@ -93,7 +113,7 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
         raise ValueError("采样间隔必须为1小时")
     if int(protocol.get("lookback", -1)) != 24 or int(protocol.get("horizon", -1)) != 4:
         raise ValueError("阶段6.1必须使用24→4预测协议")
-    for name, expected in (("full", FULL_SPLIT), ("small_sample", SMALL_SAMPLE_SPLIT)):
+    for name, expected in (("full", full_split), ("small_sample", small_sample_split)):
         if _split_values(protocol.get(name)) != _expected_split(expected):
             raise ValueError(f"{name}时间切分与项目固定协议不一致")
 
@@ -122,12 +142,16 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
         raise ValueError("input_output必须是对象")
     if io.get("input_mode") != "loads_and_exog":
         raise ValueError("阶段6核心模型统一使用loads_and_exog")
-    if io.get("loads_shape") != ["batch", 24, 3]:
-        raise ValueError("loads输入必须是[batch,24,3]")
-    if io.get("exog_shape") != ["batch", 24, len(HEEW_EXOG_COLUMNS)]:
-        raise ValueError("HEEW外生变量输入必须是[batch,24,14]")
-    if io.get("prediction_shape") != ["batch", 4, 3]:
-        raise ValueError("预测输出必须是[batch,4,3]")
+    if io.get("loads_shape") != ["batch", 24, len(expected_tasks)]:
+        raise ValueError(
+            f"loads输入必须是[batch,24,{len(expected_tasks)}]"
+        )
+    if io.get("exog_shape") != ["batch", 24, exog_count]:
+        raise ValueError(f"外生变量输入必须是[batch,24,{exog_count}]")
+    if io.get("prediction_shape") != ["batch", 4, len(expected_tasks)]:
+        raise ValueError(
+            f"预测输出必须是[batch,4,{len(expected_tasks)}]"
+        )
     if io.get("future_exogenous_allowed") is not False:
         raise ValueError("阶段6禁止使用未来外生变量")
     if io.get("standardization") != "train_split_only_zscore":

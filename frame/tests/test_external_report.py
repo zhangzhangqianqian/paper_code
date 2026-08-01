@@ -38,6 +38,15 @@ def _fake_metrics(model: str) -> dict:
     }
 
 
+def _fake_metrics_four(model: str) -> dict:
+    value = _fake_metrics(model)
+    value["tasks"] = ["electricity", "cooling", "heating", "gas"]
+    value["metrics_original_scale"]["per_task"]["gas"] = {
+        metric: 1.0 for metric in ("MAE", "RMSE", "WAPE", "MAPE")
+    }
+    return value
+
+
 class ExternalReportTest(unittest.TestCase):
     def test_unified_report_validates_and_writes_all_views(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -65,6 +74,30 @@ class ExternalReportTest(unittest.TestCase):
                 "summary.json",
             ):
                 self.assertTrue((root / filename).exists())
+
+    def test_unified_report_supports_four_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prediction = np.zeros((2, 4, 4), dtype=np.float32)
+            for model in MODEL_ORDER:
+                run_dir = root / model.replace("-", "_")
+                run_dir.mkdir()
+                (run_dir / "metrics_test.json").write_text(
+                    json.dumps(_fake_metrics_four(model)), encoding="utf-8"
+                )
+                np.savez_compressed(
+                    run_dir / "predictions_test.npz",
+                    prediction=prediction,
+                    target=prediction,
+                )
+            tasks = ("electricity", "cooling", "heating", "gas")
+            runs = load_and_validate_runs(root, "small_sample", task_names=tasks)
+            summary = write_unified_report(
+                root, "small_sample", runs, task_names=tasks
+            )
+            self.assertEqual(summary["tasks"], list(tasks))
+            content = (root / "comparison_per_task.csv").read_text(encoding="utf-8-sig")
+            self.assertIn("gas", content)
 
 
 if __name__ == "__main__":

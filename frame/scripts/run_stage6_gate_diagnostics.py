@@ -3,8 +3,8 @@
 输入应来自阶段 6.2 或 6.3 的验证结果目录，例如：
 
     D:\\anaconda\\envs\\pytorch\\python.exe frame\\scripts\\run_stage6_gate_diagnostics.py `
-        --input-dir frame\\reports\\stage6_3\\small_sample `
-        --output-dir frame\\reports\\stage6_4\\small_sample
+        --input-dir frame\\reports\\stage6_3\\kitakyushu\\small_sample `
+        --output-dir frame\\reports\\stage6_4\\kitakyushu\\small_sample
 
 输出 SVG 为主，同时提供 PDF/PNG 预览。所有图表仅使用验证集门控。
 """
@@ -35,9 +35,13 @@ from src.gate_diagnostics import (  # noqa: E402
     write_diagnostic_tables,
     write_json,
 )
+from src.kitakyushu_pipeline import KITAKYUSHU_TASKS  # noqa: E402
 
 
-TASK_LABELS = ("Electricity", "Cooling", "Heating")
+TASK_LABELS_BY_DATASET = {
+    "heew_total": ("Electricity", "Cooling", "Heating"),
+    "kitakyushu_energy_station": ("Electricity", "Cooling", "Heating", "Gas"),
+}
 GATED_MODELS = ("static_gate", "dynamic_symmetric", "dynamic_directed")
 
 
@@ -79,6 +83,7 @@ def _plot_matrix(
     vmin: float,
     vmax: float,
     colorbar_label: str,
+    task_labels: Tuple[str, ...],
     export_tiff: bool = False,
 ) -> None:
     _configure_publication_style()
@@ -87,13 +92,13 @@ def _plot_matrix(
     masked = np.ma.masked_invalid(display)
     fig, ax = plt.subplots(figsize=(3.0, 2.65), constrained_layout=True)
     image = ax.imshow(masked, cmap=cmap, vmin=vmin, vmax=vmax, aspect="equal")
-    ax.set_xticks(range(len(TASK_LABELS)), TASK_LABELS, rotation=35, ha="right")
-    ax.set_yticks(range(len(TASK_LABELS)), TASK_LABELS)
+    ax.set_xticks(range(len(task_labels)), task_labels, rotation=35, ha="right")
+    ax.set_yticks(range(len(task_labels)), task_labels)
     ax.set_xlabel("Source task")
     ax.set_ylabel("Target task")
     ax.set_title(title, pad=8)
-    for row in range(len(TASK_LABELS)):
-        for column in range(len(TASK_LABELS)):
+    for row in range(len(task_labels)):
+        for column in range(len(task_labels)):
             if row == column:
                 ax.text(column, row, "—", ha="center", va="center", color="#767676")
             else:
@@ -119,6 +124,7 @@ def _plot_run(
     candidate_id: str,
     matrices: Dict[str, np.ndarray],
     output_root: Path,
+    task_labels: Tuple[str, ...],
     export_tiff: bool = False,
 ) -> Tuple[str, str]:
     stem = _safe_name(f"{model_name}_{candidate_id}")
@@ -133,6 +139,7 @@ def _plot_run(
         vmin=0.0,
         vmax=1.0,
         colorbar_label="Gate value",
+        task_labels=task_labels,
         export_tiff=export_tiff,
     )
     asymmetry_limit = max(float(np.max(np.abs(matrices["asymmetry"]))), 0.05)
@@ -144,6 +151,7 @@ def _plot_run(
         vmin=-asymmetry_limit,
         vmax=asymmetry_limit,
         colorbar_label="G(i,j) − G(j,i)",
+        task_labels=task_labels,
         export_tiff=export_tiff,
     )
     return f"figures/{mean_base.name}.svg", f"figures/{asymmetry_base.name}.svg"
@@ -158,12 +166,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="执行阶段6.4验证集门控诊断")
     parser.add_argument(
         "--input-dir",
-        default="frame/reports/stage6_3/small_sample",
+        default="frame/reports/stage6_3/kitakyushu/small_sample",
         help="阶段6.2或6.3验证结果目录",
     )
     parser.add_argument(
         "--output-dir",
-        default="frame/reports/stage6_4/small_sample",
+        default="frame/reports/stage6_4/kitakyushu/small_sample",
         help="阶段6.4输出目录",
     )
     parser.add_argument(
@@ -188,6 +196,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="额外导出600 dpi TIFF；默认仅输出SVG、PDF和PNG以控制目录大小",
     )
+    parser.add_argument(
+        "--dataset",
+        choices=tuple(TASK_LABELS_BY_DATASET),
+        default="kitakyushu_energy_station",
+        help="用于确定任务数量和热力图标签的数据协议",
+    )
     return parser.parse_args()
 
 
@@ -198,6 +212,12 @@ def main() -> None:
     input_root = _resolve_path(args.input_dir)
     output_root = _resolve_path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+    task_names = (
+        TASKS
+        if args.dataset == "heew_total"
+        else KITAKYUSHU_TASKS
+    )
+    task_labels = TASK_LABELS_BY_DATASET[args.dataset]
 
     summary_rows = []
     edge_rows = []
@@ -211,13 +231,14 @@ def main() -> None:
             if not gate_path.exists():
                 missing_runs.append(f"{model_name}/{candidate_id}")
                 continue
-            gates = load_gate_array(gate_path)
+            gates = load_gate_array(gate_path, task_names=task_names)
             summary, edges, matrices = compute_gate_diagnostics(
                 gates,
                 model_name=model_name,
                 candidate_id=candidate_id,
                 constant_threshold=args.constant_threshold,
                 asymmetry_threshold=args.asymmetry_threshold,
+                task_names=task_names,
             )
             summary_rows.append(summary)
             edge_rows.extend(edges)
@@ -229,6 +250,7 @@ def main() -> None:
                 candidate_id,
                 matrices,
                 output_root,
+                task_labels,
                 export_tiff=args.export_tiff,
             )
             figure_files.extend([mean_figure, asymmetry_figure])
@@ -254,6 +276,8 @@ def main() -> None:
         "stage": "6.4",
         "input_dir": str(input_root),
         "output_dir": str(output_root),
+        "dataset": args.dataset,
+        "tasks": list(task_names),
         "models": list(GATED_MODELS),
         "analyzed_run_count": len(analyzed_runs),
         "analyzed_runs": analyzed_runs,

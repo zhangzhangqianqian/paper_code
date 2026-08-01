@@ -1,4 +1,4 @@
-"""运行 Persistence 和 Seasonal Naive 基线。
+r"""运行 Persistence 和 Seasonal Naive 基线。
 
 HEEW 区域级数据示例：
 
@@ -39,6 +39,14 @@ from src.data_pipeline import (  # noqa: E402
     read_csv_canonical,
     read_heew_canonical,
     save_json,
+    TASKS,
+)
+from src.kitakyushu_pipeline import (  # noqa: E402
+    KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+    KITAKYUSHU_SPLIT,
+    KITAKYUSHU_TASKS,
+    clean_kitakyushu_dataframe,
+    read_kitakyushu_canonical,
 )
 
 
@@ -49,6 +57,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", help="兼容旧格式的单个规范 CSV 路径")
     parser.add_argument("--energy-file", help="HEEW 负荷 CSV 路径")
     parser.add_argument("--weather-file", help="HEEW 气象 CSV 路径")
+    parser.add_argument(
+        "--dataset",
+        choices=("kitakyushu_energy_station", "heew_total"),
+        default="kitakyushu_energy_station",
+        help="数据协议；默认使用 Kitakyushu 四任务数据",
+    )
+    parser.add_argument(
+        "--kitakyushu-data-dir",
+        default="Kitakyushu dataset",
+        help="Kitakyushu 原始 ZIP/解压文件目录",
+    )
     parser.add_argument("--output-dir", required=True, help="结果输出目录")
     parser.add_argument(
         "--protocol",
@@ -63,21 +82,30 @@ def _read_input(args: argparse.Namespace):
         path = Path(value)
         return path if path.is_absolute() else REPOSITORY_ROOT / path
 
+    if args.dataset == "kitakyushu_energy_station":
+        if args.input or args.energy_file or args.weather_file:
+            raise ValueError("Kitakyushu 协议只使用 --kitakyushu-data-dir")
+        frame, metadata = read_kitakyushu_canonical(
+            resolve_path(args.kitakyushu_data_dir), years=tuple(range(2015, 2022))
+        )
+        return frame, "kitakyushu_energy_station", KITAKYUSHU_TASKS, metadata
     if args.input and (args.energy_file or args.weather_file):
         raise ValueError("--input 与 --energy-file/--weather-file 不能同时使用")
     if args.input:
-        return read_csv_canonical(resolve_path(args.input))[0], "legacy_single_csv"
+        return read_csv_canonical(resolve_path(args.input))[0], "legacy_single_csv", TASKS, {}
     if bool(args.energy_file) != bool(args.weather_file):
         raise ValueError("HEEW 输入必须同时提供 --energy-file 和 --weather-file")
     if not args.energy_file:
         default_energy = REPOSITORY_ROOT / "dataset/HEEW/cleaned_data/Total_energy.csv"
         default_weather = REPOSITORY_ROOT / "dataset/HEEW/cleaned_data/Total_weather.csv"
-        return read_heew_canonical(default_energy, default_weather)[0], "heew_total"
+        return read_heew_canonical(default_energy, default_weather)[0], "heew_total", TASKS, {}
     return (
         read_heew_canonical(
             resolve_path(args.energy_file), resolve_path(args.weather_file)
         )[0],
         "heew_total",
+        TASKS,
+        {},
     )
 
 
@@ -88,13 +116,24 @@ def main() -> None:
         output_dir = REPOSITORY_ROOT / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    frame, dataset_kind = _read_input(args)
-    cleaned, cleaning_report = clean_dataframe(frame)
+    frame, dataset_kind, task_columns, dataset_metadata = _read_input(args)
+    if dataset_kind == "kitakyushu_energy_station":
+        cleaned, cleaning_report = clean_kitakyushu_dataframe(frame)
+    else:
+        cleaned, cleaning_report = clean_dataframe(frame)
     protocols = {}
     if args.protocol in ("full", "both"):
-        protocols["full"] = FULL_SPLIT
+        protocols["full"] = (
+            KITAKYUSHU_SPLIT
+            if dataset_kind == "kitakyushu_energy_station"
+            else FULL_SPLIT
+        )
     if args.protocol in ("small_sample", "both"):
-        protocols["small_sample"] = SMALL_SAMPLE_SPLIT
+        protocols["small_sample"] = (
+            KITAKYUSHU_SMALL_SAMPLE_SPLIT
+            if dataset_kind == "kitakyushu_energy_station"
+            else SMALL_SAMPLE_SPLIT
+        )
 
     for protocol_name, spec in protocols.items():
         windows = build_protocol_windows(
@@ -104,6 +143,7 @@ def main() -> None:
             lookback=24,
             horizon=4,
             exog_columns=(),
+            task_columns=task_columns,
         )
         history = windows["loads"]
         actual = windows["target"]
@@ -114,7 +154,7 @@ def main() -> None:
             ),
         }
         metrics = {
-            name: regression_metrics(actual, prediction)
+            name: regression_metrics(actual, prediction, task_names=task_columns)
             for name, prediction in predictions.items()
         }
         np.savez_compressed(
@@ -125,6 +165,10 @@ def main() -> None:
         save_json(
             {
                 "dataset_kind": dataset_kind,
+                "dataset_metadata": dataset_metadata,
+                "tasks": list(task_columns),
+                "window": {"lookback": 24, "horizon": 4},
+                "prediction_shape": list(actual.shape),
                 "cleaning": cleaning_report,
                 "metrics": metrics,
             },

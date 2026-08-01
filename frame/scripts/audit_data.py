@@ -1,4 +1,4 @@
-"""运行数据质量审计、最小清洗和时间协议检查。
+r"""运行数据质量审计、最小清洗和时间协议检查。
 
 HEEW 区域级数据示例：
 
@@ -35,6 +35,13 @@ from src.data_pipeline import (  # noqa: E402
     save_json,
     split_dataframe,
 )
+from src.kitakyushu_pipeline import (  # noqa: E402
+    KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+    KITAKYUSHU_SPLIT,
+    audit_kitakyushu_dataframe,
+    clean_kitakyushu_dataframe,
+    read_kitakyushu_canonical,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,6 +51,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", help="兼容旧格式的单个规范 CSV 路径")
     parser.add_argument("--energy-file", help="HEEW 负荷 CSV 路径")
     parser.add_argument("--weather-file", help="HEEW 气象 CSV 路径")
+    parser.add_argument(
+        "--kitakyushu-data-dir",
+        help="Kitakyushu 数据目录（包含负荷、燃气和气象 ZIP）",
+    )
     parser.add_argument(
         "--output-dir",
         required=True,
@@ -71,6 +82,19 @@ def _read_input(args: argparse.Namespace):
 
     if args.input and (args.energy_file or args.weather_file):
         raise ValueError("--input 与 --energy-file/--weather-file 不能同时使用")
+    if args.kitakyushu_data_dir and (
+        args.input or args.energy_file or args.weather_file
+    ):
+        raise ValueError(
+            "--kitakyushu-data-dir 不能与 --input 或 HEEW 文件参数同时使用"
+        )
+    if args.kitakyushu_data_dir:
+        return (
+            read_kitakyushu_canonical(
+                resolve_path(args.kitakyushu_data_dir), years=tuple(range(2015, 2022))
+            ),
+            "kitakyushu_energy_station",
+        )
     if args.input:
         return read_csv_canonical(resolve_path(args.input)), "legacy_single_csv"
     if bool(args.energy_file) != bool(args.weather_file):
@@ -107,7 +131,10 @@ def main() -> None:
                 "manifest_path": str(manifest_path),
                 "manifest": json.loads(manifest_path.read_text(encoding="utf-8")),
             }
-    raw_report = audit_dataframe(frame, required_columns=required_columns)
+    if dataset_kind == "kitakyushu_energy_station":
+        raw_report = audit_kitakyushu_dataframe(frame)
+    else:
+        raw_report = audit_dataframe(frame, required_columns=required_columns)
     save_json(
         {
             "dataset_kind": dataset_kind,
@@ -118,10 +145,16 @@ def main() -> None:
         output_dir / "raw_quality_report.json",
     )
 
-    cleaned, clean_report = clean_dataframe(
-        frame, max_interpolation_hours=args.max_interpolation_hours
-    )
-    clean_audit = audit_dataframe(cleaned, required_columns=required_columns)
+    if dataset_kind == "kitakyushu_energy_station":
+        cleaned, clean_report = clean_kitakyushu_dataframe(
+            frame, max_interpolation_hours=args.max_interpolation_hours
+        )
+        clean_audit = audit_kitakyushu_dataframe(cleaned)
+    else:
+        cleaned, clean_report = clean_dataframe(
+            frame, max_interpolation_hours=args.max_interpolation_hours
+        )
+        clean_audit = audit_dataframe(cleaned, required_columns=required_columns)
     save_json(
         {
             "dataset_kind": dataset_kind,
@@ -134,10 +167,16 @@ def main() -> None:
     cleaned.to_csv(output_dir / "cleaned_canonical.csv", index=False)
 
     specs = {}
-    if args.protocol in ("full", "both"):
-        specs["full"] = FULL_SPLIT
-    if args.protocol in ("small_sample", "both"):
-        specs["small_sample"] = SMALL_SAMPLE_SPLIT
+    if dataset_kind == "kitakyushu_energy_station":
+        if args.protocol in ("full", "both"):
+            specs["full"] = KITAKYUSHU_SPLIT
+        if args.protocol in ("small_sample", "both"):
+            specs["small_sample"] = KITAKYUSHU_SMALL_SAMPLE_SPLIT
+    else:
+        if args.protocol in ("full", "both"):
+            specs["full"] = FULL_SPLIT
+        if args.protocol in ("small_sample", "both"):
+            specs["small_sample"] = SMALL_SAMPLE_SPLIT
 
     split_summary = {}
     for name, spec in specs.items():

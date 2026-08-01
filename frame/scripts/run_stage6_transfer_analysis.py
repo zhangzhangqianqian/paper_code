@@ -4,8 +4,8 @@
 正式运行示例：
 
     D:\\anaconda\\envs\\pytorch\\python.exe frame\\scripts\\run_stage6_transfer_analysis.py `
-        --input-dir frame\\reports\\stage6_2\\full_v2 `
-        --output-dir frame\\reports\\stage6_5\\full_v2
+        --input-dir frame\\reports\\stage6_2\\kitakyushu\\full `
+        --output-dir frame\\reports\\stage6_5\\kitakyushu\\full
 
 小样本协议使用同一脚本，把 input/output 目录换成阶段 6.3 目录即可。
 """
@@ -24,6 +24,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.transfer_analysis import METRICS, analyze_transfer  # noqa: E402
+from src.kitakyushu_pipeline import KITAKYUSHU_TASKS  # noqa: E402
+from src.models import TASKS  # noqa: E402
 
 
 def _resolve_path(value: str) -> Path:
@@ -37,12 +39,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input-dir",
-        default="frame/reports/stage6_2/full_v2",
+        default="frame/reports/stage6_2/kitakyushu/full",
         help="阶段6.2或6.3验证结果目录",
     )
     parser.add_argument(
         "--output-dir",
-        default="frame/reports/stage6_5/full_v2",
+        default="frame/reports/stage6_5/kitakyushu/full",
         help="阶段6.5输出目录",
     )
     parser.add_argument(
@@ -69,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         help="进行显著性bootstrap的粒度，逗号分隔：task,horizon,season_horizon",
     )
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument(
+        "--dataset",
+        choices=("heew_total", "kitakyushu_energy_station"),
+        default="kitakyushu_energy_station",
+        help="用于确定任务数量和任务名称的数据协议",
+    )
     return parser.parse_args()
 
 
@@ -79,6 +87,7 @@ def main() -> None:
         for value in args.bootstrap_granularities.split(",")
         if value.strip()
     )
+    task_names = TASKS if args.dataset == "heew_total" else KITAKYUSHU_TASKS
     manifest = analyze_transfer(
         input_root=_resolve_path(args.input_dir),
         output_root=_resolve_path(args.output_dir),
@@ -87,6 +96,7 @@ def main() -> None:
         bootstrap_replicates=args.bootstrap_replicates,
         bootstrap_granularities=granularities,
         seed=args.seed,
+        task_names=task_names,
     )
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 

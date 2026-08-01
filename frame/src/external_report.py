@@ -10,6 +10,7 @@ from typing import Dict, Iterable, Mapping, Sequence
 import numpy as np
 
 
+
 MODEL_ORDER = ("dlinear", "mmoe-lite", "softs")
 METRICS = ("MAE", "RMSE", "WAPE", "MAPE")
 TASK_ORDER = ("electricity", "cooling", "heating")
@@ -40,6 +41,7 @@ def load_and_validate_runs(
     root: str | Path,
     protocol: str,
     models: Sequence[str] = MODEL_ORDER,
+    task_names: Sequence[str] = TASK_ORDER,
 ) -> Dict[str, Dict[str, object]]:
     """读取三个基线结果并校验公平性契约的关键输出。"""
 
@@ -47,7 +49,10 @@ def load_and_validate_runs(
     if not models:
         raise ValueError("至少需要一个外部基线结果")
     runs: Dict[str, Dict[str, object]] = {}
-    expected_shape_tail = (4, 3)
+    task_names = tuple(str(name) for name in task_names)
+    if not task_names:
+        raise ValueError("task_names不能为空")
+    expected_shape_tail = (4, len(task_names))
     expected_sample_counts = None
     expected_window = None
     for model in models:
@@ -69,7 +74,7 @@ def load_and_validate_runs(
                 f"{model}使用了协议{metrics.get('protocol')!r}，期望{protocol!r}"
             )
         tasks = tuple(metrics.get("tasks", ()))
-        if tasks != TASK_ORDER:
+        if tasks != task_names:
             raise ValueError(f"{model}任务顺序错误：{tasks}")
         window = metrics.get("window")
         if not isinstance(window, dict) or (
@@ -113,6 +118,7 @@ def load_and_validate_runs(
 
 def build_report_rows(
     runs: Mapping[str, Mapping[str, object]],
+    task_names: Sequence[str] = TASK_ORDER,
 ) -> Dict[str, list[Dict[str, object]]]:
     """将每个模型的JSON指标展开为三类CSV行。"""
 
@@ -155,7 +161,7 @@ def build_report_rows(
 
         per_task = metrics.get("metrics_original_scale", {}).get("per_task", {})
         if isinstance(per_task, Mapping):
-            for task in TASK_ORDER:
+            for task in task_names:
                 values = per_task.get(task, {})
                 if not isinstance(values, Mapping):
                     continue
@@ -204,11 +210,13 @@ def write_unified_report(
     root: str | Path,
     protocol: str,
     runs: Mapping[str, Mapping[str, object]],
+    task_names: Sequence[str] = TASK_ORDER,
 ) -> Dict[str, object]:
     """写出CSV、Markdown和JSON统一报告，并返回summary对象。"""
 
     root_path = Path(root)
-    rows = build_report_rows(runs)
+    task_names = tuple(str(name) for name in task_names)
+    rows = build_report_rows(runs, task_names=task_names)
     write_csv(rows["overall"], root_path / "comparison_overall.csv")
     write_csv(rows["per_task"], root_path / "comparison_per_task.csv")
     write_csv(rows["per_horizon"], root_path / "comparison_per_horizon.csv")
@@ -223,7 +231,7 @@ def write_unified_report(
         "# 阶段5.5：外部基线统一报告",
         "",
         f"- 协议：`{protocol}`",
-        "- 预测协议：24小时历史窗口 → 未来4小时，输出 `[batch, 4, 3]`",
+        f"- 预测协议：24小时历史窗口 → 未来4小时，输出 `[batch, 4, {len(task_names)}]`",
         "- 指标在原始负荷尺度上计算；结果用于基线链路和相对比较，不直接作为正式结论。",
         "",
         "## 总体指标与资源开销",
@@ -252,7 +260,7 @@ def write_unified_report(
             "## 文件索引",
             "",
             "- `comparison_overall.csv`：总体指标和资源开销；",
-            "- `comparison_per_task.csv`：电、冷、热逐任务指标；",
+            "- `comparison_per_task.csv`：各任务逐任务指标；",
             "- `comparison_per_horizon.csv`：第1—4步指标；",
             "- `summary.json`：协议校验、运行目录和完整结果索引。",
         ]
@@ -264,7 +272,7 @@ def write_unified_report(
     summary: Dict[str, object] = {
         "report_version": "stage5.5",
         "protocol": protocol,
-        "tasks": list(TASK_ORDER),
+        "tasks": list(task_names),
         "window": {"lookback": 24, "horizon": 4},
         "models": list(runs),
         "consistency_checks": {

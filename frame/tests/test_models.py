@@ -25,6 +25,7 @@ from src.models import (  # noqa: E402
     StaticDirectedMTLModel,
     MODEL_NAMES,
     build_forecasting_model,
+    build_kitakyushu_forecasting_model,
     count_trainable_parameters,
 )
 from src.external_models import (  # noqa: E402
@@ -368,6 +369,71 @@ class ModelTest(unittest.TestCase):
             )
             prediction = model(self.loads, self.exog)
             self.assertEqual(tuple(prediction.shape), expected_shape)
+
+    def test_kitakyushu_factory_supports_four_tasks(self):
+        task_count = 4
+        loads = torch.randn(self.batch_size, self.lookback, task_count)
+        exog = torch.randn(self.batch_size, self.lookback, 12)
+        expected_shape = (self.batch_size, self.horizon, task_count)
+        for model_name in MODEL_NAMES:
+            model = build_kitakyushu_forecasting_model(
+                model_name,
+                exog_dim=12,
+                horizon=self.horizon,
+            )
+            prediction = model(loads, exog)
+            self.assertEqual(tuple(prediction.shape), expected_shape)
+            if model_name == "static_gate":
+                self.assertEqual(tuple(model.get_gate_matrix().shape), (4, 4))
+            elif model_name == "dynamic_symmetric":
+                representations = model.encode_tasks(loads, exog)
+                state = model.encode_state(exog, representations)
+                self.assertEqual(tuple(model.get_gate_matrix(state).shape), (self.batch_size, 4, 4))
+            elif model_name == "dynamic_directed":
+                representations = model.encode_tasks(loads, exog)
+                state = model.encode_state(exog, representations)
+                self.assertEqual(tuple(model.get_gate_matrix(state, representations).shape), (self.batch_size, 4, 4))
+
+    def test_external_baselines_support_four_tasks(self):
+        task_count = 4
+        loads = torch.randn(self.batch_size, self.lookback, task_count)
+        exog = torch.randn(self.batch_size, self.lookback, 12)
+        expected_shape = (self.batch_size, self.horizon, task_count)
+        self.assertEqual(
+            tuple(
+                DLinearBaseline(
+                    lookback=self.lookback,
+                    horizon=self.horizon,
+                    task_count=task_count,
+                )(loads).shape
+            ),
+            expected_shape,
+        )
+        self.assertEqual(
+            tuple(
+                MMoELiteBaseline(
+                    lookback=self.lookback,
+                    horizon=self.horizon,
+                    task_count=task_count,
+                    exog_dim=12,
+                )(loads, exog).shape
+            ),
+            expected_shape,
+        )
+        self.assertEqual(
+            tuple(
+                SOFTSBaseline(
+                    lookback=self.lookback,
+                    horizon=self.horizon,
+                    task_count=task_count,
+                    d_model=16,
+                    d_core=8,
+                    d_ff=32,
+                    stochastic_pooling=False,
+                )(loads).shape
+            ),
+            expected_shape,
+        )
 
     def test_dlinear_baseline_shape_and_loads_only_contract(self):
         model = DLinearBaseline(lookback=self.lookback, horizon=self.horizon)

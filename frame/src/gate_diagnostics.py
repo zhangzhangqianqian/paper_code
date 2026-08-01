@@ -25,26 +25,38 @@ METRIC_NAMES: Tuple[str, ...] = (
 )
 
 
-def ordered_edges(model_name: str) -> Tuple[Tuple[int, int], ...]:
+def ordered_edges(
+    model_name: str,
+    task_names: Sequence[str] = TASKS,
+) -> Tuple[Tuple[int, int], ...]:
     """返回该模型用于熵/恒定比例的有效门控边。"""
 
     if model_name == "dynamic_symmetric":
-        return ((0, 1), (0, 2), (1, 2))
+        return unordered_pairs(task_names)
     if model_name in {"static_gate", "dynamic_directed"}:
         return tuple(
             (target, source)
-            for target in range(len(TASKS))
-            for source in range(len(TASKS))
+            for target in range(len(task_names))
+            for source in range(len(task_names))
             if target != source
         )
     raise ValueError(f"不支持门控诊断的模型：{model_name}")
 
 
-def unordered_pairs() -> Tuple[Tuple[int, int], ...]:
-    return ((0, 1), (0, 2), (1, 2))
+def unordered_pairs(
+    task_names: Sequence[str] = TASKS,
+) -> Tuple[Tuple[int, int], ...]:
+    return tuple(
+        (target, source)
+        for target in range(len(task_names))
+        for source in range(target + 1, len(task_names))
+    )
 
 
-def load_gate_array(path: str | Path) -> np.ndarray:
+def load_gate_array(
+    path: str | Path,
+    task_names: Sequence[str] = TASKS,
+) -> np.ndarray:
     source = Path(path)
     if not source.exists():
         raise FileNotFoundError(f"找不到验证集门控文件：{source}")
@@ -52,10 +64,15 @@ def load_gate_array(path: str | Path) -> np.ndarray:
         if "gates" not in values:
             raise ValueError(f"门控文件缺少 gates 数组：{source}")
         gates = np.asarray(values["gates"], dtype=np.float64)
-    if gates.ndim == 2 and gates.shape == (len(TASKS), len(TASKS)):
+    task_count = len(task_names)
+    if task_count <= 1:
+        raise ValueError("task_names至少需要两个任务")
+    if gates.ndim == 2 and gates.shape == (task_count, task_count):
         gates = gates[None, :, :]
-    if gates.ndim != 3 or gates.shape[1:] != (len(TASKS), len(TASKS)):
-        raise ValueError(f"门控数组必须是[N,3,3]：{gates.shape}")
+    if gates.ndim != 3 or gates.shape[1:] != (task_count, task_count):
+        raise ValueError(
+            f"门控数组必须是[N,{task_count},{task_count}]：{gates.shape}"
+        )
     if gates.shape[0] == 0 or not np.isfinite(gates).all():
         raise ValueError("门控数组不能为空且不能包含 NaN/Inf")
     diagonal = np.diagonal(gates, axis1=1, axis2=2)
@@ -106,15 +123,21 @@ def compute_gate_diagnostics(
     candidate_id: str,
     constant_threshold: float = 0.01,
     asymmetry_threshold: float = 0.05,
+    task_names: Sequence[str] = TASKS,
 ) -> Tuple[Dict[str, object], list[Dict[str, object]], Dict[str, np.ndarray]]:
     """计算一个模型/超参数运行的门控统计。"""
 
     if constant_threshold <= 0 or asymmetry_threshold <= 0:
         raise ValueError("门控诊断阈值必须为正数")
+    task_names = tuple(str(name) for name in task_names)
+    if len(task_names) <= 1:
+        raise ValueError("task_names至少需要两个任务")
     array = np.asarray(gates, dtype=np.float64)
-    if array.ndim != 3 or array.shape[1:] != (len(TASKS), len(TASKS)):
-        raise ValueError(f"gates 必须是 [N,3,3]：{array.shape}")
-    edges = ordered_edges(model_name)
+    if array.ndim != 3 or array.shape[1:] != (len(task_names), len(task_names)):
+        raise ValueError(
+            f"gates 必须是 [N,{len(task_names)},{len(task_names)}]：{array.shape}"
+        )
+    edges = ordered_edges(model_name, task_names)
     edge_values = np.stack([array[:, target, source] for target, source in edges], axis=1)
     edge_std = np.std(edge_values, axis=0)
     entropy = _distribution_entropy(edge_values)
@@ -125,7 +148,7 @@ def compute_gate_diagnostics(
     asymmetry_matrix = mean_matrix - mean_matrix.T
     asymmetry_values = []
     edge_rows: list[Dict[str, object]] = []
-    for target, source in unordered_pairs():
+    for target, source in unordered_pairs(task_names):
         forward = array[:, target, source]
         reverse = array[:, source, target]
         difference = forward - reverse
@@ -135,8 +158,8 @@ def compute_gate_diagnostics(
             {
                 "model": model_name,
                 "candidate_id": candidate_id,
-                "target_task": TASKS[target],
-                "source_task": TASKS[source],
+                "target_task": task_names[target],
+                "source_task": task_names[source],
                 "mean_target_from_source": float(np.mean(forward)),
                 "mean_source_from_target": float(np.mean(reverse)),
                 "signed_difference_mean": float(np.mean(difference)),

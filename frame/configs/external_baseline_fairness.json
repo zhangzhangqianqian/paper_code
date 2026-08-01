@@ -1,10 +1,12 @@
 {
   "contract_version": "stage5.1",
   "purpose": "Fix a fair and reproducible comparison contract for external lightweight baselines.",
+  "dataset": "kitakyushu_energy_station",
   "tasks": [
     "electricity",
     "cooling",
-    "heating"
+    "heating",
+    "gas"
   ],
   "data_protocol": {
     "sampling": "1h",
@@ -12,12 +14,12 @@
     "horizon": 4,
     "splits": {
       "full": {
-        "train_start": "2014-01-01 00:00:00",
+        "train_start": "2015-01-01 00:00:00",
         "train_end": "2019-12-31 23:00:00",
         "validation_start": "2020-01-01 00:00:00",
         "validation_end": "2020-12-31 23:00:00",
         "test_start": "2021-01-01 00:00:00",
-        "test_end": "2022-12-31 23:00:00"
+        "test_end": "2021-12-31 23:00:00"
       },
       "small_sample": {
         "train_start": "2018-07-01 00:00:00",
@@ -39,25 +41,25 @@
     }
   },
   "input_output": {
-    "loads_shape": [
+      "loads_shape": [
       "batch",
       24,
-      3
+      4
     ],
     "exog_shape": [
       "batch",
       24,
       "F"
     ],
-    "prediction_shape": [
+      "prediction_shape": [
       "batch",
       4,
-      3
+      4
     ],
     "future_exogenous_allowed": false,
     "input_modes": {
       "loads_only": {
-        "description": "Use only the 24-hour historical electricity, cooling and heating loads."
+        "description": "Use only the 24-hour historical electricity, cooling, heating and gas loads."
       },
       "loads_and_exog": {
         "description": "Use historical loads together with the available historical weather and calendar variables."
@@ -96,7 +98,7 @@
       "exog_support": "loads_only",
       "future_exog_allowed": false,
       "exact_reimplementation": false,
-      "relation_to_shao": "Independent lightweight linear baseline; not a Shao model reproduction."
+      "relation_to_shao": "Independent lightweight linear baseline for four electricity/cooling/heating/gas tasks; not a Shao model reproduction."
     },
     {
       "name": "MMoE-lite",
@@ -105,7 +107,7 @@
       "exog_support": "yes",
       "future_exog_allowed": false,
       "exact_reimplementation": false,
-      "relation_to_shao": "Retains the MMoE expert-routing idea but omits the Frequency and STIM modules; it is not the complete Frequency-STIM-MMoE model."
+      "relation_to_shao": "Retains the MMoE expert-routing idea for four tasks but omits the Frequency and STIM modules; it is not the complete Frequency-STIM-MMoE model."
     },
     {
       "name": "SOFTS",
@@ -114,7 +116,7 @@
       "exog_support": "minimal_adapter_loads_only",
       "future_exog_allowed": false,
       "exact_reimplementation": false,
-      "relation_to_shao": "STAR-based multivariate channel-mixing adapter; not a Shao model reproduction."
+      "relation_to_shao": "STAR-based multivariate channel-mixing adapter for four tasks; not a Shao model reproduction."
     }
   ]
 }

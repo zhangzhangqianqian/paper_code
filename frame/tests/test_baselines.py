@@ -58,6 +58,16 @@ class BaselineTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["overall_equal_task_mean"]["WAPE"], 20.0)
         self.assertAlmostEqual(metrics["overall_equal_task_mean"]["MAPE"], 20.0)
 
+    def test_metrics_accept_four_task_names(self):
+        actual = np.ones((2, 4, 4), dtype=np.float32)
+        prediction = np.zeros_like(actual)
+        names = ("electricity", "cooling", "heating", "gas")
+        metrics = regression_metrics(actual, prediction, task_names=names)
+        self.assertEqual(tuple(metrics["per_task"]), names)
+        self.assertEqual(metrics["task_count"], 4)
+        with self.assertRaises(ValueError):
+            regression_metrics(actual, prediction)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

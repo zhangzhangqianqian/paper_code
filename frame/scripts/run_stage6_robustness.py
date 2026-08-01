@@ -32,6 +32,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data_pipeline import SMALL_SAMPLE_SPLIT, read_heew_canonical, save_json  # noqa: E402
+from src.kitakyushu_pipeline import (  # noqa: E402
+    KITAKYUSHU_EXOG_COLUMNS,
+    KITAKYUSHU_SMALL_SAMPLE_SPLIT,
+    KITAKYUSHU_TASKS,
+    read_kitakyushu_canonical,
+)
 from src.stage6_contract import load_stage6_selection_contract  # noqa: E402
 from src.validation_selection import (  # noqa: E402
     run_protocol_sweep,
@@ -49,6 +55,17 @@ def parse_args() -> argparse.Namespace:
         description="执行阶段6.3小样本验证集鲁棒性检查"
     )
     parser.add_argument(
+        "--dataset",
+        choices=("kitakyushu_energy_station", "heew_total"),
+        default="kitakyushu_energy_station",
+        help="阶段 6 数据协议；默认使用 Kitakyushu 四任务",
+    )
+    parser.add_argument(
+        "--kitakyushu-data-dir",
+        default="Kitakyushu dataset",
+        help="Kitakyushu 原始 ZIP/解压文件目录",
+    )
+    parser.add_argument(
         "--energy-file",
         default="dataset/HEEW/cleaned_data/Total_energy.csv",
         help="HEEW负荷CSV路径",
@@ -60,12 +77,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage6-2-dir",
-        default="frame/reports/stage6_2/full",
+        default="frame/reports/stage6_2/kitakyushu/full",
         help="阶段6.2全年验证结果目录，用于排名稳定性对照",
     )
     parser.add_argument(
         "--output-dir",
-        default="frame/reports/stage6_3/small_sample",
+        default="frame/reports/stage6_3/kitakyushu/small_sample",
         help="阶段6.3输出目录",
     )
     parser.add_argument(
@@ -103,16 +120,31 @@ def main() -> None:
 
     contract = load_stage6_selection_contract()
     training = contract.raw["training_policy"]
-    energy_path = _resolve_path(args.energy_file)
-    weather_path = _resolve_path(args.weather_file)
-    frame, _ = read_heew_canonical(energy_path, weather_path)
+    if args.dataset == "kitakyushu_energy_station":
+        if args.energy_file != "dataset/HEEW/cleaned_data/Total_energy.csv" or args.weather_file != "dataset/HEEW/cleaned_data/Total_weather.csv":
+            raise ValueError("Kitakyushu 协议不接受 HEEW 的 --energy-file/--weather-file 参数")
+        frame, _ = read_kitakyushu_canonical(
+            _resolve_path(args.kitakyushu_data_dir), years=tuple(range(2015, 2022))
+        )
+        task_names = KITAKYUSHU_TASKS
+        exog_columns = KITAKYUSHU_EXOG_COLUMNS
+        split_spec = KITAKYUSHU_SMALL_SAMPLE_SPLIT
+    else:
+        energy_path = _resolve_path(args.energy_file)
+        weather_path = _resolve_path(args.weather_file)
+        frame, _ = read_heew_canonical(energy_path, weather_path)
+        task_names = None
+        exog_columns = None
+        split_spec = SMALL_SAMPLE_SPLIT
     output_root = _resolve_path(args.output_dir)
     completed = run_protocol_sweep(
         frame=frame,
         output_root=output_root,
         hyperparameter_candidates=contract.hyperparameter_candidates,
         model_names=contract.candidate_models,
-        split_spec=SMALL_SAMPLE_SPLIT,
+        split_spec=split_spec,
+        dataset_kind=args.dataset,
+        **({"task_names": task_names, "exog_columns": exog_columns} if task_names is not None else {}),
         protocol_name="small_sample",
         stage_name="6.3",
         manifest_name="stage6_3_manifest.json",

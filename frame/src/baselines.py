@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Mapping
+from typing import Dict, Sequence
 
 import numpy as np
 
@@ -59,6 +59,7 @@ def regression_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     epsilon: float = 1e-6,
+    task_names: Sequence[str] = ("electricity", "cooling", "heating"),
 ) -> Dict[str, object]:
     """返回总体、逐任务和逐预测步的误差指标。
 
@@ -72,9 +73,14 @@ def regression_metrics(
         raise ValueError("y_true和y_pred必须形状相同且为[样本,步长,任务]三维数组")
     if not np.isfinite(actual).all() or not np.isfinite(forecast).all():
         raise ValueError("指标输入不能包含NaN或Inf")
+    task_names = tuple(str(name) for name in task_names)
+    if len(task_names) != actual.shape[2]:
+        raise ValueError(
+            "task_names数量必须与预测数组任务维度一致："
+            f"{len(task_names)} != {actual.shape[2]}"
+        )
 
     errors = actual - forecast
-    task_names = ("electricity", "cooling", "heating")[: actual.shape[2]]
     task_metrics: Dict[str, Dict[str, float]] = {}
     for task_index, task_name in enumerate(task_names):
         task_actual = actual[:, :, task_index]

@@ -14,7 +14,15 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 
+# 保留 HEEW 三任务名称以兼容旧实验；Kitakyushu 通过 task_count=4 显式构造。
 TASKS: Tuple[str, ...] = ("electricity", "cooling", "heating")
+KITAKYUSHU_TASKS: Tuple[str, ...] = (
+    "electricity",
+    "cooling",
+    "heating",
+    "gas",
+)
+KITAKYUSHU_TASK_COUNT = len(KITAKYUSHU_TASKS)
 MODEL_NAMES: Tuple[str, ...] = (
     "stl",
     "hard_share",
@@ -306,13 +314,13 @@ class SingleTaskDSTCN(nn.Module):
 
 
 class IndependentSTLModel(nn.Module):
-    """三个结构相同但参数独立的单任务模型组合。
+    """多个结构相同但参数独立的单任务模型组合。
 
     输入：
-        loads: [batch, time, 3]
+        loads: [batch, time, task_count]
         exog: [batch, time, exog_dim]
     输出：
-        prediction: [batch, horizon, 3]
+        prediction: [batch, horizon, task_count]
     """
 
     def __init__(
@@ -359,7 +367,7 @@ class IndependentSTLModel(nn.Module):
 class HardShareMTLModel(nn.Module):
     """硬参数共享多任务模型。
 
-    每个任务仍只接收自己的负荷历史和公共外生变量，但三个任务共享同一个
+    每个任务仍只接收自己的负荷历史和公共外生变量，但所有任务共享同一个
     DS-TCN 编码器，并使用独立预测头。这样可以作为动态任务门控模型之前的
     结构匹配 MTL 参照，避免把显式跨任务输入混合误认为共享收益。
     """
@@ -482,7 +490,7 @@ class StaticDirectedMTLModel(nn.Module):
         return torch.sigmoid(self.gate_logits).masked_fill(~off_diagonal, 0.0)
 
     def encode_tasks(self, loads: Tensor, exog: Optional[Tensor] = None) -> Tensor:
-        """编码三个任务，返回[batch, task_count, hidden_dim]。"""
+        """编码所有任务，返回[batch, task_count, hidden_dim]。"""
 
         self._validate_inputs(loads, exog)
         representations = [
@@ -886,6 +894,17 @@ def build_forecasting_model(model_name: str, **kwargs) -> nn.Module:
             f"未知模型 {model_name!r}；可选模型为 {MODEL_NAMES}"
         ) from error
     return builder(**kwargs)
+
+
+def build_kitakyushu_forecasting_model(model_name: str, **kwargs) -> nn.Module:
+    """按 Kitakyushu 四任务协议构造内部模型。
+
+    旧的 ``build_forecasting_model`` 默认保留三任务兼容性；新数据集调用
+    本函数时会自动固定 ``task_count=4``，除非调用方显式传入该参数。
+    """
+
+    kwargs.setdefault("task_count", KITAKYUSHU_TASK_COUNT)
+    return build_forecasting_model(model_name, **kwargs)
 
 
 def count_trainable_parameters(module: nn.Module) -> int:
