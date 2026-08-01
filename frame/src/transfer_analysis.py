@@ -19,6 +19,7 @@ MTL_MODELS: Tuple[str, ...] = (
     "static_gate",
     "dynamic_symmetric",
     "dynamic_directed",
+    "scheme2r",
 )
 SEASONS: Tuple[str, ...] = ("winter", "spring", "summer", "autumn")
 SEASON_MONTHS = {

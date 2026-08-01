@@ -54,6 +54,21 @@ model:
   dropout: 0.1
   gate_type: dynamic_directed
   fusion: residual_add
+  scheme2r:
+    encoder: full_window_depthwise_separable_tcn
+    kernel_size: 5
+    dilations:
+      - 1
+      - 2
+      - 4
+    state_summary: last_mean_std_trend
+    state_dim: 16
+    gate_hidden_dim: 16
+    task_embedding_dim: 8
+    step_embedding_dim: 4
+    low_rank: 8
+    prediction_head: task_step_scalar
+    prediction_head_hidden_dim: 16
 
 training:
   device: cpu

@@ -26,7 +26,11 @@ from .data_pipeline import (
     save_json,
     select_training_frame,
 )
-from .models import count_trainable_parameters, build_forecasting_model
+from .models import (
+    SCHEME2R_MODEL_NAME,
+    count_trainable_parameters,
+    build_forecasting_model,
+)
 from .kitakyushu_pipeline import (
     KITAKYUSHU_SPLIT,
     clean_kitakyushu_dataframe,
@@ -92,6 +96,49 @@ def _write_validation_gates(
             "file": output_path.name,
             "shape": [int(value) for value in gate_array.shape],
             "kind": "static",
+            "row_semantics": "target_task",
+            "column_semantics": "source_task",
+        }
+
+    if model_name == SCHEME2R_MODEL_NAME:
+        gates = []
+        rho_values = []
+        pi_values = []
+        model.eval()
+        with torch.no_grad():
+            for loads, exog, _ in loader:
+                _, details = model.forward_with_details(loads, exog)
+                gates.append(details["gates"].cpu().numpy())
+                rho_values.append(details["rho"].cpu().numpy())
+                pi_values.append(details["pi"].cpu().numpy())
+        if not gates:
+            raise ValueError("Scheme2R验证集门控导出为空")
+        gate_array = np.concatenate(gates, axis=0).astype(np.float32)
+        rho_array = np.concatenate(rho_values, axis=0).astype(np.float32)
+        pi_array = np.concatenate(pi_values, axis=0).astype(np.float32)
+        expected_gate_shape = (
+            len(target_times),
+            4,
+            len(task_names),
+            len(task_names),
+        )
+        if tuple(gate_array.shape) != expected_gate_shape:
+            raise ValueError(
+                f"Scheme2R门控数组形状错误：{gate_array.shape}，期望{expected_gate_shape}"
+            )
+        np.savez_compressed(
+            output_path,
+            gates=gate_array,
+            rho=rho_array,
+            pi=pi_array,
+            target_times=target_times,
+            gate_kind="dynamic_step",
+        )
+        return {
+            "file": output_path.name,
+            "shape": [int(value) for value in gate_array.shape],
+            "kind": "dynamic_step",
+            "axes": ["sample", "forecast_step", "target_task", "source_task"],
             "row_semantics": "target_task",
             "column_semantics": "source_task",
         }
@@ -417,16 +464,36 @@ def run_protocol_sweep(
             validation_loader = make_dataloader(
                 standardized["validation"], batch_size=batch_size, shuffle=False
             )
-            model = build_forecasting_model(
-                model_name,
-                exog_dim=len(available_exog),
-                hidden_dim=int(candidate["hidden_dim"]),
-                kernel_size=int(candidate["kernel_size"]),
-                dilations=(1, 2),
-                dropout=float(candidate["dropout"]),
-                horizon=horizon,
-                task_count=len(task_names),
-            )
+            model_kwargs = {
+                "exog_dim": len(available_exog),
+                "hidden_dim": int(candidate["hidden_dim"]),
+                "dropout": float(candidate["dropout"]),
+                "horizon": horizon,
+                "task_count": len(task_names),
+            }
+            if model_name == SCHEME2R_MODEL_NAME:
+                model_kwargs.update(
+                    {
+                        "lookback": lookback,
+                        "kernel_size": int(candidate["scheme2r_kernel_size"]),
+                        "dilations": tuple(candidate["scheme2r_dilations"]),
+                        "rank": int(candidate["scheme2r_rank"]),
+                        "gate_hidden_dim": int(
+                            candidate["scheme2r_gate_hidden_dim"]
+                        ),
+                        "step_embedding_dim": int(
+                            candidate["scheme2r_step_embedding_dim"]
+                        ),
+                    }
+                )
+            else:
+                model_kwargs.update(
+                    {
+                        "kernel_size": int(candidate["kernel_size"]),
+                        "dilations": (1, 2),
+                    }
+                )
+            model = build_forecasting_model(model_name, **model_kwargs)
             trainer_config = TrainerConfig(
                 learning_rate=float(candidate["learning_rate"]),
                 weight_decay=weight_decay,

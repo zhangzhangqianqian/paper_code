@@ -33,7 +33,7 @@ def ordered_edges(
 
     if model_name == "dynamic_symmetric":
         return unordered_pairs(task_names)
-    if model_name in {"static_gate", "dynamic_directed"}:
+    if model_name in {"static_gate", "dynamic_directed", "scheme2r"}:
         return tuple(
             (target, source)
             for target in range(len(task_names))
@@ -69,13 +69,22 @@ def load_gate_array(
         raise ValueError("task_names至少需要两个任务")
     if gates.ndim == 2 and gates.shape == (task_count, task_count):
         gates = gates[None, :, :]
-    if gates.ndim != 3 or gates.shape[1:] != (task_count, task_count):
+    if gates.ndim == 4:
+        if gates.shape[2:] != (task_count, task_count) or gates.shape[1] <= 0:
+            raise ValueError(
+                "逐预测步门控数组必须是[N,H,task_count,task_count]："
+                f"{gates.shape}"
+            )
+        diagonal = np.diagonal(gates, axis1=2, axis2=3)
+    elif gates.ndim == 3 and gates.shape[1:] == (task_count, task_count):
+        diagonal = np.diagonal(gates, axis1=1, axis2=2)
+    else:
         raise ValueError(
-            f"门控数组必须是[N,{task_count},{task_count}]：{gates.shape}"
+            f"门控数组必须是[N,{task_count},{task_count}]或"
+            f"[N,H,{task_count},{task_count}]：{gates.shape}"
         )
     if gates.shape[0] == 0 or not np.isfinite(gates).all():
         raise ValueError("门控数组不能为空且不能包含 NaN/Inf")
-    diagonal = np.diagonal(gates, axis1=1, axis2=2)
     if not np.allclose(diagonal, 0.0, atol=1e-6):
         raise ValueError("门控对角线必须为 0")
     if np.any(gates < -1e-6) or np.any(gates > 1.0 + 1e-6):
@@ -158,6 +167,7 @@ def compute_gate_diagnostics(
             {
                 "model": model_name,
                 "candidate_id": candidate_id,
+                "forecast_step": None,
                 "target_task": task_names[target],
                 "source_task": task_names[source],
                 "mean_target_from_source": float(np.mean(forward)),
@@ -175,6 +185,7 @@ def compute_gate_diagnostics(
     summary: Dict[str, object] = {
         "model": model_name,
         "candidate_id": candidate_id,
+        "forecast_step": None,
         "sample_count": int(array.shape[0]),
         "gate_kind": "static" if model_name == "static_gate" else "dynamic",
         "edge_count_for_entropy": len(edges),

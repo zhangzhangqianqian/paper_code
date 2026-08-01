@@ -42,7 +42,12 @@ TASK_LABELS_BY_DATASET = {
     "heew_total": ("Electricity", "Cooling", "Heating"),
     "kitakyushu_energy_station": ("Electricity", "Cooling", "Heating", "Gas"),
 }
-GATED_MODELS = ("static_gate", "dynamic_symmetric", "dynamic_directed")
+GATED_MODELS = (
+    "static_gate",
+    "dynamic_symmetric",
+    "dynamic_directed",
+    "scheme2r",
+)
 
 
 def _configure_publication_style() -> None:
@@ -232,36 +237,60 @@ def main() -> None:
                 missing_runs.append(f"{model_name}/{candidate_id}")
                 continue
             gates = load_gate_array(gate_path, task_names=task_names)
-            summary, edges, matrices = compute_gate_diagnostics(
-                gates,
-                model_name=model_name,
-                candidate_id=candidate_id,
-                constant_threshold=args.constant_threshold,
-                asymmetry_threshold=args.asymmetry_threshold,
-                task_names=task_names,
-            )
-            summary_rows.append(summary)
-            edge_rows.extend(edges)
-            matrix_path = output_root / "matrices" / f"{model_name}_{candidate_id}.npz"
-            matrix_path.parent.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(matrix_path, **matrices)
-            mean_figure, asymmetry_figure = _plot_run(
-                model_name,
-                candidate_id,
-                matrices,
-                output_root,
-                task_labels,
-                export_tiff=args.export_tiff,
-            )
-            figure_files.extend([mean_figure, asymmetry_figure])
-            analyzed_runs.append(
-                {
-                    "model": model_name,
-                    "candidate_id": candidate_id,
-                    "sample_count": int(gates.shape[0]),
-                    "gate_file": str(gate_path),
-                }
-            )
+            if gates.ndim == 4:
+                step_gates = [
+                    (step_index, gates[:, step_index, :, :])
+                    for step_index in range(gates.shape[1])
+                ]
+            else:
+                step_gates = [(None, gates)]
+            for forecast_step, selected_gates in step_gates:
+                diagnostic_candidate = (
+                    candidate_id
+                    if forecast_step is None
+                    else f"{candidate_id}_step{forecast_step + 1}"
+                )
+                summary, edges, matrices = compute_gate_diagnostics(
+                    selected_gates,
+                    model_name=model_name,
+                    candidate_id=diagnostic_candidate,
+                    constant_threshold=args.constant_threshold,
+                    asymmetry_threshold=args.asymmetry_threshold,
+                    task_names=task_names,
+                )
+                if forecast_step is not None:
+                    summary["forecast_step"] = forecast_step + 1
+                    for edge in edges:
+                        edge["forecast_step"] = forecast_step + 1
+                summary_rows.append(summary)
+                edge_rows.extend(edges)
+                matrix_path = (
+                    output_root
+                    / "matrices"
+                    / f"{model_name}_{diagnostic_candidate}.npz"
+                )
+                matrix_path.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(matrix_path, **matrices)
+                mean_figure, asymmetry_figure = _plot_run(
+                    model_name,
+                    diagnostic_candidate,
+                    matrices,
+                    output_root,
+                    task_labels,
+                    export_tiff=args.export_tiff,
+                )
+                figure_files.extend([mean_figure, asymmetry_figure])
+                analyzed_runs.append(
+                    {
+                        "model": model_name,
+                        "candidate_id": diagnostic_candidate,
+                        "forecast_step": (
+                            None if forecast_step is None else forecast_step + 1
+                        ),
+                        "sample_count": int(selected_gates.shape[0]),
+                        "gate_file": str(gate_path),
+                    }
+                )
 
     if missing_runs and not args.allow_missing:
         raise FileNotFoundError(

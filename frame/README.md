@@ -1,6 +1,6 @@
 # 多能源负荷预测算法框架
 
-本目录的当前实现、方案 2-R 优化及后续阶段安排统一以 `plan/Methodology与算法框架-分阶段执行计划.md` 为准。方案 2-R 尚未进入代码，README 中的“已实现”只指当前模型。
+本目录的当前实现、方案 2-R 优化及后续阶段安排统一以 `plan/Methodology与算法框架-分阶段执行计划.md` 为准。方案 2-R 已进入代码并通过单元测试、回归测试和真实 Kitakyushu CPU 冒烟；正式验证集和测试集实验尚未运行。
 
 ## 当前数据集：Kitakyushu Energy Station Data
 
@@ -58,7 +58,11 @@ gas         → 能源站系统侧天然气消耗/购气量
 - 动态对称门控的对称性、零门控退化、梯度测试和 Kitakyushu CPU 冒烟训练。
 - 状态相关动态有向门控、目标/来源任务嵌入和有序任务对门控网络；
 - 动态有向门控的方向性、零门控退化、梯度测试和 Kitakyushu CPU 冒烟训练。
-- 五种内部模型的统一构造、输入输出接口、训练配置和结果导出；
+- 方案 2-R 的全窗口 DS-TCN（卷积核 5、膨胀率 1/2/4，默认感受野 29）；
+- 方案 2-R 的增强状态编码、预测步嵌入、独立目标/来源任务角色嵌入；
+- 方案 2-R 的共享强度 $\rho$、来源分配 $\pi$ 和最终门控 $g=\rho\pi$ 两级有向路由；
+- 方案 2-R 的低秩跨任务消息投影、消息 LayerNorm、稳定残差融合和任务-预测步专属标量头；
+- 六种内部模型的统一构造、输入输出接口、训练配置和结果导出；
 - 参数量、训练耗时、测试评估耗时和门控导出元数据记录。
 
 暂未完成：
@@ -117,7 +121,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\train_models.py `
   --max-test-samples 256 --batch-size 128 --threads 2
 ```
 
-`--model stl` 用于结构匹配的独立单任务参照；`--model hard_share` 用于硬共享多任务参照；`--model static_gate` 用于静态有向门控模型；`--model dynamic_symmetric` 用于样本级动态对称门控模型；`--model dynamic_directed` 用于样本级动态有向门控模型。上面的命令是 CPU 冒烟配置（batch size=128、threads=2）；正式实验使用阶段 6 契约规定的资源配置，并去掉 `--max-*-samples` 限制。每次运行会生成：
+`--model stl` 用于结构匹配的独立单任务参照；`--model hard_share` 用于硬共享多任务参照；`--model static_gate` 用于静态有向门控模型；`--model dynamic_symmetric` 用于样本级动态对称门控模型；`--model dynamic_directed` 用于原始动态有向门控模型；`--model scheme2r` 用于方案 2-R。上面的命令是 CPU 冒烟配置（batch size=128、threads=2）；正式实验使用阶段 6 契约规定的资源配置，并去掉 `--max-*-samples` 限制。每次运行会生成：
 
 - `normalization_stats.npz`：仅由训练集拟合的均值和尺度；
 - `best_model.pt`：按验证集 Smooth L1 损失保存的最佳模型；
@@ -126,7 +130,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\train_models.py `
 - `predictions_test.npz`：测试目标、预测值及目标时间。
 
 静态门控模型还会额外生成 `gate_matrix.json`，其中行是目标任务、列是来源任务，对角线固定为0。
-动态对称和动态有向门控模型额外生成 `gate_matrix_test.npz`，保存测试样本的 `[样本, 4, 4]` 门控矩阵。方案 2-R 尚未实现；其未来门控将增加预测步维度，形状为 `[样本, 4, 4, 4]`。
+动态对称和原始动态有向门控模型额外生成 `gate_matrix_test.npz`，保存测试样本的 `[样本, 4, 4]` 门控矩阵。方案 2-R 额外保存 `gates`、`rho` 和 `pi`：最终门控形状为 `[样本, 4, 4, 4]`，分别对应样本、预测步、目标任务和来源任务；`rho` 形状为 `[样本, 4, 4]`，`pi` 形状为 `[样本, 4, 4, 4]`。正式阶段 6 的门控诊断读取验证集文件，不读取测试集。
 `metrics_test.json` 还会记录统一模型接口、模型参数量、训练/测试评估耗时和门控文件元数据。
 
 ## 环境和测试
@@ -145,7 +149,7 @@ PyTorch 2.8.0+cpu
 & D:\anaconda\envs\pytorch\python.exe -m unittest discover -s frame/tests -v
 ```
 
-当前代码已覆盖阶段 0—5.5 的主要实现与统一接口，并完成阶段 6.1 的验证协议冻结。阶段 5.1—5.5 的外部基线和阶段 6.2—6.5 的编排脚本均已具备，但目前仍需运行正式实验；下一步是执行阶段 6.2—6.5，随后完成阶段 6.6 冻结决策和阶段 7 正式实验。
+当前代码已覆盖阶段 0—5.5 的主要实现与统一接口，方案 2-R 的阶段 4.6—4.10 也已完成，并完成阶段 6.1 的六模型验证协议冻结。阶段 5.1—5.5 的外部基线和阶段 6.2—6.5 的编排脚本均已具备，但目前仍需运行正式实验；下一步是执行阶段 6.2—6.5，随后完成阶段 6.6 冻结决策和阶段 7 正式实验。
 
 ### 阶段5.1：外部基线公平性契约
 
@@ -243,7 +247,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\validate_stage6_selection.py
 ```
 
 契约文件为 `frame/configs/stage6_selection_contract.json`，规定全年2020验证集为
-主要选择依据，小样本验证集为鲁棒性检查，并固定五个候选核心模型和四组有限超参数。
+主要选择依据，小样本验证集为鲁棒性检查，并固定六个候选核心模型和四组有限超参数。
 
 ### 阶段6.2—6.5：正式预实验编排
 

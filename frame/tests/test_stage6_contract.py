@@ -16,7 +16,14 @@ class Stage6SelectionContractTest(unittest.TestCase):
         self.assertEqual(self.contract.secondary_protocol, "small_sample")
         self.assertEqual(
             self.contract.candidate_models,
-            ("stl", "hard_share", "static_gate", "dynamic_symmetric", "dynamic_directed"),
+            (
+                "stl",
+                "hard_share",
+                "static_gate",
+                "dynamic_symmetric",
+                "dynamic_directed",
+                "scheme2r",
+            ),
         )
         self.assertEqual(len(self.contract.hyperparameter_candidates), 4)
         self.assertFalse(

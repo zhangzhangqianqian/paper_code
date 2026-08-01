@@ -72,6 +72,31 @@ class GateDiagnosticsTest(unittest.TestCase):
         self.assertEqual(len(edges), 6)
         self.assertEqual(matrices["mean"].shape, (4, 4))
 
+    def test_scheme2r_step_gate_array_can_be_loaded(self):
+        gates = np.zeros((5, 4, 4, 4), dtype=np.float32)
+        for step in range(4):
+            for target in range(4):
+                for source in range(4):
+                    if target != source:
+                        gates[:, step, target, source] = 0.1
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scheme2r_gates.npz"
+            np.savez_compressed(path, gates=gates)
+            loaded = load_gate_array(
+                path,
+                task_names=("electricity", "cooling", "heating", "gas"),
+            )
+            self.assertEqual(loaded.shape, (5, 4, 4, 4))
+            summary, edges, matrices = compute_gate_diagnostics(
+                loaded[:, 0],
+                "scheme2r",
+                "H1_step1",
+                task_names=("electricity", "cooling", "heating", "gas"),
+            )
+            self.assertEqual(summary["edge_count_for_entropy"], 12)
+            self.assertEqual(len(edges), 6)
+            self.assertEqual(matrices["mean"].shape, (4, 4))
+
 
 if __name__ == "__main__":
     unittest.main()

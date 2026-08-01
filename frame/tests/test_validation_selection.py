@@ -12,15 +12,15 @@ from src.validation_selection import (
 
 
 class ValidationSelectionTest(unittest.TestCase):
-    def test_stage6_contract_expands_to_twenty_runs(self):
+    def test_stage6_contract_expands_to_twenty_four_runs(self):
         contract = load_stage6_selection_contract()
         combinations = [
             (model, candidate["candidate_id"])
             for model in contract.candidate_models
             for candidate in contract.hyperparameter_candidates
         ]
-        self.assertEqual(len(combinations), 20)
-        self.assertEqual(len(set(combinations)), 20)
+        self.assertEqual(len(combinations), 24)
+        self.assertEqual(len(set(combinations)), 24)
 
     def test_validation_summary_has_overall_task_and_horizon_views(self):
         with tempfile.TemporaryDirectory() as directory:

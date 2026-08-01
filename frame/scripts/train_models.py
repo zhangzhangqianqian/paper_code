@@ -53,11 +53,13 @@ from src.kitakyushu_pipeline import (  # noqa: E402
     read_kitakyushu_canonical,
 )
 from src.models import (  # noqa: E402
+    ALL_MODEL_NAMES,
     DynamicDirectedMTLModel,
     DynamicSymmetricMTLModel,
     HardShareMTLModel,
     IndependentSTLModel,
-    MODEL_NAMES,
+    SCHEME2R_MODEL_NAME,
+    Scheme2RModel,
     StaticDirectedMTLModel,
     build_forecasting_model,
 )
@@ -74,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="训练统一多能源负荷预测模型")
     parser.add_argument(
         "--model",
-        choices=MODEL_NAMES,
+        choices=ALL_MODEL_NAMES,
         default="stl",
     )
     parser.add_argument(
@@ -101,6 +103,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-dim", type=int, default=32)
     parser.add_argument("--kernel-size", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--scheme2r-rank", type=int, default=8)
+    parser.add_argument("--scheme2r-gate-hidden-dim", type=int, default=16)
+    parser.add_argument("--scheme2r-step-embedding-dim", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--max-epochs", type=int, default=100)
@@ -162,6 +167,21 @@ def _make_model(
     exog_dim: int,
     task_count: int,
 ):
+    if args.model == SCHEME2R_MODEL_NAME:
+        return build_forecasting_model(
+            args.model,
+            exog_dim=exog_dim,
+            task_count=task_count,
+            hidden_dim=args.hidden_dim,
+            lookback=args.lookback,
+            kernel_size=5,
+            dilations=(1, 2, 4),
+            dropout=args.dropout,
+            horizon=args.horizon,
+            gate_hidden_dim=args.scheme2r_gate_hidden_dim,
+            step_embedding_dim=args.scheme2r_step_embedding_dim,
+            rank=args.scheme2r_rank,
+        )
     common = dict(
         exog_dim=exog_dim,
         hidden_dim=args.hidden_dim,
@@ -182,6 +202,12 @@ def main() -> None:
         raise ValueError("当前阶段的论文协议固定为24→4，horizon必须为4")
     if args.hidden_dim <= 1 or args.kernel_size <= 0:
         raise ValueError("hidden-dim必须大于1，kernel-size必须为正整数")
+    if (
+        args.scheme2r_rank <= 0
+        or args.scheme2r_gate_hidden_dim <= 0
+        or args.scheme2r_step_embedding_dim <= 0
+    ):
+        raise ValueError("Scheme2R专属维度必须为正整数")
 
     output_dir = _resolve_path(args.output_dir)
     assert output_dir is not None
@@ -326,6 +352,38 @@ def main() -> None:
                 len(task_columns),
                 len(task_columns),
             ],
+            "row_semantics": "target_task",
+            "column_semantics": "source_task",
+        }
+    elif isinstance(model, Scheme2RModel):
+        dynamic_gates = []
+        dynamic_rho = []
+        dynamic_pi = []
+        model.eval()
+        with torch.no_grad():
+            for loads, exog, _ in test_loader:
+                _, details = model.forward_with_details(loads, exog)
+                dynamic_gates.append(details["gates"].cpu().numpy())
+                dynamic_rho.append(details["rho"].cpu().numpy())
+                dynamic_pi.append(details["pi"].cpu().numpy())
+        dynamic_gate_matrix_file = "gate_matrix_test.npz"
+        np.savez_compressed(
+            output_dir / dynamic_gate_matrix_file,
+            gates=np.concatenate(dynamic_gates, axis=0),
+            rho=np.concatenate(dynamic_rho, axis=0),
+            pi=np.concatenate(dynamic_pi, axis=0),
+            target_times=windows["test"]["target_times"],
+        )
+        gate_export = {
+            "kind": "dynamic_step",
+            "file": dynamic_gate_matrix_file,
+            "shape": [
+                int(len(windows["test"]["target_times"])),
+                args.horizon,
+                len(task_columns),
+                len(task_columns),
+            ],
+            "axes": ["sample", "forecast_step", "target_task", "source_task"],
             "row_semantics": "target_task",
             "column_semantics": "source_task",
         }

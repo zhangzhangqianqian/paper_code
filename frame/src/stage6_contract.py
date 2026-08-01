@@ -19,7 +19,7 @@ from .kitakyushu_pipeline import (
     KITAKYUSHU_SPLIT,
     KITAKYUSHU_TASKS,
 )
-from .models import MODEL_NAMES
+from .models import ALL_MODEL_NAMES
 
 
 DEFAULT_STAGE6_CONTRACT_PATH = (
@@ -134,8 +134,8 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
         raise ValueError("阶段6.1禁止读取测试预测")
 
     candidates = data["candidate_models"]
-    if list(candidates) != list(MODEL_NAMES):
-        raise ValueError(f"候选模型必须按项目顺序声明为{MODEL_NAMES}")
+    if list(candidates) != list(ALL_MODEL_NAMES):
+        raise ValueError(f"候选模型必须按项目顺序声明为{ALL_MODEL_NAMES}")
 
     io = data["input_output"]
     if not isinstance(io, Mapping):
@@ -192,6 +192,16 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
             raise ValueError("dropout必须位于[0,1)")
         if candidate.get("learning_rate", 0.0) <= 0:
             raise ValueError("learning_rate必须为正数")
+        if candidate.get("scheme2r_kernel_size") != 5:
+            raise ValueError("Scheme2R的kernel_size必须固定为5")
+        if candidate.get("scheme2r_dilations") != [1, 2, 4]:
+            raise ValueError("Scheme2R的dilations必须固定为[1,2,4]")
+        if candidate.get("scheme2r_rank") != 8:
+            raise ValueError("Scheme2R的低秩维度必须固定为8")
+        if candidate.get("scheme2r_gate_hidden_dim") != 16:
+            raise ValueError("Scheme2R的门控隐藏维度必须固定为16")
+        if candidate.get("scheme2r_step_embedding_dim") != 4:
+            raise ValueError("Scheme2R的预测步嵌入维度必须固定为4")
 
     selection = data["selection_rule"]
     if not isinstance(selection, Mapping):
