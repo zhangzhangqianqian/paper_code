@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.stage6_contract import load_stage6_selection_contract
 from src.validation_selection import (
+    select_stage6_3_candidates,
     write_stability_comparison,
     write_validation_summaries,
 )
@@ -153,6 +154,78 @@ class ValidationSelectionTest(unittest.TestCase):
                 encoding="utf-8-sig"
             )
             self.assertIn("WAPE_delta_small_minus_full", comparison)
+
+    def test_stage6_3_selection_uses_model_best_config_and_top_two(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fieldnames = ["model", "candidate_id", "WAPE"]
+            rows = [
+                {"model": "stl", "candidate_id": "H1", "WAPE": "30.0"},
+                {"model": "stl", "candidate_id": "H2", "WAPE": "20.0"},
+                {"model": "dynamic_symmetric", "candidate_id": "H3", "WAPE": "11.0"},
+                {"model": "dynamic_directed", "candidate_id": "H1", "WAPE": "15.0"},
+                {"model": "scheme2r", "candidate_id": "H4", "WAPE": "10.0"},
+                {"model": "hard_share", "candidate_id": "H2", "WAPE": "25.0"},
+                {"model": "static_gate", "candidate_id": "H1", "WAPE": "22.0"},
+            ]
+            with (root / "validation_model_comparison.csv").open(
+                "w", encoding="utf-8-sig", newline=""
+            ) as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            selection = select_stage6_3_candidates(root)
+            self.assertEqual(selection["models"], ("scheme2r", "dynamic_symmetric"))
+            self.assertEqual(
+                [row["candidate_id"] for row in selection["selected_rows"]],
+                ["H4", "H3"],
+            )
+            self.assertEqual(
+                {
+                    model: [candidate["candidate_id"] for candidate in candidates]
+                    for model, candidates in selection[
+                        "model_hyperparameter_candidates"
+                    ].items()
+                },
+                {"scheme2r": ["H4"], "dynamic_symmetric": ["H3"]},
+            )
+
+    def test_stability_comparison_accepts_selected_subset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            full = root / "full"
+            small = root / "small"
+            full.mkdir()
+            small.mkdir()
+            fieldnames = [
+                "model",
+                "candidate_id",
+                "WAPE",
+                "validation_rank_by_WAPE",
+            ]
+            full_rows = [
+                {"model": "scheme2r", "candidate_id": "H3", "WAPE": "1.0", "validation_rank_by_WAPE": "1"},
+                {"model": "dynamic_symmetric", "candidate_id": "H3", "WAPE": "2.0", "validation_rank_by_WAPE": "2"},
+                {"model": "stl", "candidate_id": "H4", "WAPE": "3.0", "validation_rank_by_WAPE": "3"},
+            ]
+            small_rows = [
+                {"model": "scheme2r", "candidate_id": "H3", "WAPE": "2.5", "validation_rank_by_WAPE": "2"},
+                {"model": "dynamic_symmetric", "candidate_id": "H3", "WAPE": "2.0", "validation_rank_by_WAPE": "1"},
+            ]
+            for path, rows in (
+                (full / "validation_model_comparison.csv", full_rows),
+                (small / "validation_model_comparison.csv", small_rows),
+            ):
+                with path.open("w", encoding="utf-8-sig", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+
+            summary = write_stability_comparison(full, small)
+            self.assertEqual(summary["full_candidate_count"], 3)
+            self.assertEqual(summary["small_sample_candidate_count"], 2)
+            self.assertEqual(summary["candidate_count"], 2)
 
 
 if __name__ == "__main__":

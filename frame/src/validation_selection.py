@@ -291,7 +291,11 @@ def write_stability_comparison(
     full_output_root: str | Path,
     small_output_root: str | Path,
 ) -> Dict[str, object]:
-    """比较阶段 6.2 全年验证与阶段 6.3 小样本验证的排名和 WAPE。"""
+    """比较阶段 6.2 全年验证与阶段 6.3 小样本验证的排名和 WAPE。
+
+    阶段 6.3 只复训阶段 6.2 排名筛选出的候选，因此小样本结果可以是
+    全年候选集合的严格子集；对两者的交集进行稳定性比较。
+    """
 
     full_path = Path(full_output_root) / "validation_model_comparison.csv"
     small_root = Path(small_output_root)
@@ -312,19 +316,30 @@ def write_stability_comparison(
 
     full_rows = read_rows(full_path)
     small_rows = read_rows(small_path)
-    if set(full_rows) != set(small_rows):
-        raise ValueError("阶段 6.2 与阶段 6.3 的候选模型/超参数组合不一致")
+    full_keys = set(full_rows)
+    small_keys = set(small_rows)
+    if not small_keys.issubset(full_keys):
+        unknown = sorted(small_keys - full_keys)
+        raise ValueError(
+            "阶段 6.3 包含阶段 6.2 未筛选的候选模型/超参数组合："
+            f"{unknown}"
+        )
+    compared_keys = full_keys & small_keys
+    if not compared_keys:
+        raise ValueError("阶段 6.2 与阶段 6.3 没有可比较的候选组合")
 
     full_order = [
         key
         for key, _ in sorted(
-            full_rows.items(), key=lambda item: int(item[1]["validation_rank_by_WAPE"])
+            ((key, full_rows[key]) for key in compared_keys),
+            key=lambda item: int(item[1]["validation_rank_by_WAPE"]),
         )
     ]
     small_order = [
         key
         for key, _ in sorted(
-            small_rows.items(), key=lambda item: int(item[1]["validation_rank_by_WAPE"])
+            ((key, small_rows[key]) for key in compared_keys),
+            key=lambda item: int(item[1]["validation_rank_by_WAPE"]),
         )
     ]
     comparison: list[Dict[str, object]] = []
@@ -352,6 +367,8 @@ def write_stability_comparison(
         "full_reference": str(full_path),
         "small_sample_reference": str(small_path),
         "candidate_count": len(comparison),
+        "full_candidate_count": len(full_rows),
+        "small_sample_candidate_count": len(small_rows),
         "rank_order_changed": full_order != small_order,
         "rank_order_completely_reversed": small_order == list(reversed(full_order)),
         "best_full_candidate": {
@@ -368,11 +385,117 @@ def write_stability_comparison(
     return summary
 
 
+def select_stage6_3_candidates(
+    stage6_2_root: str | Path,
+    contract=None,
+    required_model: str = SCHEME2R_MODEL_NAME,
+) -> Dict[str, object]:
+    """从阶段 6.2 总体 WAPE 表自动选择阶段 6.3 的模型和配置。
+
+    每个模型先保留其验证集 WAPE 最低的配置，再选择模型级排名前两名；
+    若 ``required_model`` 不在前两名，则额外加入该模型。返回的配置来自
+    阶段 6.1 契约，避免把 CSV 中的指标字段误当作模型超参数。
+    """
+
+    root = Path(stage6_2_root)
+    comparison_path = root / "validation_model_comparison.csv"
+    if not comparison_path.exists():
+        raise FileNotFoundError(f"找不到阶段6.2总体结果：{comparison_path}")
+    if contract is None:
+        contract = load_stage6_selection_contract()
+
+    contract_models = tuple(contract.candidate_models)
+    contract_model_set = set(contract_models)
+    candidate_by_id = {
+        str(candidate["candidate_id"]): dict(candidate)
+        for candidate in contract.hyperparameter_candidates
+    }
+    with comparison_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    required_columns = {"model", "candidate_id", "WAPE"}
+    if not rows or not required_columns.issubset(rows[0]):
+        raise ValueError(
+            f"阶段6.2结果缺少选择所需列：{sorted(required_columns)}"
+        )
+
+    best_by_model: Dict[str, Dict[str, object]] = {}
+    for row in rows:
+        model = str(row["model"])
+        candidate_id = str(row["candidate_id"])
+        if model not in contract_model_set:
+            raise ValueError(f"阶段6.2结果包含契约外模型：{model}")
+        if candidate_id not in candidate_by_id:
+            raise ValueError(f"阶段6.2结果包含契约外配置：{candidate_id}")
+        try:
+            wape = float(row["WAPE"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"阶段6.2结果中的WAPE不可解析：{model}/{candidate_id}"
+            ) from exc
+        if not np.isfinite(wape):
+            raise ValueError(f"阶段6.2结果中的WAPE不是有限值：{model}/{candidate_id}")
+        current = best_by_model.get(model)
+        candidate_key = (wape, candidate_id)
+        current_key = (
+            (float(current["WAPE"]), str(current["candidate_id"]))
+            if current is not None
+            else None
+        )
+        if current is None or candidate_key < current_key:
+            best_by_model[model] = {
+                "model": model,
+                "candidate_id": candidate_id,
+                "WAPE": wape,
+                "full_validation_rank": int(row.get("validation_rank_by_WAPE", 0) or 0),
+            }
+
+    missing_models = sorted(contract_model_set - set(best_by_model))
+    if missing_models:
+        raise ValueError(
+            "阶段6.2结果缺少候选模型，不能进行阶段6.3筛选："
+            f"{missing_models}"
+        )
+    ranked_models = sorted(
+        best_by_model.values(),
+        key=lambda row: (float(row["WAPE"]), str(row["model"])),
+    )
+    selected_rows = ranked_models[:2]
+    if required_model not in {str(row["model"]) for row in selected_rows}:
+        selected_rows.append(best_by_model[required_model])
+
+    selected_models = tuple(str(row["model"]) for row in selected_rows)
+    selected_model_candidates = {
+        model: (candidate_by_id[str(row["candidate_id"])],)
+        for model, row in ((str(row["model"]), row) for row in selected_rows)
+    }
+    selected_candidate_ids = {
+        str(candidate["candidate_id"])
+        for candidates in selected_model_candidates.values()
+        for candidate in candidates
+    }
+    selected_candidates = tuple(
+        candidate
+        for candidate_id, candidate in candidate_by_id.items()
+        if candidate_id in selected_candidate_ids
+    )
+    return {
+        "models": selected_models,
+        "hyperparameter_candidates": selected_candidates,
+        "model_hyperparameter_candidates": selected_model_candidates,
+        "selected_rows": selected_rows,
+        "full_ranking_by_model": ranked_models,
+        "required_model": required_model,
+    }
+
+
 def run_protocol_sweep(
     frame,
     output_root: str | Path,
     hyperparameter_candidates: Sequence[Mapping[str, object]],
     model_names: Sequence[str],
+    model_hyperparameter_candidates: Mapping[
+        str, Sequence[Mapping[str, object]]
+    ] | None = None,
     exog_columns: Sequence[str] = HEEW_EXOG_COLUMNS,
     task_names: Sequence[str] = TASKS,
     dataset_kind: str = "heew_total",
@@ -394,12 +517,28 @@ def run_protocol_sweep(
 ) -> list[Dict[str, object]]:
     """执行阶段 6.2 全年验证集 sweep；函数绝不构造 test 窗口。"""
 
-    if tuple(model_names) != tuple(load_stage6_selection_contract().candidate_models):
-        raise ValueError("模型候选必须与阶段 6.1 契约完全一致")
+    contract_models = set(load_stage6_selection_contract().candidate_models)
+    model_names = tuple(str(name) for name in model_names)
+    if not model_names or not set(model_names).issubset(contract_models):
+        raise ValueError("模型候选必须来自阶段 6.1 契约")
     if lookback != 24 or horizon != 4:
         raise ValueError("阶段 6.2 固定使用 24→4 窗口")
     if not hyperparameter_candidates:
         raise ValueError("至少需要一组超参数候选")
+    if model_hyperparameter_candidates is None:
+        candidates_by_model = {
+            model_name: tuple(hyperparameter_candidates)
+            for model_name in model_names
+        }
+    else:
+        candidates_by_model = {
+            str(model_name): tuple(candidates)
+            for model_name, candidates in model_hyperparameter_candidates.items()
+        }
+        if set(candidates_by_model) != set(model_names):
+            raise ValueError("模型专属超参数映射必须覆盖且仅覆盖当前模型")
+        if any(not candidates for candidates in candidates_by_model.values()):
+            raise ValueError("每个模型至少需要一组超参数")
 
     task_names = tuple(str(name) for name in task_names)
     if not task_names:
@@ -454,7 +593,7 @@ def run_protocol_sweep(
 
     completed_runs: list[Dict[str, object]] = []
     for model_name in model_names:
-        for candidate in hyperparameter_candidates:
+        for candidate in candidates_by_model[model_name]:
             candidate_id = str(candidate["candidate_id"])
             run_dir = root / "runs" / model_name / candidate_id
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -600,6 +739,16 @@ def run_protocol_sweep(
             "models": list(model_names),
             "tasks": list(task_names),
             "hyperparameter_candidates": [dict(value) for value in hyperparameter_candidates],
+            **(
+                {
+                    "model_hyperparameter_candidates": {
+                        model: [dict(value) for value in candidates]
+                        for model, candidates in candidates_by_model.items()
+                    }
+                }
+                if model_hyperparameter_candidates is not None
+                else {}
+            ),
             "test_set_accessed": False,
             "sample_counts": {
                 name: int(len(value["target"])) for name, value in windows.items()

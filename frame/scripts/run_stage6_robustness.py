@@ -1,7 +1,8 @@
 """阶段 6.3：小样本验证集鲁棒性检查。
 
-该脚本复用阶段 6.2 的五个模型和 H1—H4 配置，在小样本训练区间重新训练，
-只评估小样本验证集，不构造或读取小样本测试窗口。
+该脚本读取阶段 6.2 的全年验证排名，为每个模型保留其最佳配置，
+只重新训练排名前两位的模型；若 Scheme2R 未进入前两位，则额外加入
+Scheme2R。脚本只评估小样本验证集，不构造或读取小样本测试窗口。
 
 正式运行示例：
 
@@ -41,6 +42,7 @@ from src.kitakyushu_pipeline import (  # noqa: E402
 from src.stage6_contract import load_stage6_selection_contract  # noqa: E402
 from src.validation_selection import (  # noqa: E402
     run_protocol_sweep,
+    select_stage6_3_candidates,
     write_stability_comparison,
 )
 
@@ -120,6 +122,9 @@ def main() -> None:
 
     contract = load_stage6_selection_contract()
     training = contract.raw["training_policy"]
+    selection = select_stage6_3_candidates(
+        _resolve_path(args.stage6_2_dir), contract=contract
+    )
     if args.dataset == "kitakyushu_energy_station":
         if args.energy_file != "dataset/HEEW/cleaned_data/Total_energy.csv" or args.weather_file != "dataset/HEEW/cleaned_data/Total_weather.csv":
             raise ValueError("Kitakyushu 协议不接受 HEEW 的 --energy-file/--weather-file 参数")
@@ -140,8 +145,11 @@ def main() -> None:
     completed = run_protocol_sweep(
         frame=frame,
         output_root=output_root,
-        hyperparameter_candidates=contract.hyperparameter_candidates,
-        model_names=contract.candidate_models,
+        hyperparameter_candidates=selection["hyperparameter_candidates"],
+        model_names=selection["models"],
+        model_hyperparameter_candidates=selection[
+            "model_hyperparameter_candidates"
+        ],
         split_spec=split_spec,
         dataset_kind=args.dataset,
         **({"task_names": task_names, "exog_columns": exog_columns} if task_names is not None else {}),
@@ -169,6 +177,8 @@ def main() -> None:
     manifest.update(
         {
             "stage6_2_reference": str(_resolve_path(args.stage6_2_dir)),
+            "stage6_2_selection": selection["selected_rows"],
+            "selected_models": list(selection["models"]),
             "stability_summary": stability,
             "negative_transfer_analysis": "deferred_to_stage6_5",
             "test_set_accessed": False,
@@ -182,6 +192,14 @@ def main() -> None:
                 "protocol": "small_sample",
                 "completed_runs": len(completed),
                 "output_dir": str(output_root),
+                "selected_models": list(selection["models"]),
+                "selected_configurations": [
+                    {
+                        "model": row["model"],
+                        "candidate_id": row["candidate_id"],
+                    }
+                    for row in selection["selected_rows"]
+                ],
                 "rank_order_changed": stability["rank_order_changed"],
                 "rank_order_completely_reversed": stability[
                     "rank_order_completely_reversed"
