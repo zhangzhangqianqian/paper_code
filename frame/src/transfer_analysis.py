@@ -149,6 +149,27 @@ def _unit_data(
     raise ValueError(f"未知分析粒度：{granularity}")
 
 
+def _moving_block_indices(
+    n: int,
+    replicates: int,
+    block_size: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Generate circular moving-block bootstrap indices."""
+
+    if n < 1 or replicates < 1 or block_size < 1:
+        raise ValueError("n, replicates and block_size must be positive")
+    block_size = min(int(block_size), n)
+    blocks_per_replicate = int(np.ceil(n / block_size))
+    block_starts = rng.integers(
+        0, n, size=(replicates, blocks_per_replicate)
+    )
+    offsets = np.arange(block_size, dtype=np.int64)
+    return (
+        block_starts[:, :, None] + offsets[None, None, :]
+    ).reshape(replicates, -1)[:, :n] % n
+
+
 def _bootstrap_gain_from_arrays(
     actual: np.ndarray,
     reference_prediction: np.ndarray,
@@ -156,15 +177,20 @@ def _bootstrap_gain_from_arrays(
     metric: str,
     replicates: int,
     rng: np.random.Generator,
-    block_size: int = 64,
-) -> Tuple[float, float]:
+    block_size: int = 24,
+) -> Tuple[float, float, float]:
     if replicates <= 0 or actual.shape[0] < 2:
-        return float("nan"), float("nan")
+        return float("nan"), float("nan"), float("nan")
     n = actual.shape[0]
     gains = np.empty(replicates, dtype=np.float64)
-    for start in range(0, replicates, block_size):
-        count = min(block_size, replicates - start)
-        indices = rng.integers(0, n, size=(count, n))
+    if block_size <= 0:
+        raise ValueError("moving-block bootstrap block_size must be positive")
+    replicate_batch_size = 64
+    for start in range(0, replicates, replicate_batch_size):
+        count = min(replicate_batch_size, replicates - start)
+        # Circular moving blocks preserve short-range temporal dependence while
+        # avoiding a special case for the tail of a validation interval.
+        indices = _moving_block_indices(n, count, block_size, rng)
         actual_sample = actual[indices]
         ref_sample = reference_prediction[indices]
         joint_sample = joint_prediction[indices]
@@ -193,7 +219,62 @@ def _bootstrap_gain_from_arrays(
         gains[start : start + count] = (ref_values - joint_values) / np.maximum(
             np.abs(ref_values), 1e-12
         ) * 100.0
-    return float(np.percentile(gains, 2.5)), float(np.percentile(gains, 97.5))
+    p_value = float((1.0 + np.sum(gains >= 0.0)) / (replicates + 1.0))
+    return (
+        float(np.percentile(gains, 2.5)),
+        float(np.percentile(gains, 97.5)),
+        p_value,
+    )
+
+
+def _benjamini_hochberg(p_values: Sequence[float]) -> np.ndarray:
+    """Return BH-adjusted p-values in the original order."""
+
+    values = np.asarray(p_values, dtype=np.float64)
+    if values.ndim != 1:
+        raise ValueError("p_values must be one-dimensional")
+    if values.size == 0:
+        return values.copy()
+    if np.any(~np.isfinite(values)) or np.any((values < 0.0) | (values > 1.0)):
+        raise ValueError("p_values must be finite and lie in [0, 1]")
+    order = np.argsort(values, kind="stable")
+    ranked = values[order]
+    adjusted_ranked = np.empty_like(ranked)
+    running = 1.0
+    count = len(ranked)
+    for index in range(count - 1, -1, -1):
+        rank = index + 1
+        running = min(running, ranked[index] * count / rank)
+        adjusted_ranked[index] = running
+    adjusted = np.empty_like(adjusted_ranked)
+    adjusted[order] = adjusted_ranked
+    return adjusted
+
+
+def _apply_fdr(
+    rows: Sequence[Dict[str, object]],
+    bootstrap_metric: str,
+    bootstrap_granularities: Sequence[str],
+    q: float = 0.05,
+) -> None:
+    eligible = [
+        row
+        for row in rows
+        if row.get("metric") == bootstrap_metric
+        and row.get("granularity") in bootstrap_granularities
+        and bool(row.get("significance_computed"))
+        and np.isfinite(float(row.get("bootstrap_p_value", np.nan)))
+    ]
+    if not eligible:
+        return
+    adjusted = _benjamini_hochberg(
+        [float(row["bootstrap_p_value"]) for row in eligible]
+    )
+    for row, adjusted_p in zip(eligible, adjusted):
+        row["fdr_adjusted_p_value"] = float(adjusted_p)
+        row["significant_negative_transfer"] = bool(
+            adjusted_p <= q and float(row["gain_pct"]) < 0.0
+        )
 
 
 def _gain_row(
@@ -206,6 +287,7 @@ def _gain_row(
     bootstrap_metric: str,
     bootstrap_granularities: Sequence[str],
     bootstrap_replicates: int,
+    bootstrap_block_size: int,
     rng: np.random.Generator,
     task_names: Sequence[str] = TASKS,
 ) -> Dict[str, object]:
@@ -226,18 +308,20 @@ def _gain_row(
         gain = calculate_gain(reference_metrics[metric], joint_metrics[metric])
         ci_low = float("nan")
         ci_high = float("nan")
+        p_value = float("nan")
         significance_computed = (
             metric == bootstrap_metric and granularity in bootstrap_granularities
         )
         significant = False if significance_computed else None
         if significance_computed:
-            ci_low, ci_high = _bootstrap_gain_from_arrays(
+            ci_low, ci_high, p_value = _bootstrap_gain_from_arrays(
                 reference_actual,
                 reference_prediction,
                 joint_prediction,
                 metric,
                 bootstrap_replicates,
                 rng,
+                block_size=bootstrap_block_size,
             )
             significant = bool(np.isfinite(ci_high) and ci_high < 0.0)
         rows.append(
@@ -258,6 +342,8 @@ def _gain_row(
                 "gain_pct": gain,
                 "gain_ci_low": ci_low,
                 "gain_ci_high": ci_high,
+                "bootstrap_p_value": p_value,
+                "fdr_adjusted_p_value": float("nan"),
                 "significant_negative_transfer": significant,
                 "significance_computed": significance_computed,
             }
@@ -281,6 +367,7 @@ def analyze_transfer(
     protocol: str,
     error_metric: str = "WAPE",
     bootstrap_replicates: int = 500,
+    bootstrap_block_size: int = 24,
     bootstrap_granularities: Sequence[str] = ("task",),
     seed: int = 2026,
     task_names: Sequence[str] = TASKS,
@@ -289,6 +376,8 @@ def analyze_transfer(
         raise ValueError(f"error_metric必须是{METRICS}")
     if bootstrap_replicates < 0:
         raise ValueError("bootstrap_replicates不能为负数")
+    if bootstrap_block_size <= 0:
+        raise ValueError("bootstrap_block_size必须为正整数")
     task_names = tuple(str(name) for name in task_names)
     if not task_names:
         raise ValueError("task_names不能为空")
@@ -308,7 +397,7 @@ def analyze_transfer(
 
     candidate_ids = ("H1", "H2", "H3", "H4")
     for candidate_id in candidate_ids:
-        reference = load_validation_run(root, "stl", candidate_id, task_names)
+        reference = load_validation_run(root, "stl_matched", candidate_id, task_names)
         for model in MTL_MODELS:
             joint = load_validation_run(root, model, candidate_id, task_names)
             if not np.array_equal(reference.target_times, joint.target_times):
@@ -339,12 +428,19 @@ def analyze_transfer(
                         error_metric,
                         bootstrap_granularities,
                         bootstrap_replicates,
+                        bootstrap_block_size,
                         rng,
                         task_names,
                     )
                 )
             for row in candidate_rows:
                 row["protocol"] = protocol
+            _apply_fdr(
+                candidate_rows,
+                error_metric,
+                bootstrap_granularities,
+                q=0.05,
+            )
             all_gains.extend(candidate_rows)
 
             for granularity in ("task", "horizon", "season_horizon"):
@@ -378,7 +474,7 @@ def analyze_transfer(
                             "protocol": protocol,
                             "model": model,
                             "candidate_id": candidate_id,
-                            "reference_model": "stl",
+                            "reference_model": "stl_matched",
                             "granularity": granularity,
                             "metric": metric,
                             "unit_count": int(np.sum(finite)),
@@ -406,16 +502,19 @@ def analyze_transfer(
         "protocol": protocol,
         "input_dir": str(root),
         "output_dir": str(out),
-        "reference_model": "stl",
+        "reference_model": "stl_matched",
         "joint_models": list(MTL_MODELS),
         "candidate_ids": list(candidate_ids),
         "tasks": list(task_names),
         "error_metric_for_significance": error_metric,
         "bootstrap_replicates": int(bootstrap_replicates),
+        "bootstrap_block_size": int(bootstrap_block_size),
+        "fdr_method": "Benjamini-Hochberg",
+        "fdr_q": 0.05,
         "bootstrap_granularities": list(bootstrap_granularities),
         "random_seed": int(seed),
         "negative_transfer_definition": "gain_pct < 0",
-        "significant_negative_transfer_definition": "bootstrap 95% CI upper bound of gain_pct < 0",
+        "significant_negative_transfer_definition": "Benjamini-Hochberg adjusted bootstrap p-value <= 0.05 and observed gain_pct < 0",
         "test_set_accessed": False,
         "gain_row_count": len(all_gains),
         "summary_row_count": len(summary_rows),

@@ -32,6 +32,18 @@ MODEL_NAMES: Tuple[str, ...] = (
 )
 SCHEME2R_MODEL_NAME = "scheme2r"
 ALL_MODEL_NAMES: Tuple[str, ...] = MODEL_NAMES + (SCHEME2R_MODEL_NAME,)
+# Stage 6 uses a strict structure-matched STL reference.  The legacy ``stl``
+# model remains available for backwards-compatible scripts, but is not a
+# candidate in the scientific selection contract.
+MATCHED_STL_MODEL_NAME = "stl_matched"
+STAGE6_MODEL_NAMES: Tuple[str, ...] = (
+    MATCHED_STL_MODEL_NAME,
+    "hard_share",
+    "static_gate",
+    "dynamic_symmetric",
+    "dynamic_directed",
+    SCHEME2R_MODEL_NAME,
+)
 
 
 class CausalDepthwiseSeparableConv1d(nn.Module):
@@ -815,14 +827,20 @@ class TaskStepForecastHead(nn.Module):
 class TaskForecastHead(nn.Module):
     """单个任务的多步预测头。"""
 
-    def __init__(self, hidden_dim: int, horizon: int) -> None:
+    def __init__(
+        self, hidden_dim: int, horizon: int, head_hidden_dim: Optional[int] = None
+    ) -> None:
         super().__init__()
         if hidden_dim <= 1 or horizon <= 0:
             raise ValueError("hidden_dim必须大于1且horizon必须为正整数")
+        head_hidden_dim = hidden_dim // 2 if head_hidden_dim is None else int(head_hidden_dim)
+        if head_hidden_dim <= 0:
+            raise ValueError("head_hidden_dim必须为正整数")
+        self.head_hidden_dim = head_hidden_dim
         self.network = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.Linear(hidden_dim, head_hidden_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim // 2, horizon),
+            nn.Linear(head_hidden_dim, horizon),
         )
 
     def forward(self, representation: Tensor) -> Tensor:
@@ -929,25 +947,40 @@ class HardShareMTLModel(nn.Module):
         exog_dim: int,
         task_count: int = 3,
         hidden_dim: int = 32,
+        lookback: Optional[int] = None,
         kernel_size: int = 3,
         dilations: Sequence[int] = (1, 2),
         dropout: float = 0.1,
         horizon: int = 4,
+        head_hidden_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
         if task_count <= 0:
             raise ValueError("task_count必须为正整数")
         self.task_count = task_count
         self.horizon = horizon
-        self.encoder = DSTCNEncoder(
-            exog_dim=exog_dim,
-            hidden_dim=hidden_dim,
-            kernel_size=kernel_size,
-            dilations=dilations,
-            dropout=dropout,
+        encoder_type = FullWindowDSTCNEncoder if lookback is not None else DSTCNEncoder
+        encoder_kwargs = {
+            "exog_dim": exog_dim,
+            "hidden_dim": hidden_dim,
+            "kernel_size": kernel_size,
+            "dilations": dilations,
+            "dropout": dropout,
+        }
+        if lookback is not None:
+            encoder_kwargs["lookback"] = int(lookback)
+        self.encoder = encoder_type(
+            **encoder_kwargs,
         )
         self.heads = nn.ModuleList(
-            [TaskForecastHead(hidden_dim=hidden_dim, horizon=horizon) for _ in range(task_count)]
+            [
+                TaskForecastHead(
+                    hidden_dim=hidden_dim,
+                    horizon=horizon,
+                    head_hidden_dim=head_hidden_dim,
+                )
+                for _ in range(task_count)
+            ]
         )
 
     def forward(self, loads: Tensor, exog: Optional[Tensor] = None) -> Tensor:
@@ -982,10 +1015,12 @@ class StaticDirectedMTLModel(nn.Module):
         exog_dim: int,
         task_count: int = 3,
         hidden_dim: int = 32,
+        lookback: Optional[int] = None,
         kernel_size: int = 3,
         dilations: Sequence[int] = (1, 2),
         dropout: float = 0.1,
         horizon: int = 4,
+        head_hidden_dim: Optional[int] = None,
         initial_gate: float = 0.1,
     ) -> None:
         super().__init__()
@@ -999,11 +1034,13 @@ class StaticDirectedMTLModel(nn.Module):
         self.task_count = task_count
         self.hidden_dim = hidden_dim
         self.horizon = horizon
+        encoder_type = FullWindowDSTCNEncoder if lookback is not None else DSTCNEncoder
         self.encoders = nn.ModuleList(
             [
-                DSTCNEncoder(
+                encoder_type(
                     exog_dim=exog_dim,
                     hidden_dim=hidden_dim,
+                    **({"lookback": int(lookback)} if lookback is not None else {}),
                     kernel_size=kernel_size,
                     dilations=dilations,
                     dropout=dropout,
@@ -1012,7 +1049,14 @@ class StaticDirectedMTLModel(nn.Module):
             ]
         )
         self.heads = nn.ModuleList(
-            [TaskForecastHead(hidden_dim=hidden_dim, horizon=horizon) for _ in range(task_count)]
+            [
+                TaskForecastHead(
+                    hidden_dim=hidden_dim,
+                    horizon=horizon,
+                    head_hidden_dim=head_hidden_dim,
+                )
+                for _ in range(task_count)
+            ]
         )
         self.message_projections = nn.ModuleDict(
             {
@@ -1097,10 +1141,12 @@ class DynamicSymmetricMTLModel(nn.Module):
         exog_dim: int,
         task_count: int = 3,
         hidden_dim: int = 32,
+        lookback: Optional[int] = None,
         kernel_size: int = 3,
         dilations: Sequence[int] = (1, 2),
         dropout: float = 0.1,
         horizon: int = 4,
+        head_hidden_dim: Optional[int] = None,
         state_dim: int = 16,
         state_hidden_dim: int = 32,
         gate_hidden_dim: int = 16,
@@ -1125,11 +1171,13 @@ class DynamicSymmetricMTLModel(nn.Module):
             for target in range(task_count)
             for source in range(target + 1, task_count)
         )
+        encoder_type = FullWindowDSTCNEncoder if lookback is not None else DSTCNEncoder
         self.encoders = nn.ModuleList(
             [
-                DSTCNEncoder(
+                encoder_type(
                     exog_dim=exog_dim,
                     hidden_dim=hidden_dim,
+                    **({"lookback": int(lookback)} if lookback is not None else {}),
                     kernel_size=kernel_size,
                     dilations=dilations,
                     dropout=dropout,
@@ -1154,7 +1202,14 @@ class DynamicSymmetricMTLModel(nn.Module):
         assert isinstance(final_layer, nn.Linear)
         nn.init.constant_(final_layer.bias, initial_logit)
         self.heads = nn.ModuleList(
-            [TaskForecastHead(hidden_dim=hidden_dim, horizon=horizon) for _ in range(task_count)]
+            [
+                TaskForecastHead(
+                    hidden_dim=hidden_dim,
+                    horizon=horizon,
+                    head_hidden_dim=head_hidden_dim,
+                )
+                for _ in range(task_count)
+            ]
         )
         self.message_projections = nn.ModuleDict(
             {
@@ -1256,10 +1311,12 @@ class DynamicDirectedMTLModel(nn.Module):
         exog_dim: int,
         task_count: int = 3,
         hidden_dim: int = 32,
+        lookback: Optional[int] = None,
         kernel_size: int = 3,
         dilations: Sequence[int] = (1, 2),
         dropout: float = 0.1,
         horizon: int = 4,
+        head_hidden_dim: Optional[int] = None,
         state_dim: int = 16,
         state_hidden_dim: int = 32,
         gate_hidden_dim: int = 16,
@@ -1289,11 +1346,13 @@ class DynamicDirectedMTLModel(nn.Module):
             for source in range(task_count)
             if target != source
         )
+        encoder_type = FullWindowDSTCNEncoder if lookback is not None else DSTCNEncoder
         self.encoders = nn.ModuleList(
             [
-                DSTCNEncoder(
+                encoder_type(
                     exog_dim=exog_dim,
                     hidden_dim=hidden_dim,
+                    **({"lookback": int(lookback)} if lookback is not None else {}),
                     kernel_size=kernel_size,
                     dilations=dilations,
                     dropout=dropout,
@@ -1322,7 +1381,14 @@ class DynamicDirectedMTLModel(nn.Module):
         assert isinstance(final_layer, nn.Linear)
         nn.init.constant_(final_layer.bias, initial_logit)
         self.heads = nn.ModuleList(
-            [TaskForecastHead(hidden_dim=hidden_dim, horizon=horizon) for _ in range(task_count)]
+            [
+                TaskForecastHead(
+                    hidden_dim=hidden_dim,
+                    horizon=horizon,
+                    head_hidden_dim=head_hidden_dim,
+                )
+                for _ in range(task_count)
+            ]
         )
         self.message_projections = nn.ModuleDict(
             {
@@ -1603,6 +1669,12 @@ def build_forecasting_model(model_name: str, **kwargs) -> nn.Module:
         "dynamic_directed": DynamicDirectedMTLModel,
         SCHEME2R_MODEL_NAME: Scheme2RModel,
     }
+    if model_name == MATCHED_STL_MODEL_NAME:
+        # Import lazily because stage7_reference intentionally depends on the
+        # encoder/head definitions in this module.
+        from .stage7_reference import MatchedIndependentSTLModel
+
+        return MatchedIndependentSTLModel(**kwargs)
     try:
         builder = builders[model_name]
     except KeyError as error:

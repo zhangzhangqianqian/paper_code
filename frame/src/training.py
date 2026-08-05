@@ -166,11 +166,24 @@ def make_dataloader(
     windows: Mapping[str, np.ndarray],
     batch_size: int,
     shuffle: bool,
+    seed: int | None = None,
 ) -> DataLoader:
     if batch_size <= 0:
         raise ValueError("batch_size必须为正整数")
+    if seed is not None and seed < 0:
+        raise ValueError("DataLoader seed must be non-negative")
     dataset = WindowDataset(windows)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0)
+    generator = None
+    if shuffle and seed is not None:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=0,
+        generator=generator,
+    )
 
 
 @dataclass(frozen=True)
@@ -178,6 +191,7 @@ class TrainerConfig:
     device: str = "cpu"
     torch_threads: int = 8
     seed: int = 2026
+    deterministic_algorithms: bool = True
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     grad_clip_norm: float = 1.0
@@ -186,15 +200,22 @@ class TrainerConfig:
 
 
 def set_reproducible(config: TrainerConfig) -> torch.device:
-    if config.device != "cpu":
-        raise ValueError("当前阶段固定使用 CPU 设备")
     if config.torch_threads <= 0:
         raise ValueError("torch_threads必须为正整数")
+    device = torch.device(config.device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA device requested but CUDA is unavailable")
     random.seed(config.seed)
     np.random.seed(config.seed)
     torch.manual_seed(config.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(config.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    if config.deterministic_algorithms:
+        torch.use_deterministic_algorithms(True)
     torch.set_num_threads(config.torch_threads)
-    return torch.device(config.device)
+    return device
 
 
 def _forward_model(

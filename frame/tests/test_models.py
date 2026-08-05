@@ -136,6 +136,24 @@ class ModelTest(unittest.TestCase):
         }
         self.assertTrue(encoder_parameter_ids.isdisjoint(head_parameter_ids))
 
+    def test_full_window_controls_use_fixed_prediction_head(self):
+        for model_name in ("hard_share", "static_gate", "dynamic_symmetric", "dynamic_directed"):
+            kwargs = {
+                "exog_dim": 12,
+                "task_count": 4,
+                "hidden_dim": 16,
+                "lookback": 24,
+                "kernel_size": 5,
+                "dilations": (1, 2, 4),
+                "head_hidden_dim": 16,
+                "horizon": 4,
+            }
+            if model_name == "dynamic_symmetric":
+                kwargs["state_dim"] = 16
+            model = build_forecasting_model(model_name, **kwargs)
+            for head in model.heads:
+                self.assertEqual(head.head_hidden_dim, 16)
+
     def test_static_directed_model_shape_and_gate_constraints(self):
         model = StaticDirectedMTLModel(exog_dim=self.exog_dim, horizon=self.horizon)
         output = model(self.loads, self.exog)

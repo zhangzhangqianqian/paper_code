@@ -66,6 +66,12 @@ def parse_args() -> argparse.Namespace:
         help="配对bootstrap重复次数；设为0则只计算原始迁移收益",
     )
     parser.add_argument(
+        "--bootstrap-block-size",
+        type=int,
+        default=24,
+        help="moving-block bootstrap 的连续时间块长度（小时）",
+    )
+    parser.add_argument(
         "--bootstrap-granularities",
         default="task",
         help="进行显著性bootstrap的粒度，逗号分隔：task,horizon,season_horizon",
@@ -94,6 +100,7 @@ def main() -> None:
         protocol=args.protocol,
         error_metric=args.error_metric,
         bootstrap_replicates=args.bootstrap_replicates,
+        bootstrap_block_size=args.bootstrap_block_size,
         bootstrap_granularities=granularities,
         seed=args.seed,
         task_names=task_names,

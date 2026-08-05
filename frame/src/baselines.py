@@ -97,23 +97,32 @@ def regression_metrics(
             "MAPE": _safe_mape(task_actual, task_forecast, epsilon),
         }
 
+    metric_names = ("MAE", "RMSE", "WAPE", "MAPE")
     horizon_metrics: Dict[str, Dict[str, float]] = {}
+    horizon_task_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
     for horizon_index in range(actual.shape[1]):
-        step_actual = actual[:, horizon_index, :]
-        step_forecast = forecast[:, horizon_index, :]
-        step_error = step_actual - step_forecast
-        horizon_metrics[f"step_{horizon_index + 1}"] = {
-            "MAE": float(np.mean(np.abs(step_error))),
-            "RMSE": float(np.sqrt(np.mean(step_error**2))),
-            "WAPE": float(
-                np.sum(np.abs(step_error))
-                / max(np.sum(np.abs(step_actual)), epsilon)
-                * 100.0
-            ),
-            "MAPE": _safe_mape(step_actual, step_forecast, epsilon),
+        step_name = f"step_{horizon_index + 1}"
+        task_values: Dict[str, Dict[str, float]] = {}
+        for task_index, task_name in enumerate(task_names):
+            step_actual = actual[:, horizon_index, task_index]
+            step_forecast = forecast[:, horizon_index, task_index]
+            step_error = step_actual - step_forecast
+            task_values[task_name] = {
+                "MAE": float(np.mean(np.abs(step_error))),
+                "RMSE": float(np.sqrt(np.mean(step_error**2))),
+                "WAPE": float(
+                    np.sum(np.abs(step_error))
+                    / max(np.sum(np.abs(step_actual)), epsilon)
+                    * 100.0
+                ),
+                "MAPE": _safe_mape(step_actual, step_forecast, epsilon),
+            }
+        horizon_task_metrics[step_name] = task_values
+        horizon_metrics[step_name] = {
+            metric: float(np.mean([values[metric] for values in task_values.values()]))
+            for metric in metric_names
         }
 
-    metric_names = ("MAE", "RMSE", "WAPE", "MAPE")
     overall = {
         metric: float(np.mean([values[metric] for values in task_metrics.values()]))
         for metric in metric_names
@@ -121,6 +130,9 @@ def regression_metrics(
     return {
         "overall_equal_task_mean": overall,
         "per_task": task_metrics,
+        "per_horizon_equal_task_mean": horizon_metrics,
+        # Kept as an alias for older reports; its semantics are now explicitly
+        # equal-task averaging rather than mixing physical units.
         "per_horizon_equal_element_mean": horizon_metrics,
         "sample_count": int(actual.shape[0]),
         "horizon": int(actual.shape[1]),

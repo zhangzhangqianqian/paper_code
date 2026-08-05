@@ -121,7 +121,7 @@ def main() -> None:
         raise ValueError("覆盖阶段6.1训练协议只能与 --smoke 一起使用")
 
     contract = load_stage6_selection_contract()
-    training = contract.raw["training_policy"]
+    training = contract.training_policy("small_sample")
     selection = select_stage6_3_candidates(
         _resolve_path(args.stage6_2_dir), contract=contract
     )

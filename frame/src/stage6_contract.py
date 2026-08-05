@@ -19,7 +19,7 @@ from .kitakyushu_pipeline import (
     KITAKYUSHU_SPLIT,
     KITAKYUSHU_TASKS,
 )
-from .models import ALL_MODEL_NAMES
+from .models import STAGE6_MODEL_NAMES
 
 
 DEFAULT_STAGE6_CONTRACT_PATH = (
@@ -77,6 +77,25 @@ class Stage6SelectionContract:
     def hyperparameter_candidates(self) -> Tuple[Mapping[str, Any], ...]:
         return tuple(self.raw["finite_hyperparameter_candidates"])
 
+    def training_policy(self, protocol: str) -> Mapping[str, Any]:
+        """Return the fully resolved policy for ``full`` or ``small_sample``.
+
+        Shared optimizer/device fields are merged with protocol-specific
+        batch and early-stopping fields.  Callers must not read the raw JSON
+        mapping directly, otherwise the two protocols can silently diverge.
+        """
+
+        if protocol not in {"full", "small_sample"}:
+            raise ValueError(f"unsupported Stage 6 protocol: {protocol!r}")
+        training = self.raw["training_policy"]
+        if not isinstance(training, Mapping):
+            raise ValueError("training_policy must be an object")
+        shared = training.get("shared")
+        protocol_policy = training.get(protocol)
+        if not isinstance(shared, Mapping) or not isinstance(protocol_policy, Mapping):
+            raise ValueError("training_policy must contain shared/full/small_sample objects")
+        return {**dict(shared), **dict(protocol_policy)}
+
 
 def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
     required = {
@@ -98,8 +117,8 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
     missing = sorted(required - set(data))
     if missing:
         raise ValueError(f"阶段6.1契约缺少字段：{missing}")
-    if data["contract_version"] != "stage6.1":
-        raise ValueError("contract_version必须为stage6.1")
+    if data["contract_version"] != "stage6.1-r1":
+        raise ValueError("contract_version必须为stage6.1-r1")
     expected_tasks, full_split, small_sample_split, exog_count = _dataset_protocol(
         str(data["dataset"])
     )
@@ -134,8 +153,8 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
         raise ValueError("阶段6.1禁止读取测试预测")
 
     candidates = data["candidate_models"]
-    if list(candidates) != list(ALL_MODEL_NAMES):
-        raise ValueError(f"候选模型必须按项目顺序声明为{ALL_MODEL_NAMES}")
+    if list(candidates) != list(STAGE6_MODEL_NAMES):
+        raise ValueError(f"候选模型必须按项目顺序声明为{STAGE6_MODEL_NAMES}")
 
     io = data["input_output"]
     if not isinstance(io, Mapping):
@@ -160,22 +179,35 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
     training = data["training_policy"]
     if not isinstance(training, Mapping):
         raise ValueError("training_policy必须是对象")
-    expected_training = {
+    shared = training.get("shared")
+    expected_shared = {
         "random_seed": 2026,
         "device": "cpu",
         "loss": "SmoothL1Loss",
         "optimizer": "AdamW",
-        "batch_size": 256,
         "weight_decay": 0.0001,
-        "max_epochs": 100,
-        "early_stopping_patience": 12,
         "early_stopping_monitor": "validation_loss",
         "checkpoint_policy": "restore_best_validation_loss",
         "gradient_clip_norm": 1.0,
     }
-    for key, expected in expected_training.items():
-        if training.get(key) != expected:
-            raise ValueError(f"training_policy.{key}必须固定为{expected!r}")
+    if not isinstance(shared, Mapping):
+        raise ValueError("training_policy.shared必须是对象")
+    for key, expected in expected_shared.items():
+        if shared.get(key) != expected:
+            raise ValueError(f"training_policy.shared.{key}必须固定为{expected!r}")
+    expected_protocols = {
+        "full": {"batch_size": 256, "max_epochs": 100, "early_stopping_patience": 12},
+        "small_sample": {"batch_size": 32, "max_epochs": 200, "early_stopping_patience": 20},
+    }
+    for protocol_name, expected in expected_protocols.items():
+        protocol_policy = training.get(protocol_name)
+        if not isinstance(protocol_policy, Mapping):
+            raise ValueError(f"training_policy.{protocol_name}必须是对象")
+        for key, value in expected.items():
+            if protocol_policy.get(key) != value:
+                raise ValueError(
+                    f"training_policy.{protocol_name}.{key}必须固定为{value!r}"
+                )
 
     hyperparameters = data["finite_hyperparameter_candidates"]
     if not isinstance(hyperparameters, list) or len(hyperparameters) != 4:
@@ -183,7 +215,21 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
     ids = [candidate.get("candidate_id") for candidate in hyperparameters]
     if ids != ["H1", "H2", "H3", "H4"]:
         raise ValueError("超参数候选编号必须为H1、H2、H3、H4")
+    expected_candidate_structure = {
+        "H1": {"hidden_dim": 16, "kernel_size": 5, "dilations": [1, 2, 4], "scheme2r_rank": 4},
+        "H2": {"hidden_dim": 32, "kernel_size": 5, "dilations": [1, 2, 4], "scheme2r_rank": 8},
+        "H3": {"hidden_dim": 32, "kernel_size": 3, "dilations": [1, 2, 4, 8], "scheme2r_rank": 8},
+        "H4": {"hidden_dim": 32, "kernel_size": 5, "dilations": [1, 2, 4], "scheme2r_rank": 8},
+    }
+    signatures = set()
     for candidate in hyperparameters:
+        candidate_id = str(candidate.get("candidate_id"))
+        expected_structure = expected_candidate_structure[candidate_id]
+        for key, expected in expected_structure.items():
+            if candidate.get(key) != expected:
+                raise ValueError(
+                    f"{candidate_id}.{key}必须固定为{expected!r}，实际为{candidate.get(key)!r}"
+                )
         if candidate.get("hidden_dim", 0) <= 1:
             raise ValueError("hidden_dim必须大于1")
         if candidate.get("kernel_size", 0) <= 0 or candidate["kernel_size"] % 2 == 0:
@@ -192,16 +238,32 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
             raise ValueError("dropout必须位于[0,1)")
         if candidate.get("learning_rate", 0.0) <= 0:
             raise ValueError("learning_rate必须为正数")
-        if candidate.get("scheme2r_kernel_size") != 5:
-            raise ValueError("Scheme2R的kernel_size必须固定为5")
-        if candidate.get("scheme2r_dilations") != [1, 2, 4]:
-            raise ValueError("Scheme2R的dilations必须固定为[1,2,4]")
-        if candidate.get("scheme2r_rank") != 8:
-            raise ValueError("Scheme2R的低秩维度必须固定为8")
+        if candidate.get("scheme2r_kernel_size") != candidate.get("kernel_size"):
+            raise ValueError("Scheme2R与通用候选的kernel_size必须一致")
+        if candidate.get("scheme2r_dilations") != candidate.get("dilations"):
+            raise ValueError("Scheme2R与通用候选的dilations必须一致")
+        if candidate.get("scheme2r_rank") <= 0:
+            raise ValueError("Scheme2R的低秩维度必须为正整数")
         if candidate.get("scheme2r_gate_hidden_dim") != 16:
             raise ValueError("Scheme2R的门控隐藏维度必须固定为16")
         if candidate.get("scheme2r_step_embedding_dim") != 4:
             raise ValueError("Scheme2R的预测步嵌入维度必须固定为4")
+        if candidate.get("prediction_head_hidden_dim") != 16:
+            raise ValueError("所有正式候选的预测头隐藏维度必须固定为16")
+        signature = json.dumps(
+            {
+                "hidden_dim": candidate["hidden_dim"],
+                "kernel_size": candidate["kernel_size"],
+                "dilations": candidate["dilations"],
+                "scheme2r_rank": candidate["scheme2r_rank"],
+                "dropout": candidate["dropout"],
+                "learning_rate": candidate["learning_rate"],
+            },
+            sort_keys=True,
+        )
+        if signature in signatures:
+            raise ValueError(f"H候选存在重复的有效配置：{candidate_id}")
+        signatures.add(signature)
 
     selection = data["selection_rule"]
     if not isinstance(selection, Mapping):
@@ -220,7 +282,7 @@ def validate_stage6_selection_contract(data: Mapping[str, Any]) -> None:
     reference = data["negative_transfer_reference"]
     if not isinstance(reference, Mapping):
         raise ValueError("negative_transfer_reference必须是对象")
-    if reference.get("reference_model") != "stl" or reference.get("validation_only") is not True:
+    if reference.get("reference_model") != "stl_matched" or reference.get("validation_only") is not True:
         raise ValueError("负迁移参照必须是验证集上的STL")
 
     failure = data["failure_policy"]

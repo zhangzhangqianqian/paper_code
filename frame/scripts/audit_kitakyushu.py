@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -64,6 +66,14 @@ def _resolve_path(value: str) -> Path:
     return path if path.is_absolute() else REPOSITORY_ROOT / path
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main() -> None:
     args = parse_args()
     if args.max_interpolation_hours < 0:
@@ -99,6 +109,7 @@ def main() -> None:
         output_dir / "cleaned_quality_report.json",
     )
     cleaned.to_csv(output_dir / "cleaned_canonical.csv", index=False)
+    cleaned_hash = _sha256(output_dir / "cleaned_canonical.csv")
 
     splits = split_dataframe(cleaned, KITAKYUSHU_SPLIT)
     split_summary = {
@@ -121,6 +132,14 @@ def main() -> None:
                 "test": [KITAKYUSHU_SPLIT.test_start, KITAKYUSHU_SPLIT.test_end],
             },
             "splits": split_summary,
+            "cleaned_csv": {
+                "path": str(output_dir / "cleaned_canonical.csv"),
+                "sha256": cleaned_hash,
+            },
+            "environment": {
+                "python": sys.version,
+                "platform": platform.platform(),
+            },
         },
         output_dir / "split_summary.json",
     )
@@ -141,4 +160,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

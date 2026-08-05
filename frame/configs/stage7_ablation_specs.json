@@ -1,0 +1,62 @@
+{
+  "contract_version": "stage7.1",
+  "dataset": "kitakyushu_energy_station",
+  "task_order": [
+    "electricity",
+    "cooling",
+    "heating",
+    "gas"
+  ],
+  "input_shape": "[batch, 24, 4]",
+  "exogenous_shape": "[batch, 24, 12]",
+  "output_shape": "[batch, 4, 4]",
+  "ablations": [
+    {
+      "ablation_id": "A0",
+      "description": "Legacy Dynamic Directed Gate",
+      "encoder": "legacy_dstcn",
+      "routing": "per-edge_sigmoid_shared_across_horizon",
+      "message_projection": "full_rank",
+      "fusion": "plain_residual",
+      "head": "task_head_four_step"
+    },
+    {
+      "ablation_id": "A1",
+      "description": "A0 + full-window DS-TCN",
+      "encoder": "full_window_dstcn",
+      "routing": "per-edge_sigmoid_shared_across_horizon",
+      "message_projection": "full_rank",
+      "fusion": "plain_residual",
+      "head": "task_head_four_step"
+    },
+    {
+      "ablation_id": "A2",
+      "description": "A1 + prediction-step-dependent directed gates",
+      "encoder": "full_window_dstcn",
+      "routing": "per-edge_sigmoid_per_horizon_step",
+      "message_projection": "full_rank",
+      "fusion": "plain_residual",
+      "head": "shared_task_scalar_head_per_step"
+    },
+    {
+      "ablation_id": "A3",
+      "description": "A2 + rho-times-pi two-level directed routing",
+      "encoder": "full_window_dstcn",
+      "routing": "rho_times_pi_per_horizon_step",
+      "message_projection": "full_rank",
+      "fusion": "plain_residual_fixed_alpha_1",
+      "head": "shared_task_scalar_head_per_step"
+    },
+    {
+      "ablation_id": "A4",
+      "description": "A3 + low-rank messages, stable residual fusion and task-step heads (Scheme2R)",
+      "encoder": "full_window_dstcn",
+      "routing": "rho_times_pi_per_horizon_step",
+      "message_projection": "low_rank",
+      "fusion": "layer_norm_learned_residual_scale",
+      "head": "task_step_scalar_heads"
+    }
+  ],
+  "training_or_data_access": "none_in_stage7.1",
+  "test_set_accessed": false
+}

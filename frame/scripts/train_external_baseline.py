@@ -50,6 +50,7 @@ from src.training import (  # noqa: E402
     evaluate_model,
     fit_model,
     make_dataloader,
+    set_reproducible,
 )
 
 
@@ -195,7 +196,18 @@ def main() -> None:
     stats.save(output_dir / "normalization_stats.npz")
     save_json(dict(contract.raw), output_dir / "fairness_contract.json")
 
-    train_loader = make_dataloader(standardized["train"], args.batch_size, shuffle=True)
+    trainer_config = TrainerConfig(
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        max_epochs=args.max_epochs,
+        early_stopping_patience=args.patience,
+        torch_threads=args.threads,
+        seed=args.seed,
+    )
+    set_reproducible(trainer_config)
+    train_loader = make_dataloader(
+        standardized["train"], args.batch_size, shuffle=True, seed=args.seed
+    )
     validation_loader = make_dataloader(
         standardized["validation"], args.batch_size, shuffle=False
     )
@@ -232,14 +244,6 @@ def main() -> None:
             use_instance_norm=not args.softs_disable_instance_norm,
             stochastic_pooling=not args.softs_deterministic_pooling,
         )
-    trainer_config = TrainerConfig(
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        max_epochs=args.max_epochs,
-        early_stopping_patience=args.patience,
-        torch_threads=args.threads,
-        seed=args.seed,
-    )
     checkpoint_path = output_dir / "best_model.pt"
     fit_started = time.perf_counter()
     history = fit_model(
@@ -365,6 +369,12 @@ def main() -> None:
             "cleaning": cleaning_report,
             "normalization": stats.summary(),
             "trainer_config": asdict(trainer_config),
+            "reproducibility": {
+                "model_initialized_after_seed": True,
+                "model_initialization_seed": args.seed,
+                "training_dataloader_seed": args.seed,
+                "training_seed_reset_before_fit": True,
+            },
             "model_parameter_count": int(sum(p.numel() for p in model.parameters())),
             "runtime_seconds": {
                 "fit": float(fit_seconds),

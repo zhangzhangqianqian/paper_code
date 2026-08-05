@@ -1,0 +1,85 @@
+{
+  "revision_version": "stage7R.1",
+  "revision_status": "ready_for_dry_run",
+  "base_contract": "frame/configs/stage7_contract.json",
+  "freeze_config": "resolved_at_runtime_from_stage6r_freeze",
+  "dataset": "kitakyushu_energy_station",
+  "tasks": [
+    "electricity",
+    "cooling",
+    "heating",
+    "gas"
+  ],
+  "protocols": [
+    "full",
+    "small_sample"
+  ],
+  "formal_seeds": [
+    2026,
+    2027,
+    2028,
+    2029,
+    2030
+  ],
+  "seed_control": {
+    "python_before_model_initialization": true,
+    "numpy_before_model_initialization": true,
+    "torch_before_model_initialization": true,
+    "cuda_when_available": true,
+    "explicit_training_dataloader_generator": true,
+    "training_seed_reset_before_fit": true
+  },
+  "run_matrix": {
+    "stage7_3_main_internal": 20,
+    "stage7_4_ablations": 40,
+    "stage7_5_external": 34,
+    "stage7r_matched_stl": 10,
+    "formal_run_count": 114,
+    "materialized_run_count": 104,
+    "trained_run_count": 100,
+    "reused_a4_run_count": 10,
+    "deterministic_run_count": 4,
+    "independently_trained_stl_task_models": 40
+  },
+  "output_root": "frame/reports/stage7r_kitakyushu_reproducible",
+  "output_groups": {
+    "stage7_3": "stage7_3",
+    "stage7_4": "stage7_4",
+    "stage7_5": "stage7_5",
+    "stl_reference": "stl_reference",
+    "acceptance": "acceptance"
+  },
+  "legacy_results": {
+    "status": "legacy_non_strict_seed_control",
+    "preserve_read_only": true,
+    "exclude_from_final_paper_tables": true,
+    "directories": [
+      "frame/reports/stage7_3_kitakyushu_formal",
+      "frame/reports/stage7_4_kitakyushu_formal",
+      "frame/reports/stage7_5_kitakyushu_formal",
+      "frame/reports/stage7_6_kitakyushu_acceptance"
+    ]
+  },
+  "matched_stl": {
+    "model": "stl_matched",
+    "candidate_id": "resolved_from_primary_freeze",
+    "training": "four_tasks_trained_independently",
+    "shared_parameters_between_tasks": false,
+    "matched_components": [
+      "full_window_dstcn",
+      "task_step_forecast_head"
+    ],
+    "removed_components": [
+      "state_encoder",
+      "two_level_router",
+      "cross_task_message_projection",
+      "residual_task_fusion"
+    ]
+  },
+  "test_set_policy": {
+    "stage6_6_selection_remains_frozen": true,
+    "test_reading_allowed": true,
+    "test_used_for_selection": false,
+    "no_hyperparameter_reselection": true
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "contract_version": "stage6.1",
+  "contract_version": "stage6.1-r1",
   "purpose": "Freeze validation-only model selection rules before formal test evaluation.",
   "dataset": "kitakyushu_energy_station",
   "tasks": [
@@ -40,7 +40,7 @@
     "test_predictions_may_be_read": false
   },
   "candidate_models": [
-    "stl",
+    "stl_matched",
     "hard_share",
     "static_gate",
     "dynamic_symmetric",
@@ -68,66 +68,83 @@
     "standardization": "train_split_only_zscore"
   },
   "training_policy": {
-    "random_seed": 2026,
-    "device": "cpu",
-    "loss": "SmoothL1Loss",
-    "optimizer": "AdamW",
-    "batch_size": 256,
-    "weight_decay": 0.0001,
-    "max_epochs": 100,
-    "early_stopping_patience": 12,
-    "early_stopping_monitor": "validation_loss",
-    "checkpoint_policy": "restore_best_validation_loss",
-    "gradient_clip_norm": 1.0
+    "shared": {
+      "random_seed": 2026,
+      "device": "cpu",
+      "loss": "SmoothL1Loss",
+      "optimizer": "AdamW",
+      "weight_decay": 0.0001,
+      "early_stopping_monitor": "validation_loss",
+      "checkpoint_policy": "restore_best_validation_loss",
+      "gradient_clip_norm": 1.0
+    },
+    "full": {
+      "batch_size": 256,
+      "max_epochs": 100,
+      "early_stopping_patience": 12
+    },
+    "small_sample": {
+      "batch_size": 32,
+      "max_epochs": 200,
+      "early_stopping_patience": 20
+    }
   },
   "finite_hyperparameter_candidates": [
     {
       "candidate_id": "H1",
       "hidden_dim": 16,
-      "kernel_size": 3,
+      "kernel_size": 5,
+      "dilations": [1, 2, 4],
       "dropout": 0.0,
       "learning_rate": 0.001,
       "scheme2r_kernel_size": 5,
       "scheme2r_dilations": [1, 2, 4],
-      "scheme2r_rank": 8,
+      "scheme2r_rank": 4,
       "scheme2r_gate_hidden_dim": 16,
-      "scheme2r_step_embedding_dim": 4
+      "scheme2r_step_embedding_dim": 4,
+      "prediction_head_hidden_dim": 16
     },
     {
       "candidate_id": "H2",
       "hidden_dim": 32,
-      "kernel_size": 3,
+      "kernel_size": 5,
+      "dilations": [1, 2, 4],
       "dropout": 0.1,
       "learning_rate": 0.001,
       "scheme2r_kernel_size": 5,
       "scheme2r_dilations": [1, 2, 4],
       "scheme2r_rank": 8,
       "scheme2r_gate_hidden_dim": 16,
-      "scheme2r_step_embedding_dim": 4
+      "scheme2r_step_embedding_dim": 4,
+      "prediction_head_hidden_dim": 16
     },
     {
       "candidate_id": "H3",
       "hidden_dim": 32,
-      "kernel_size": 5,
+      "kernel_size": 3,
+      "dilations": [1, 2, 4, 8],
       "dropout": 0.1,
       "learning_rate": 0.001,
-      "scheme2r_kernel_size": 5,
-      "scheme2r_dilations": [1, 2, 4],
+      "scheme2r_kernel_size": 3,
+      "scheme2r_dilations": [1, 2, 4, 8],
       "scheme2r_rank": 8,
       "scheme2r_gate_hidden_dim": 16,
-      "scheme2r_step_embedding_dim": 4
+      "scheme2r_step_embedding_dim": 4,
+      "prediction_head_hidden_dim": 16
     },
     {
       "candidate_id": "H4",
       "hidden_dim": 32,
-      "kernel_size": 3,
+      "kernel_size": 5,
+      "dilations": [1, 2, 4],
       "dropout": 0.1,
       "learning_rate": 0.0005,
       "scheme2r_kernel_size": 5,
       "scheme2r_dilations": [1, 2, 4],
       "scheme2r_rank": 8,
       "scheme2r_gate_hidden_dim": 16,
-      "scheme2r_step_embedding_dim": 4
+      "scheme2r_step_embedding_dim": 4,
+      "prediction_head_hidden_dim": 16
     }
   ],
   "selection_rule": {
@@ -145,7 +162,7 @@
     "test_result_cannot_override_selection": true
   },
   "negative_transfer_reference": {
-    "reference_model": "stl",
+    "reference_model": "stl_matched",
     "formula": "G_i=(E_i_STL-E_i_MTL)/E_i_STL*100",
     "error_metrics": [
       "MAE",

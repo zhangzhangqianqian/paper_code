@@ -106,7 +106,7 @@ def main() -> None:
         raise ValueError("覆盖阶段6.1训练协议只能与 --smoke 一起使用")
 
     contract = load_stage6_selection_contract()
-    training = contract.raw["training_policy"]
+    training = contract.training_policy("full")
     if args.dataset == "kitakyushu_energy_station":
         if args.energy_file != "dataset/HEEW/cleaned_data/Total_energy.csv" or args.weather_file != "dataset/HEEW/cleaned_data/Total_weather.csv":
             raise ValueError("Kitakyushu 协议不接受 HEEW 的 --energy-file/--weather-file 参数")

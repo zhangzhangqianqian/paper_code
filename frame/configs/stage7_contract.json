@@ -1,0 +1,166 @@
+{
+  "contract_version": "stage7.0",
+  "contract_status": "legacy_pending_stage6r",
+  "legacy_reason": "由旧版 Stage 6.6/H3 冻结生成；必须在新的 Stage 6-R 冻结后重新运行 stage7_0.py，不得用于正式训练。",
+  "created_at_utc": "2026-08-04T08:22:25.570239+00:00",
+  "freeze_source": "D:\\Paper\\github_work\\paper-code\\frame\\reports\\stage6_6_kitakyushu\\stage6_selected_config.json",
+  "dataset": "kitakyushu_energy_station",
+  "tasks": [
+    "electricity",
+    "cooling",
+    "heating",
+    "gas"
+  ],
+  "data_protocol": {
+    "sampling": "1h",
+    "lookback": 24,
+    "horizon": 4,
+    "full": {
+      "train_start": "2015-01-01 00:00:00",
+      "train_end": "2019-12-31 23:00:00",
+      "validation_start": "2020-01-01 00:00:00",
+      "validation_end": "2020-12-31 23:00:00",
+      "test_start": "2021-01-01 00:00:00",
+      "test_end": "2021-12-31 23:00:00"
+    },
+    "small_sample": {
+      "train_start": "2018-07-01 00:00:00",
+      "train_end": "2018-08-17 23:00:00",
+      "validation_start": "2018-08-18 00:00:00",
+      "validation_end": "2018-08-24 23:00:00",
+      "test_start": "2018-08-25 00:00:00",
+      "test_end": "2018-08-31 23:00:00"
+    },
+    "standardization": "train_split_only_zscore",
+    "future_exogenous_allowed": false
+  },
+  "models": {
+    "primary": {
+      "model": "scheme2r",
+      "candidate_id": "H3",
+      "hyperparameters": {
+        "candidate_id": "H3",
+        "hidden_dim": 32,
+        "kernel_size": 5,
+        "dropout": 0.1,
+        "learning_rate": 0.001,
+        "scheme2r_kernel_size": 5,
+        "scheme2r_dilations": [
+          1,
+          2,
+          4
+        ],
+        "scheme2r_rank": 8,
+        "scheme2r_gate_hidden_dim": 16,
+        "scheme2r_step_embedding_dim": 4
+      },
+      "full_validation_metrics": {
+        "model": "scheme2r",
+        "candidate_id": "H3",
+        "MAE": "49.915117954694665",
+        "RMSE": "108.8473666158124",
+        "WAPE": "19.815187532473004",
+        "MAPE": "417004912.2019284",
+        "parameter_count": "39834",
+        "fit_seconds": "1648.4156300999985",
+        "validation_evaluation_seconds": "0.7040839000001142",
+        "validation_samples_per_second": "12471.525055463668",
+        "train_samples": "43767",
+        "validation_samples": "8781",
+        "best_validation_loss": "0.03183198592010086",
+        "best_checkpoint_epoch": "37",
+        "validation_rank_by_WAPE": "1"
+      }
+    },
+    "comparison": {
+      "model": "dynamic_symmetric",
+      "candidate_id": "H3",
+      "hyperparameters": {
+        "candidate_id": "H3",
+        "hidden_dim": 32,
+        "kernel_size": 5,
+        "dropout": 0.1,
+        "learning_rate": 0.001,
+        "scheme2r_kernel_size": 5,
+        "scheme2r_dilations": [
+          1,
+          2,
+          4
+        ],
+        "scheme2r_rank": 8,
+        "scheme2r_gate_hidden_dim": 16,
+        "scheme2r_step_embedding_dim": 4
+      },
+      "full_validation_metrics": {
+        "model": "dynamic_symmetric",
+        "candidate_id": "H3",
+        "MAE": "50.680617200012776",
+        "RMSE": "109.15466660315411",
+        "WAPE": "20.021177842920057",
+        "MAPE": "420731849.4589405",
+        "parameter_count": "34954",
+        "fit_seconds": "620.1844901000004",
+        "validation_evaluation_seconds": "0.35149169999931473",
+        "validation_samples_per_second": "24982.097728103166",
+        "train_samples": "43767",
+        "validation_samples": "8781",
+        "best_validation_loss": "0.032699605394246",
+        "best_checkpoint_epoch": "23",
+        "validation_rank_by_WAPE": "4"
+      }
+    }
+  },
+  "training_policy": {
+    "device": "cpu",
+    "loss": "SmoothL1Loss",
+    "optimizer": "AdamW",
+    "batch_size": 256,
+    "weight_decay": 0.0001,
+    "max_epochs": 100,
+    "early_stopping_patience": 12,
+    "gradient_clip_norm": 1.0,
+    "formal_random_seeds": [
+      2026,
+      2027,
+      2028,
+      2029,
+      2030
+    ]
+  },
+  "stage7_scope": {
+    "protocols": [
+      "full",
+      "small_sample"
+    ],
+    "ablations": [
+      "A0",
+      "A1",
+      "A2",
+      "A3",
+      "A4"
+    ],
+    "external_baselines": [
+      "persistence",
+      "seasonal_naive",
+      "dlinear",
+      "mmoe_lite",
+      "softs"
+    ],
+    "test_usage": "allowed_only_after_stage6_6_freeze"
+  },
+  "test_set_policy": {
+    "selection_locked": true,
+    "test_reading_allowed_in_stage7": true,
+    "test_reading_before_stage7": false,
+    "test_year": 2021
+  },
+  "execution_order": [
+    "stage7.0_contract_validation",
+    "stage7.1_ablation_interface",
+    "stage7.2_smoke",
+    "stage7.3_main_and_comparison_formal",
+    "stage7.4_ablation_formal",
+    "stage7.5_external_baselines_formal",
+    "stage7.6_report_and_acceptance"
+  ]
+}

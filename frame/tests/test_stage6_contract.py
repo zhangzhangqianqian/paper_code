@@ -12,12 +12,13 @@ class Stage6SelectionContractTest(unittest.TestCase):
         self.contract = load_stage6_selection_contract()
 
     def test_contract_freezes_validation_roles_and_candidates(self):
+        self.assertEqual(self.contract.raw["contract_version"], "stage6.1-r1")
         self.assertEqual(self.contract.primary_protocol, "full")
         self.assertEqual(self.contract.secondary_protocol, "small_sample")
         self.assertEqual(
             self.contract.candidate_models,
             (
-                "stl",
+                "stl_matched",
                 "hard_share",
                 "static_gate",
                 "dynamic_symmetric",
@@ -29,6 +30,37 @@ class Stage6SelectionContractTest(unittest.TestCase):
         self.assertFalse(
             self.contract.raw["validation_policy"]["test_metrics_may_be_read"]
         )
+
+    def test_protocol_training_policies_are_distinct_and_resolved(self):
+        full = self.contract.training_policy("full")
+        small = self.contract.training_policy("small_sample")
+        self.assertEqual(
+            (full["batch_size"], full["max_epochs"], full["early_stopping_patience"]),
+            (256, 100, 12),
+        )
+        self.assertEqual(
+            (small["batch_size"], small["max_epochs"], small["early_stopping_patience"]),
+            (32, 200, 20),
+        )
+        self.assertNotEqual(full, small)
+
+    def test_hyperparameter_effective_configurations_are_unique(self):
+        candidates = self.contract.hyperparameter_candidates
+        signatures = {
+            (
+                item["hidden_dim"],
+                item["kernel_size"],
+                tuple(item["dilations"]),
+                item["scheme2r_rank"],
+                item["dropout"],
+                item["learning_rate"],
+            )
+            for item in candidates
+        }
+        self.assertEqual(len(signatures), len(candidates))
+        h3 = next(item for item in candidates if item["candidate_id"] == "H3")
+        self.assertEqual(h3["kernel_size"], 3)
+        self.assertEqual(h3["dilations"], [1, 2, 4, 8])
 
     def test_contract_rejects_test_access(self):
         invalid = copy.deepcopy(dict(self.contract.raw))

@@ -69,6 +69,7 @@ from src.training import (  # noqa: E402
     evaluate_model,
     fit_model,
     make_dataloader,
+    set_reproducible,
 )
 
 
@@ -275,12 +276,6 @@ def main() -> None:
     standardized = {name: stats.transform_windows(value) for name, value in windows.items()}
     stats.save(output_dir / "normalization_stats.npz")
 
-    train_loader = make_dataloader(standardized["train"], args.batch_size, shuffle=True)
-    validation_loader = make_dataloader(
-        standardized["validation"], args.batch_size, shuffle=False
-    )
-    test_loader = make_dataloader(standardized["test"], args.batch_size, shuffle=False)
-    model = _make_model(args, len(exog_columns), len(task_columns))
     trainer_config = TrainerConfig(
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
@@ -289,6 +284,17 @@ def main() -> None:
         torch_threads=args.threads,
         seed=args.seed,
     )
+    set_reproducible(trainer_config)
+    train_loader = make_dataloader(
+        standardized["train"], args.batch_size, shuffle=True, seed=args.seed
+    )
+    validation_loader = make_dataloader(
+        standardized["validation"], args.batch_size, shuffle=False, seed=args.seed + 1
+    )
+    test_loader = make_dataloader(
+        standardized["test"], args.batch_size, shuffle=False, seed=args.seed + 2
+    )
+    model = _make_model(args, len(exog_columns), len(task_columns))
     checkpoint_path = output_dir / "best_model.pt"
     fit_started = time.perf_counter()
     history = fit_model(

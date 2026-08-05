@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence, Tuple
@@ -27,6 +28,14 @@ from .data_pipeline import (
     build_protocol_windows,
     build_windows,
 )
+
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 KITAKYUSHU_TASKS: Tuple[str, ...] = (
@@ -355,6 +364,18 @@ def read_kitakyushu_canonical(
         "tasks": list(KITAKYUSHU_TASKS),
         "gas_definition": "sum of six energy-station gas-consumption columns in m3",
         "resolved_columns": mappings,
+        "source_files": {
+            label: {
+                "path": str(path),
+                "size_bytes": int(path.stat().st_size),
+                "sha256": _sha256_file(path),
+            }
+            for label, path in (
+                ("load_zip", paths.load_zip),
+                ("gas_zip", paths.gas_zip),
+                ("weather_zip", paths.weather_zip),
+            )
+        },
     }
     return canonical, metadata
 

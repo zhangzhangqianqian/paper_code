@@ -16,6 +16,7 @@ from src.training import (
     evaluate_model,
     fit_model,
     make_dataloader,
+    set_reproducible,
 )
 
 
@@ -30,6 +31,47 @@ def synthetic_frame(rows: int = 96) -> pd.DataFrame:
 
 
 class TrainingTest(unittest.TestCase):
+    def test_seed_controls_model_initialization(self):
+        config = TrainerConfig(torch_threads=1, seed=2026)
+        set_reproducible(config)
+        first = HardShareMTLModel(
+            exog_dim=len(HEEW_EXOG_COLUMNS), hidden_dim=8, dropout=0.0
+        )
+        first_state = {
+            name: value.detach().clone() for name, value in first.state_dict().items()
+        }
+
+        set_reproducible(config)
+        second = HardShareMTLModel(
+            exog_dim=len(HEEW_EXOG_COLUMNS), hidden_dim=8, dropout=0.0
+        )
+        for name, value in second.state_dict().items():
+            self.assertTrue(torch.equal(first_state[name], value), name)
+
+        set_reproducible(TrainerConfig(torch_threads=1, seed=2027))
+        third = HardShareMTLModel(
+            exog_dim=len(HEEW_EXOG_COLUMNS), hidden_dim=8, dropout=0.0
+        )
+        self.assertTrue(
+            any(
+                not torch.equal(first_state[name], value)
+                for name, value in third.state_dict().items()
+                if value.is_floating_point()
+            )
+        )
+
+    def test_seeded_dataloader_order_is_reproducible(self):
+        frame = synthetic_frame(128)
+        stats = StandardizationStats.fit(frame.iloc[:80], HEEW_EXOG_COLUMNS)
+        windows = stats.transform_windows(
+            build_windows(frame.iloc[:80], 24, 4, HEEW_EXOG_COLUMNS)
+        )
+        first = next(iter(make_dataloader(windows, 8, shuffle=True, seed=2026)))[0]
+        second = next(iter(make_dataloader(windows, 8, shuffle=True, seed=2026)))[0]
+        third = next(iter(make_dataloader(windows, 8, shuffle=True, seed=2027)))[0]
+        self.assertTrue(torch.equal(first, second))
+        self.assertFalse(torch.equal(first, third))
+
     def test_train_only_standardization_and_inverse(self):
         frame = synthetic_frame()
         stats = StandardizationStats.fit(frame.iloc[:48], HEEW_EXOG_COLUMNS)

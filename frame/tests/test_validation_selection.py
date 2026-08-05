@@ -160,8 +160,8 @@ class ValidationSelectionTest(unittest.TestCase):
             root = Path(directory)
             fieldnames = ["model", "candidate_id", "WAPE"]
             rows = [
-                {"model": "stl", "candidate_id": "H1", "WAPE": "30.0"},
-                {"model": "stl", "candidate_id": "H2", "WAPE": "20.0"},
+                {"model": "stl_matched", "candidate_id": "H1", "WAPE": "30.0"},
+                {"model": "stl_matched", "candidate_id": "H2", "WAPE": "20.0"},
                 {"model": "dynamic_symmetric", "candidate_id": "H3", "WAPE": "11.0"},
                 {"model": "dynamic_directed", "candidate_id": "H1", "WAPE": "15.0"},
                 {"model": "scheme2r", "candidate_id": "H4", "WAPE": "10.0"},

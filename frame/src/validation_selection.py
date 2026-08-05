@@ -27,10 +27,12 @@ from .data_pipeline import (
     select_training_frame,
 )
 from .models import (
+    MATCHED_STL_MODEL_NAME,
     SCHEME2R_MODEL_NAME,
     count_trainable_parameters,
     build_forecasting_model,
 )
+from .stage7_reference import MatchedSingleTaskScheme2RModel
 from .kitakyushu_pipeline import (
     KITAKYUSHU_SPLIT,
     clean_kitakyushu_dataframe,
@@ -42,6 +44,7 @@ from .training import (
     evaluate_model,
     fit_model,
     make_dataloader,
+    set_reproducible,
 )
 
 
@@ -184,7 +187,9 @@ def _metric_rows(
 ) -> Tuple[Dict[str, object], list[Dict[str, object]], list[Dict[str, object]]]:
     overall = metrics.get("overall_equal_task_mean")
     per_task = metrics.get("per_task")
-    per_horizon = metrics.get("per_horizon_equal_element_mean")
+    per_horizon = metrics.get("per_horizon_equal_task_mean")
+    if not isinstance(per_horizon, Mapping):
+        per_horizon = metrics.get("per_horizon_equal_element_mean")
     if not isinstance(overall, Mapping):
         raise ValueError(f"{model_name}/{candidate_id}缺少总体指标")
     if not isinstance(per_task, Mapping) or not isinstance(per_horizon, Mapping):
@@ -194,6 +199,11 @@ def _metric_rows(
         "model": model_name,
         "candidate_id": candidate_id,
         **{metric: overall.get(metric) for metric in METRICS},
+        "validation_max_per_task_WAPE": max(
+            float(values.get("WAPE"))
+            for values in per_task.values()
+            if isinstance(values, Mapping)
+        ),
     }
     task_rows: list[Dict[str, object]] = []
     for task in task_names:
@@ -249,6 +259,24 @@ def write_validation_summaries(
         runtime = payload.get("runtime_seconds", {})
         if not isinstance(runtime, Mapping):
             runtime = {}
+        best_checkpoint = payload.get("best_checkpoint", {})
+        if not isinstance(best_checkpoint, Mapping):
+            best_checkpoint = {}
+        if not best_checkpoint and isinstance(payload.get("best_checkpoints"), Mapping):
+            task_checkpoints = payload["best_checkpoints"]
+            best_checkpoint = {
+                "best_validation_loss": float(
+                    np.mean(
+                        [
+                            float(value["best_validation_loss"])
+                            for value in task_checkpoints.values()
+                        ]
+                    )
+                ),
+                "epoch": float(
+                    np.mean([float(value["epoch"]) for value in task_checkpoints.values()])
+                ),
+            }
         overall.update(
             {
                 "parameter_count": payload.get("model_parameter_count"),
@@ -261,23 +289,62 @@ def write_validation_summaries(
                 "validation_samples": payload.get("sample_counts", {}).get(
                     "validation"
                 ),
-                "best_validation_loss": payload.get(
-                    "best_checkpoint", {}
-                ).get("best_validation_loss"),
-                "best_checkpoint_epoch": payload.get("best_checkpoint", {}).get(
-                    "epoch"
-                ),
+                "best_validation_loss": best_checkpoint.get("best_validation_loss"),
+                "best_checkpoint_epoch": best_checkpoint.get("epoch"),
             }
         )
         overall_rows.append(overall)
         task_rows.extend(tasks)
         horizon_rows.extend(horizons)
 
+    # The STL rows are the only scientifically valid task-level reference for
+    # a transfer-rate tie-breaker.  Compute it after all candidates are read so
+    # that each model/candidate is compared against the matching STL candidate.
+    stl_task_wape = {
+        (str(row["candidate_id"]), str(row["task"])): float(row["WAPE"])
+        for row in task_rows
+        if str(row["model"]) == "stl_matched"
+    }
+    for row in overall_rows:
+        model = str(row["model"])
+        candidate = str(row["candidate_id"])
+        task_values = [
+            float(task_row["WAPE"])
+            for task_row in task_rows
+            if str(task_row["model"]) == model
+            and str(task_row["candidate_id"]) == candidate
+        ]
+        reference_values = [
+            stl_task_wape[(candidate, task)]
+            for task in task_names
+            if (candidate, task) in stl_task_wape
+        ]
+        row["validation_negative_transfer_rate"] = (
+            0.0
+            if model == "stl_matched"
+            else (
+                float(sum(value > reference for value, reference in zip(task_values, reference_values)))
+                / float(len(reference_values))
+                if len(reference_values) == len(task_values) and reference_values
+                else None
+            )
+        )
+
+    def _numeric_or_inf(value: object) -> float:
+        try:
+            return float(value) if value is not None else float("inf")
+        except (TypeError, ValueError):
+            return float("inf")
+
     overall_rows.sort(
         key=lambda row: (
             float(row["WAPE"]),
-            float(row["RMSE"]),
-            int(row["parameter_count"]),
+            _numeric_or_inf(row.get("validation_max_per_task_WAPE")),
+            _numeric_or_inf(row.get("validation_negative_transfer_rate")),
+            _numeric_or_inf(row.get("parameter_count")),
+            _numeric_or_inf(row.get("fit_seconds")),
+            str(row["model"]),
+            str(row["candidate_id"]),
         )
     )
     for rank, row in enumerate(overall_rows, start=1):
@@ -388,13 +455,13 @@ def write_stability_comparison(
 def select_stage6_3_candidates(
     stage6_2_root: str | Path,
     contract=None,
-    required_model: str = SCHEME2R_MODEL_NAME,
+    required_model: str | None = None,
 ) -> Dict[str, object]:
     """从阶段 6.2 总体 WAPE 表自动选择阶段 6.3 的模型和配置。
 
-    每个模型先保留其验证集 WAPE 最低的配置，再选择模型级排名前两名；
-    若 ``required_model`` 不在前两名，则额外加入该模型。返回的配置来自
-    阶段 6.1 契约，避免把 CSV 中的指标字段误当作模型超参数。
+    直接按全年验证集总体 WAPE 及契约规定的确定性 tie-breaker 选择前两名。
+    ``required_model`` 仅保留为显式兼容参数；正式 Stage 6-R 不传入它，
+    因而不会强行保留提出模型。返回的配置来自阶段 6.1 契约。
     """
 
     root = Path(stage6_2_root)
@@ -418,6 +485,7 @@ def select_stage6_3_candidates(
             f"阶段6.2结果缺少选择所需列：{sorted(required_columns)}"
         )
 
+    validated_rows: list[Dict[str, object]] = []
     best_by_model: Dict[str, Dict[str, object]] = {}
     for row in rows:
         model = str(row["model"])
@@ -434,20 +502,19 @@ def select_stage6_3_candidates(
             ) from exc
         if not np.isfinite(wape):
             raise ValueError(f"阶段6.2结果中的WAPE不是有限值：{model}/{candidate_id}")
+        normalized = {
+            **dict(row),
+            "model": model,
+            "candidate_id": candidate_id,
+            "WAPE": wape,
+            "full_validation_rank": int(row.get("validation_rank_by_WAPE", 0) or 0),
+        }
+        validated_rows.append(normalized)
         current = best_by_model.get(model)
-        candidate_key = (wape, candidate_id)
-        current_key = (
-            (float(current["WAPE"]), str(current["candidate_id"]))
-            if current is not None
-            else None
-        )
-        if current is None or candidate_key < current_key:
-            best_by_model[model] = {
-                "model": model,
-                "candidate_id": candidate_id,
-                "WAPE": wape,
-                "full_validation_rank": int(row.get("validation_rank_by_WAPE", 0) or 0),
-            }
+        if current is None or (wape, candidate_id) < (
+            float(current["WAPE"]), str(current["candidate_id"])
+        ):
+            best_by_model[model] = normalized
 
     missing_models = sorted(contract_model_set - set(best_by_model))
     if missing_models:
@@ -455,19 +522,35 @@ def select_stage6_3_candidates(
             "阶段6.2结果缺少候选模型，不能进行阶段6.3筛选："
             f"{missing_models}"
         )
+    def numeric_or_inf(value: object) -> float:
+        try:
+            return float(value) if value is not None else float("inf")
+        except (TypeError, ValueError):
+            return float("inf")
+
     ranked_models = sorted(
-        best_by_model.values(),
-        key=lambda row: (float(row["WAPE"]), str(row["model"])),
+        validated_rows,
+        key=lambda row: (
+            float(row["WAPE"]),
+            numeric_or_inf(row.get("validation_max_per_task_WAPE")),
+            numeric_or_inf(row.get("validation_negative_transfer_rate")),
+            numeric_or_inf(row.get("parameter_count")),
+            numeric_or_inf(row.get("fit_seconds")),
+            str(row["model"]),
+            str(row["candidate_id"]),
+        ),
     )
     selected_rows = ranked_models[:2]
-    if required_model not in {str(row["model"]) for row in selected_rows}:
+    if required_model is not None and required_model not in {str(row["model"]) for row in selected_rows}:
         selected_rows.append(best_by_model[required_model])
 
     selected_models = tuple(str(row["model"]) for row in selected_rows)
-    selected_model_candidates = {
-        model: (candidate_by_id[str(row["candidate_id"])],)
-        for model, row in ((str(row["model"]), row) for row in selected_rows)
-    }
+    selected_model_candidates: Dict[str, tuple[Mapping[str, object], ...]] = {}
+    for row in selected_rows:
+        model = str(row["model"])
+        selected_model_candidates[model] = selected_model_candidates.get(model, ()) + (
+            candidate_by_id[str(row["candidate_id"])],
+        )
     selected_candidate_ids = {
         str(candidate["candidate_id"])
         for candidates in selected_model_candidates.values()
@@ -485,6 +568,204 @@ def select_stage6_3_candidates(
         "selected_rows": selected_rows,
         "full_ranking_by_model": ranked_models,
         "required_model": required_model,
+    }
+
+
+def _inverse_single_task(
+    values: np.ndarray,
+    stats: StandardizationStats,
+    task_index: int,
+) -> np.ndarray:
+    """Inverse-transform one task without borrowing another task's scale."""
+
+    values = np.asarray(values, dtype=np.float32)
+    if values.ndim != 3 or values.shape[-1] != 1:
+        raise ValueError("single-task values must have shape [N, horizon, 1]")
+    return (
+        values * stats.load_scale[task_index]
+        + stats.load_mean[task_index]
+    ).astype(np.float32)
+
+
+def _run_matched_stl_candidate(
+    *,
+    run_dir: Path,
+    candidate: Mapping[str, object],
+    windows: Mapping[str, Mapping[str, np.ndarray]],
+    stats: StandardizationStats,
+    task_names: Sequence[str],
+    exog_columns: Sequence[str],
+    protocol_name: str,
+    stage_name: str,
+    batch_size: int,
+    weight_decay: float,
+    max_epochs: int,
+    early_stopping_patience: int,
+    grad_clip_norm: float,
+    threads: int,
+    seed: int,
+    lookback: int,
+    horizon: int,
+    dropout: float | None = None,
+) -> Dict[str, object]:
+    """Train the strict structure-matched STL candidate task by task.
+
+    Each task receives only its own historical load channel and the shared
+    historical exogenous window.  Separate checkpoints and early stopping
+    histories prevent the aggregate loss of a wrapper model from masking a
+    task-level result.
+    """
+
+    if len(task_names) != 4:
+        raise ValueError("matched STL currently requires the four Kitakyushu tasks")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    candidate_id = str(candidate["candidate_id"])
+    task_predictions: list[np.ndarray] = []
+    task_targets: list[np.ndarray] = []
+    task_histories: Dict[str, object] = {}
+    task_checkpoints: Dict[str, object] = {}
+    task_runtime: Dict[str, Dict[str, float]] = {}
+    task_parameter_counts: Dict[str, int] = {}
+    task_seeds: Dict[str, int] = {}
+    validation_losses: list[float] = []
+
+    for task_index, task_name in enumerate(task_names):
+        task_seed = int(seed + 1000 * task_index)
+        task_seeds[str(task_name)] = task_seed
+        config = TrainerConfig(
+            learning_rate=float(candidate["learning_rate"]),
+            weight_decay=weight_decay,
+            grad_clip_norm=grad_clip_norm,
+            max_epochs=max_epochs,
+            early_stopping_patience=early_stopping_patience,
+            torch_threads=threads,
+            seed=task_seed,
+        )
+        set_reproducible(config)
+        model = MatchedSingleTaskScheme2RModel(
+            exog_dim=len(exog_columns),
+            task_index=task_index,
+            task_count=len(task_names),
+            hidden_dim=int(candidate["hidden_dim"]),
+            lookback=lookback,
+            kernel_size=int(candidate["scheme2r_kernel_size"]),
+            dilations=tuple(int(value) for value in candidate["scheme2r_dilations"]),
+            dropout=float(candidate["dropout"] if dropout is None else dropout),
+            horizon=horizon,
+            head_hidden_dim=int(candidate["prediction_head_hidden_dim"]),
+        )
+        task_parameter_counts[str(task_name)] = count_trainable_parameters(model)
+        task_windows = {
+            split_name: {
+                "loads": values["loads"],
+                "exog": values["exog"],
+                "target": values["target"][:, :, task_index : task_index + 1],
+                "target_times": values["target_times"],
+            }
+            for split_name, values in windows.items()
+        }
+        train_loader = make_dataloader(
+            task_windows["train"], batch_size=batch_size, shuffle=True, seed=task_seed
+        )
+        validation_loader = make_dataloader(
+            task_windows["validation"],
+            batch_size=batch_size,
+            shuffle=False,
+            seed=task_seed + 1,
+        )
+        checkpoint_path = run_dir / f"best_model_{task_name}.pt"
+        fit_started = time.perf_counter()
+        history = fit_model(
+            model,
+            train_loader,
+            validation_loader,
+            config,
+            checkpoint_path,
+            input_mode="loads_and_exog",
+        )
+        fit_seconds = time.perf_counter() - fit_started
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        evaluation_started = time.perf_counter()
+        validation_loss, prediction_std, target_std = evaluate_model(
+            model,
+            validation_loader,
+            "cpu",
+            input_mode="loads_and_exog",
+        )
+        evaluation_seconds = time.perf_counter() - evaluation_started
+        validation_losses.append(float(validation_loss))
+        task_predictions.append(_inverse_single_task(prediction_std, stats, task_index))
+        task_targets.append(_inverse_single_task(target_std, stats, task_index))
+        task_histories[str(task_name)] = history
+        task_checkpoints[str(task_name)] = {
+            "file": checkpoint_path.name,
+            "epoch": int(checkpoint["epoch"]),
+            "best_validation_loss": float(checkpoint["best_validation_loss"]),
+            "trainer_config": asdict(config),
+        }
+        task_runtime[str(task_name)] = {
+            "fit": float(fit_seconds),
+            "validation_evaluation": float(evaluation_seconds),
+        }
+
+    prediction = np.concatenate(task_predictions, axis=2)
+    target = np.concatenate(task_targets, axis=2)
+    metrics = regression_metrics(target, prediction, task_names=task_names)
+    np.savez_compressed(
+        run_dir / "predictions_validation.npz",
+        target=target,
+        prediction=prediction,
+        target_times=windows["validation"]["target_times"],
+    )
+    stats.save(run_dir / "normalization_stats.npz")
+    save_json({"per_task": task_histories}, run_dir / "history.json")
+    save_json(metrics, run_dir / "metrics_validation.json")
+    save_json(
+        {
+            "model": MATCHED_STL_MODEL_NAME,
+            "candidate_id": candidate_id,
+            "protocol": protocol_name,
+            "task_models_trained_independently": True,
+            "test_set_accessed": False,
+        },
+        run_dir / "run_manifest.json",
+    )
+    total_fit = sum(item["fit"] for item in task_runtime.values())
+    total_eval = sum(item["validation_evaluation"] for item in task_runtime.values())
+    return {
+        "stage": stage_name,
+        "dataset_kind": "kitakyushu_energy_station",
+        "model": MATCHED_STL_MODEL_NAME,
+        "candidate_id": candidate_id,
+        "protocol": protocol_name,
+        "tasks": list(task_names),
+        "exog_columns": list(exog_columns),
+        "window": {"lookback": lookback, "horizon": horizon},
+        "input_mode": "loads_and_exog",
+        "future_exogenous_used": False,
+        "test_set_accessed": False,
+        "task_models_trained_independently": True,
+        "sample_counts": {
+            name: int(len(value["target"])) for name, value in windows.items()
+        },
+        "metrics_original_scale": metrics,
+        "validation_standardized_smooth_l1": float(np.mean(validation_losses)),
+        "model_config": dict(candidate),
+        "model_parameter_count": int(sum(task_parameter_counts.values())),
+        "task_parameter_counts": task_parameter_counts,
+        "runtime_seconds": {
+            "fit": float(total_fit),
+            "validation_evaluation": float(total_eval),
+            "validation_samples_per_second": float(
+                len(windows["validation"]["target"])
+                / max(total_eval, 1e-9)
+            ),
+        },
+        "task_seeds": task_seeds,
+        "best_checkpoints": task_checkpoints,
+        "task_runtime_seconds": task_runtime,
+        "cleaning": {},
+        "normalization": stats.summary(),
     }
 
 
@@ -597,11 +878,56 @@ def run_protocol_sweep(
             candidate_id = str(candidate["candidate_id"])
             run_dir = root / "runs" / model_name / candidate_id
             run_dir.mkdir(parents=True, exist_ok=True)
+            if model_name == MATCHED_STL_MODEL_NAME:
+                payload = _run_matched_stl_candidate(
+                    run_dir=run_dir,
+                    candidate=candidate,
+                    windows=standardized,
+                    stats=stats,
+                    task_names=task_names,
+                    exog_columns=available_exog,
+                    protocol_name=protocol_name,
+                    stage_name=stage_name,
+                    batch_size=batch_size,
+                    weight_decay=weight_decay,
+                    max_epochs=max_epochs,
+                    early_stopping_patience=early_stopping_patience,
+                    grad_clip_norm=grad_clip_norm,
+                    threads=threads,
+                    seed=seed,
+                    lookback=lookback,
+                    horizon=horizon,
+                )
+                save_json(payload, run_dir / "metrics_validation.json")
+                completed_runs.append(
+                    {
+                        "model": model_name,
+                        "candidate_id": candidate_id,
+                        "run_dir": str(run_dir),
+                    }
+                )
+                continue
+            trainer_config = TrainerConfig(
+                learning_rate=float(candidate["learning_rate"]),
+                weight_decay=weight_decay,
+                grad_clip_norm=grad_clip_norm,
+                max_epochs=max_epochs,
+                early_stopping_patience=early_stopping_patience,
+                torch_threads=threads,
+                seed=seed,
+            )
+            # Seed before both DataLoader construction and model initialization.
+            # The previous order allowed initialization and batch shuffling to
+            # vary while the manifest still reported the same seed.
+            set_reproducible(trainer_config)
             train_loader = make_dataloader(
-                standardized["train"], batch_size=batch_size, shuffle=True
+                standardized["train"], batch_size=batch_size, shuffle=True, seed=seed
             )
             validation_loader = make_dataloader(
-                standardized["validation"], batch_size=batch_size, shuffle=False
+                standardized["validation"],
+                batch_size=batch_size,
+                shuffle=False,
+                seed=seed + 1,
             )
             model_kwargs = {
                 "exog_dim": len(available_exog),
@@ -628,20 +954,17 @@ def run_protocol_sweep(
             else:
                 model_kwargs.update(
                     {
+                        "lookback": lookback,
                         "kernel_size": int(candidate["kernel_size"]),
-                        "dilations": (1, 2),
+                        "dilations": tuple(
+                            int(value) for value in candidate["dilations"]
+                        ),
+                        "head_hidden_dim": int(
+                            candidate["prediction_head_hidden_dim"]
+                        ),
                     }
                 )
             model = build_forecasting_model(model_name, **model_kwargs)
-            trainer_config = TrainerConfig(
-                learning_rate=float(candidate["learning_rate"]),
-                weight_decay=weight_decay,
-                grad_clip_norm=grad_clip_norm,
-                max_epochs=max_epochs,
-                early_stopping_patience=early_stopping_patience,
-                torch_threads=threads,
-                seed=seed,
-            )
             checkpoint_path = run_dir / "best_model.pt"
             fit_started = time.perf_counter()
             history = fit_model(
