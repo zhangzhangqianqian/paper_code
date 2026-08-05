@@ -28,6 +28,25 @@ class Stage7ContractTest(unittest.TestCase):
         self.assertTrue(contract["test_set_policy"]["test_reading_allowed_in_stage7"])
         self.assertFalse(contract["test_set_policy"]["test_reading_before_stage7"])
 
+    def test_current_stage6r_freeze_uses_resolved_full_policy(self):
+        path = (
+            Path(__file__).resolve().parents[2]
+            / "frame"
+            / "reports"
+            / "stage6r_6_kitakyushu"
+            / "stage6_selected_config.json"
+        )
+        if not path.exists():
+            self.skipTest("当前 Stage 6-R 冻结文件尚未生成")
+        config = json.loads(path.read_text(encoding="utf-8"))
+        contract = build_stage7_contract(config, path)
+        self.assertEqual(contract["models"]["primary"]["model"], "stl_matched")
+        self.assertEqual(contract["models"]["comparison"]["model"], "scheme2r")
+        self.assertEqual(contract["training_policy"]["batch_size"], 256)
+        self.assertEqual(contract["training_policy"]["max_epochs"], 100)
+        self.assertEqual(contract["training_policy"]["early_stopping_patience"], 12)
+        self.assertEqual(contract["protocol_training_policies"]["small_sample"]["batch_size"], 32)
+
     def test_rejects_unfrozen_status(self):
         config, path = self._freeze_config()
         config["freeze_status"] = "draft"

@@ -115,11 +115,17 @@ def validate_stage6_freeze_config(config: Mapping[str, Any]) -> None:
     if not isinstance(training, Mapping):
         raise Stage7ContractError("training_policy必须是对象")
     _require_equal(tuple(training.get("formal_random_seeds", ())), EXPECTED_SEEDS, "formal_random_seeds")
-    _require_equal(training.get("device"), "cpu", "training_policy.device")
-    _require_equal(training.get("loss"), "SmoothL1Loss", "training_policy.loss")
-    _require_equal(training.get("optimizer"), "AdamW", "training_policy.optimizer")
-    _require_equal(training.get("max_epochs"), 100, "training_policy.max_epochs")
-    _require_equal(training.get("early_stopping_patience"), 12, "training_policy.early_stopping_patience")
+    resolved_full = training.get("resolved_full")
+    effective_full = resolved_full if isinstance(resolved_full, Mapping) else training
+    _require_equal(effective_full.get("device"), "cpu", "training_policy.full.device")
+    _require_equal(effective_full.get("loss"), "SmoothL1Loss", "training_policy.full.loss")
+    _require_equal(effective_full.get("optimizer"), "AdamW", "training_policy.full.optimizer")
+    _require_equal(effective_full.get("max_epochs"), 100, "training_policy.full.max_epochs")
+    _require_equal(
+        effective_full.get("early_stopping_patience"),
+        12,
+        "training_policy.full.early_stopping_patience",
+    )
 
     scope = config.get("stage7_scope")
     if not isinstance(scope, Mapping):
@@ -162,6 +168,8 @@ def build_stage7_contract(config: Mapping[str, Any], freeze_path: str | Path) ->
             resolved_small.update({"batch_size": 32, "max_epochs": 200, "early_stopping_patience": 20})
         else:
             raise Stage7ContractError("冻结配置缺少已解析的全年/小样本训练策略")
+    full_policy = dict(resolved_full)
+    full_policy["formal_random_seeds"] = list(training["formal_random_seeds"])
     return {
         "contract_version": "stage7.0",
         "contract_status": "ready_for_stage7_smoke",
@@ -183,17 +191,7 @@ def build_stage7_contract(config: Mapping[str, Any], freeze_path: str | Path) ->
             "comparison": config["comparison_model"],
             "scheme2r_ablation_reference": config["scheme2r_ablation_reference"],
         },
-        "training_policy": {
-            "device": training["device"],
-            "loss": training["loss"],
-            "optimizer": training["optimizer"],
-            "batch_size": training["batch_size"],
-            "weight_decay": training["weight_decay"],
-            "max_epochs": training["max_epochs"],
-            "early_stopping_patience": training["early_stopping_patience"],
-            "gradient_clip_norm": training["gradient_clip_norm"],
-            "formal_random_seeds": list(training["formal_random_seeds"]),
-        },
+        "training_policy": full_policy,
         "protocol_training_policies": {
             "full": dict(resolved_full),
             "small_sample": dict(resolved_small),

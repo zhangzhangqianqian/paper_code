@@ -25,12 +25,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="执行阶段 7.0 冻结配置验证")
     parser.add_argument(
         "--freeze-config",
-        default="frame/reports/stage6_6_kitakyushu/stage6_selected_config.json",
+        default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json",
     )
-    parser.add_argument("--contract-output", default="frame/configs/stage7_contract.json")
+    parser.add_argument("--contract-output", default="frame/configs/stage7r_contract.json")
     parser.add_argument(
         "--report-output",
-        default="frame/reports/stage7_0_kitakyushu/stage7_0_manifest.json",
+        default="frame/reports/stage7r_0_kitakyushu/stage7_0_manifest.json",
     )
     parser.add_argument("--force", action="store_true", help="明确允许覆盖已有阶段 7 契约")
     return parser.parse_args()
@@ -49,4 +49,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

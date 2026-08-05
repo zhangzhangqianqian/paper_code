@@ -276,7 +276,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_gate_diagnostics.py
 
 ### 阶段 7.0—7.2：冻结交接、消融接口与 CPU 冒烟（历史工程记录）
 
-阶段 7.0 已实现根据 Stage 6.6 冻结文件生成 `frame/configs/stage7_contract.json` 的接口；阶段 7.1 已实现 A0—A4 递进消融接口，配置记录位于 `frame/configs/stage7_ablation_specs.json`。在新的 Stage 6-R 冻结后，必须重新运行阶段 7.0 生成新的契约，不能继续使用旧的 H3 冻结文件。
+阶段 7.0 已实现根据 Stage 6.6 冻结文件生成 `frame/configs/stage7r_contract.json` 的接口；阶段 7.1 已实现 A0—A4 递进消融接口，配置记录位于 `frame/configs/stage7_ablation_specs.json`。在新的 Stage 6-R 冻结后，必须重新运行阶段 7.0 生成新的契约，不能继续使用旧的 H3 冻结文件。
 
 阶段 7.2 使用真实 Kitakyushu 数据进行小规模工程验收，默认运行 128 个训练窗口、64 个验证窗口和 64 个测试窗口，最多 2 个 epoch、patience=1。运行命令：
 
@@ -301,7 +301,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py --dry-run
 ```powershell
 D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
   --kitakyushu-data-dir "D:\Paper\Kitakyushu dataset" `
-  --output-dir "frame\reports\stage7_3_kitakyushu_formal"
+  --output-dir "frame\reports\stage7r_3_kitakyushu_formal"
 ```
 
 旧目录中虽然存在 20 个运行文件，但它们属于 legacy 结果，不得用于论文性能结论；正式结果必须由 Stage 7-R 在新冻结文件下重新生成。
@@ -319,7 +319,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
 ```powershell
 & $py frame\scripts\run_stage7_4.py `
   --kitakyushu-data-dir "D:\Paper\Kitakyushu dataset" `
-  --output-dir "frame\reports\stage7_4_kitakyushu_formal"
+  --output-dir "frame\reports\stage7r_4_kitakyushu_formal"
 ```
 
 旧目录中虽然存在 50 个运行文件，但它们属于 legacy 结果，不得用于论文性能结论；修复后的矩阵只训练 A0—A3，并复用主模型生成 A4 记录。
@@ -337,10 +337,10 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
 ```powershell
 & $py frame\scripts\run_stage7_5.py `
   --kitakyushu-data-dir "D:\Paper\Kitakyushu dataset" `
-  --output-dir "frame\reports\stage7_5_kitakyushu_formal"
+  --output-dir "frame\reports\stage7r_5_kitakyushu_formal"
 ```
 
-脚本不接受样本上限或冒烟 epoch 参数，逐运行保存指标、预测和训练模型文件，并在根目录生成 `external_runs.csv`、`external_summary_mean_std.csv` 和 `stage7_5_manifest.json`。修复后的正式计划为 44 次运行，结果位于 `frame/reports/stage7_5_kitakyushu_formal`。下一步是阶段 7.6 统一汇总与阶段 7 验收。
+脚本不接受样本上限或冒烟 epoch 参数，逐运行保存指标、预测和训练模型文件，并在根目录生成 `external_runs.csv`、`external_summary_mean_std.csv` 和 `stage7_5_manifest.json`。修复后的正式计划为 44 次运行，结果位于 `frame/reports/stage7r_5_kitakyushu_formal`。下一步是阶段 7.6 统一汇总与阶段 7 验收。
 
 ### 历史阶段 7.6：统一汇总（legacy，不得作为论文结果）
 
@@ -354,7 +354,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
 
 ```powershell
 & $py frame\scripts\run_stage7_6.py `
-  --output-dir "frame\reports\stage7_6_kitakyushu_acceptance"
+  --output-dir "frame\reports\stage7r_6_kitakyushu_acceptance"
 ```
 
 输出目录将包含 `raw_result_index.csv`、`metrics_by_run.csv`、`detailed_metrics_mean_std.csv`、`overall_comparison_mean_std.csv`、`resource_summary_mean_std.csv`、`diagnostic_linkage.csv` 和 `stage7_6_manifest.json`。脚本不会改变任何源结果，也不会重新训练模型；若任一正式运行缺失或失败，会在汇总前直接报错。
@@ -376,7 +376,7 @@ frame/reports/stage7r_kitakyushu_reproducible/
 ```powershell
 & $py frame\scripts\run_stage7_0.py `
   --freeze-config "frame\reports\stage6r_6_kitakyushu\stage6_selected_config.json" `
-  --contract-output "frame\configs\stage7_contract.json" `
+  --contract-output "frame\configs\stage7r_contract.json" `
   --force
 ```
 

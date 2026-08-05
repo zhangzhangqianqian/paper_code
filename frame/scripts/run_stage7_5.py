@@ -563,13 +563,13 @@ def parse_args() -> argparse.Namespace:
         description="Run Stage 7.5 formal external baselines"
     )
     parser.add_argument("--kitakyushu-data-dir", default="D:/Paper/Kitakyushu dataset")
-    parser.add_argument("--contract", default="frame/configs/stage7_contract.json")
+    parser.add_argument("--contract", default="frame/configs/stage7r_contract.json")
     parser.add_argument(
         "--freeze-config",
-        default="frame/reports/stage6_6_kitakyushu/stage6_selected_config.json",
+        default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json",
     )
     parser.add_argument(
-        "--output-dir", default="frame/reports/stage7_5_kitakyushu_reproducible"
+        "--output-dir", default="frame/reports/stage7r_5_kitakyushu_formal"
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")

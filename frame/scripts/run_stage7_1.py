@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--contract",
-        default="frame/configs/stage7_contract.json",
+        default="frame/configs/stage7r_contract.json",
         help="Stage 7.0 contract; no data files are read",
     )
     parser.add_argument(
@@ -125,4 +125,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

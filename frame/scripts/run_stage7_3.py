@@ -541,15 +541,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--contract",
-        default="frame/configs/stage7_contract.json",
+        default="frame/configs/stage7r_contract.json",
     )
     parser.add_argument(
         "--freeze-config",
-        default="frame/reports/stage6_6_kitakyushu/stage6_selected_config.json",
+        default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json",
     )
     parser.add_argument(
         "--output-dir",
-        default="frame/reports/stage7_3_kitakyushu_reproducible",
+        default="frame/reports/stage7r_3_kitakyushu_formal",
     )
     parser.add_argument(
         "--dry-run",

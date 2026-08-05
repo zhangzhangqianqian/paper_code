@@ -374,10 +374,10 @@ def parse_args() -> argparse.Namespace:
         description="Run the Stage 7-R structure-matched STL reference"
     )
     parser.add_argument("--kitakyushu-data-dir", default="D:/Paper/Kitakyushu dataset")
-    parser.add_argument("--contract", default="frame/configs/stage7_contract.json")
+    parser.add_argument("--contract", default="frame/configs/stage7r_contract.json")
     parser.add_argument(
         "--freeze-config",
-        default="frame/reports/stage6_6_kitakyushu/stage6_selected_config.json",
+        default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json",
     )
     parser.add_argument(
         "--output-dir",

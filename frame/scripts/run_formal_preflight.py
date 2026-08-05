@@ -196,10 +196,10 @@ def run_preflight(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="执行正式训练前非训练准入检查")
     parser.add_argument("--data-dir", default="D:/Paper/Kitakyushu dataset")
-    parser.add_argument("--freeze-config", default="frame/reports/stage6_6_kitakyushu/stage6_selected_config.json")
+    parser.add_argument("--freeze-config", default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json")
     parser.add_argument("--contract", default="frame/configs/stage6_selection_contract.json")
     parser.add_argument(
-        "--stage7-contract", default="frame/configs/stage7_contract.json"
+        "--stage7-contract", default="frame/configs/stage7r_contract.json"
     )
     parser.add_argument("--smoke-root", default="frame/reports")
     parser.add_argument("--phase", choices=("stage6r", "stage7r"), default="stage6r")

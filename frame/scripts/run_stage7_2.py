@@ -165,7 +165,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--contract",
-        default="frame/configs/stage7_contract.json",
+        default="frame/configs/stage7r_contract.json",
     )
     parser.add_argument(
         "--output-dir",

@@ -125,12 +125,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kitakyushu-data-dir", default="D:/Paper/Kitakyushu dataset")
     parser.add_argument(
         "--contract",
-        default="frame/configs/stage7_contract.json",
+        default="frame/configs/stage7r_contract.json",
         help="Stage 7.0 contract generated from the new Stage 6-R freeze",
     )
     parser.add_argument(
         "--freeze-config",
-        default="frame/reports/stage6_6_kitakyushu/stage6_selected_config.json",
+        default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json",
         help="Stage 6-R freeze consumed by all Stage 7 child scripts",
     )
     parser.add_argument(

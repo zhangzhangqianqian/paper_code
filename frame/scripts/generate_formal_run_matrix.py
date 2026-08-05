@@ -117,8 +117,8 @@ def build_formal_run_matrix(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="生成 Stage 7-R 正式运行矩阵")
-    parser.add_argument("--freeze-config", default="frame/reports/stage6_6_kitakyushu/stage6_selected_config.json")
-    parser.add_argument("--contract", default="frame/configs/stage7_contract.json")
+    parser.add_argument("--freeze-config", default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json")
+    parser.add_argument("--contract", default="frame/configs/stage7r_contract.json")
     parser.add_argument("--output-dir", default="frame/reports/stage7r_matrix")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
