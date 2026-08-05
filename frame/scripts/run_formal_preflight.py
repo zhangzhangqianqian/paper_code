@@ -35,12 +35,72 @@ def _git_clean() -> bool:
     return not result.stdout.strip()
 
 
+def _check_stage6r_smoke(smoke_root: Path) -> Dict[str, Any]:
+    """Validate the four short smoke outputs without touching training data."""
+
+    expectations = {
+        "stage6r_2_smoke": ("stage6_2_manifest.json", "candidate_run_count", 24),
+        "stage6r_3_smoke": ("stage6_3_manifest.json", "candidate_run_count", 2),
+        "stage6r_4_smoke": ("stage6_4_manifest.json", "analyzed_run_count", 1),
+        "stage6r_5_smoke": ("stage6_5_manifest.json", "summary_row_count", 1),
+    }
+    entries: Dict[str, Any] = {}
+    passed = True
+    for name, (manifest_name, count_key, minimum) in expectations.items():
+        root = smoke_root / name
+        manifest_path = root / manifest_name
+        entry: Dict[str, Any] = {
+            "directory": str(root),
+            "manifest": str(manifest_path),
+            "exists": manifest_path.is_file(),
+        }
+        if not manifest_path.is_file():
+            entry["status"] = "missing"
+            passed = False
+            entries[name] = entry
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            entry["status"] = "invalid_manifest"
+            passed = False
+            entries[name] = entry
+            continue
+        count = manifest.get(count_key)
+        test_accessed = manifest.get("test_set_accessed")
+        forbidden = [
+            str(path.relative_to(root))
+            for path in root.rglob("*")
+            if path.is_file() and path.name in {"metrics_test.json", "predictions_test.npz"}
+        ]
+        entry.update(
+            {
+                "count_key": count_key,
+                "count": count,
+                "test_set_accessed": test_accessed,
+                "forbidden_test_artifacts": forbidden,
+            }
+        )
+        entry["status"] = (
+            "pass"
+            if isinstance(count, int)
+            and count >= minimum
+            and test_accessed is False
+            and not forbidden
+            else "failed"
+        )
+        passed = passed and entry["status"] == "pass"
+        entries[name] = entry
+    return {"status": "pass" if passed else "failed", "entries": entries}
+
+
 def run_preflight(
     data_dir: Path,
     freeze_path: Path,
     contract_path: Path,
     phase: str = "stage6r",
     stage7_contract_path: Path | None = None,
+    smoke_root: Path | None = None,
 ) -> Dict[str, Any]:
     contract = load_stage6_selection_contract(contract_path)
     freeze = json.loads(freeze_path.read_text(encoding="utf-8")) if freeze_path.exists() else None
@@ -53,6 +113,7 @@ def run_preflight(
         "git_clean": _git_clean(),
         "test_suite": "not_run",
         "stage7_contract": "not_required" if phase == "stage6r" else "pending",
+        "smoke": {"status": "not_required"},
     }
     for name in (
         "Electricity load & Heating load & Cooling load & Hot water load.zip",
@@ -82,6 +143,10 @@ def run_preflight(
                 if stage7_contract.get("contract_status") == "ready_for_stage7_smoke"
                 else "stale_or_legacy"
             )
+    if phase == "stage6r":
+        checks["smoke"] = _check_stage6r_smoke(
+            smoke_root or (REPOSITORY_ROOT / "frame" / "reports")
+        )
     usage = shutil.disk_usage(REPOSITORY_ROOT)
     checks["disk_free_gb"] = round(usage.free / (1024 ** 3), 2)
     stage6_data_ready = bool(
@@ -89,6 +154,10 @@ def run_preflight(
         and checks["data_directory"]
         and all(item["exists"] for item in checks["required_zip_files"])
         and checks["git_clean"]
+        and (
+            phase != "stage6r"
+            or checks["smoke"].get("status") == "pass"
+        )
     )
     stage7_ready = bool(
         stage6_data_ready
@@ -110,6 +179,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stage7-contract", default="frame/configs/stage7_contract.json"
     )
+    parser.add_argument("--smoke-root", default="frame/reports")
     parser.add_argument("--phase", choices=("stage6r", "stage7r"), default="stage6r")
     return parser.parse_args()
 
@@ -122,6 +192,7 @@ def main() -> None:
         _resolve(args.contract),
         args.phase,
         _resolve(args.stage7_contract),
+        _resolve(args.smoke_root),
     )
     print(json.dumps(checks, ensure_ascii=False, indent=2))
     if checks["formal_training_allowed"]:
