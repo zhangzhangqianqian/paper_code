@@ -1,0 +1,271 @@
+{
+  "contract_version": "stage7.0",
+  "contract_status": "ready_for_stage7_smoke",
+  "created_at_utc": "2026-08-05T18:11:20.405844+00:00",
+  "freeze_source": "D:\\Paper\\github_work\\paper-code\\frame\\reports\\stage6r_6_kitakyushu\\stage6_selected_config.json",
+  "dataset": "kitakyushu_energy_station",
+  "tasks": [
+    "electricity",
+    "cooling",
+    "heating",
+    "gas"
+  ],
+  "data_protocol": {
+    "sampling": "1h",
+    "lookback": 24,
+    "horizon": 4,
+    "full": {
+      "train_start": "2015-01-01 00:00:00",
+      "train_end": "2019-12-31 23:00:00",
+      "validation_start": "2020-01-01 00:00:00",
+      "validation_end": "2020-12-31 23:00:00",
+      "test_start": "2021-01-01 00:00:00",
+      "test_end": "2021-12-31 23:00:00"
+    },
+    "small_sample": {
+      "train_start": "2018-07-01 00:00:00",
+      "train_end": "2018-08-17 23:00:00",
+      "validation_start": "2018-08-18 00:00:00",
+      "validation_end": "2018-08-24 23:00:00",
+      "test_start": "2018-08-25 00:00:00",
+      "test_end": "2018-08-31 23:00:00"
+    },
+    "standardization": "train_split_only_zscore",
+    "future_exogenous_allowed": false
+  },
+  "models": {
+    "primary": {
+      "model": "stl_matched",
+      "candidate_id": "H3",
+      "hyperparameters": {
+        "candidate_id": "H3",
+        "hidden_dim": 32,
+        "kernel_size": 3,
+        "dilations": [
+          1,
+          2,
+          4,
+          8
+        ],
+        "dropout": 0.1,
+        "learning_rate": 0.001,
+        "scheme2r_kernel_size": 3,
+        "scheme2r_dilations": [
+          1,
+          2,
+          4,
+          8
+        ],
+        "scheme2r_rank": 8,
+        "scheme2r_gate_hidden_dim": 16,
+        "scheme2r_step_embedding_dim": 4,
+        "prediction_head_hidden_dim": 16
+      },
+      "full_validation_metrics": {
+        "model": "stl_matched",
+        "candidate_id": "H3",
+        "MAE": "49.828409736241454",
+        "RMSE": "105.11672234454551",
+        "WAPE": "19.848262843181566",
+        "MAPE": "494578755.6297234",
+        "validation_max_per_task_WAPE": "31.43264649559186",
+        "validation_per_task_WAPE_valid_count": "4",
+        "validation_per_task_WAPE_total_count": "4",
+        "parameter_count": "35628",
+        "fit_seconds": "1193.2315847",
+        "validation_evaluation_seconds": "0.6369598000001133",
+        "validation_samples_per_second": "13785.799354996088",
+        "train_samples": "43767",
+        "validation_samples": "8781",
+        "best_validation_loss": "0.029852390759702148",
+        "best_checkpoint_epoch": "26.0",
+        "validation_negative_transfer_rate": "0.0",
+        "validation_rank_by_WAPE": "1",
+        "selection_rank": 1
+      }
+    },
+    "comparison": {
+      "model": "scheme2r",
+      "candidate_id": "H4",
+      "hyperparameters": {
+        "candidate_id": "H4",
+        "hidden_dim": 32,
+        "kernel_size": 5,
+        "dilations": [
+          1,
+          2,
+          4
+        ],
+        "dropout": 0.1,
+        "learning_rate": 0.0005,
+        "scheme2r_kernel_size": 5,
+        "scheme2r_dilations": [
+          1,
+          2,
+          4
+        ],
+        "scheme2r_rank": 8,
+        "scheme2r_gate_hidden_dim": 16,
+        "scheme2r_step_embedding_dim": 4,
+        "prediction_head_hidden_dim": 16
+      },
+      "full_validation_metrics": {
+        "model": "scheme2r",
+        "candidate_id": "H4",
+        "MAE": "49.99906249285803",
+        "RMSE": "107.61689972393842",
+        "WAPE": "19.853431497032247",
+        "MAPE": "415212293.4186039",
+        "validation_max_per_task_WAPE": "32.415801540066546",
+        "validation_per_task_WAPE_valid_count": "4",
+        "validation_per_task_WAPE_total_count": "4",
+        "parameter_count": "39834",
+        "fit_seconds": "1072.3348497999978",
+        "validation_evaluation_seconds": "0.5495351999998093",
+        "validation_samples_per_second": "15978.958217786681",
+        "train_samples": "43767",
+        "validation_samples": "8781",
+        "best_validation_loss": "0.031556876293755705",
+        "best_checkpoint_epoch": "33",
+        "validation_negative_transfer_rate": "0.25",
+        "validation_rank_by_WAPE": "2",
+        "selection_rank": 2
+      }
+    },
+    "scheme2r_ablation_reference": {
+      "model": "scheme2r",
+      "candidate_id": "H4",
+      "hyperparameters": {
+        "candidate_id": "H4",
+        "hidden_dim": 32,
+        "kernel_size": 5,
+        "dilations": [
+          1,
+          2,
+          4
+        ],
+        "dropout": 0.1,
+        "learning_rate": 0.0005,
+        "scheme2r_kernel_size": 5,
+        "scheme2r_dilations": [
+          1,
+          2,
+          4
+        ],
+        "scheme2r_rank": 8,
+        "scheme2r_gate_hidden_dim": 16,
+        "scheme2r_step_embedding_dim": 4,
+        "prediction_head_hidden_dim": 16
+      },
+      "full_validation_metrics": {
+        "model": "scheme2r",
+        "candidate_id": "H4",
+        "MAE": "49.99906249285803",
+        "RMSE": "107.61689972393842",
+        "WAPE": "19.853431497032247",
+        "MAPE": "415212293.4186039",
+        "validation_max_per_task_WAPE": "32.415801540066546",
+        "validation_per_task_WAPE_valid_count": "4",
+        "validation_per_task_WAPE_total_count": "4",
+        "parameter_count": "39834",
+        "fit_seconds": "1072.3348497999978",
+        "validation_evaluation_seconds": "0.5495351999998093",
+        "validation_samples_per_second": "15978.958217786681",
+        "train_samples": "43767",
+        "validation_samples": "8781",
+        "best_validation_loss": "0.031556876293755705",
+        "best_checkpoint_epoch": "33",
+        "validation_negative_transfer_rate": "0.25",
+        "validation_rank_by_WAPE": "2",
+        "selection_rank": 2
+      }
+    }
+  },
+  "training_policy": {
+    "random_seed": 2026,
+    "device": "cpu",
+    "loss": "SmoothL1Loss",
+    "optimizer": "AdamW",
+    "weight_decay": 0.0001,
+    "early_stopping_monitor": "validation_loss",
+    "checkpoint_policy": "restore_best_validation_loss",
+    "gradient_clip_norm": 1.0,
+    "batch_size": 256,
+    "max_epochs": 100,
+    "early_stopping_patience": 12,
+    "formal_random_seeds": [
+      2026,
+      2027,
+      2028,
+      2029,
+      2030
+    ]
+  },
+  "protocol_training_policies": {
+    "full": {
+      "random_seed": 2026,
+      "device": "cpu",
+      "loss": "SmoothL1Loss",
+      "optimizer": "AdamW",
+      "weight_decay": 0.0001,
+      "early_stopping_monitor": "validation_loss",
+      "checkpoint_policy": "restore_best_validation_loss",
+      "gradient_clip_norm": 1.0,
+      "batch_size": 256,
+      "max_epochs": 100,
+      "early_stopping_patience": 12
+    },
+    "small_sample": {
+      "random_seed": 2026,
+      "device": "cpu",
+      "loss": "SmoothL1Loss",
+      "optimizer": "AdamW",
+      "weight_decay": 0.0001,
+      "early_stopping_monitor": "validation_loss",
+      "checkpoint_policy": "restore_best_validation_loss",
+      "gradient_clip_norm": 1.0,
+      "batch_size": 32,
+      "max_epochs": 200,
+      "early_stopping_patience": 20
+    }
+  },
+  "stage7_scope": {
+    "protocols": [
+      "full",
+      "small_sample"
+    ],
+    "ablations": [
+      "A0",
+      "A1",
+      "A2",
+      "A3",
+      "A4"
+    ],
+    "external_baselines": [
+      "persistence",
+      "seasonal_naive",
+      "dlinear",
+      "mmoe_lite",
+      "softs"
+    ],
+    "input_controls": [
+      "scheme2r_loads_only"
+    ],
+    "test_usage": "allowed_only_after_stage6_6_freeze"
+  },
+  "test_set_policy": {
+    "selection_locked": true,
+    "test_reading_allowed_in_stage7": true,
+    "test_reading_before_stage7": false,
+    "test_year": 2021
+  },
+  "execution_order": [
+    "stage7.0_contract_validation",
+    "stage7.1_ablation_interface",
+    "stage7.2_smoke",
+    "stage7.3_main_and_comparison_formal",
+    "stage7.4_ablation_formal",
+    "stage7.5_external_baselines_formal",
+    "stage7.6_report_and_acceptance"
+  ]
+}
