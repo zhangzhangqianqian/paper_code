@@ -313,6 +313,7 @@ def main() -> None:
         "missing_runs": missing_runs,
         "constant_threshold": float(args.constant_threshold),
         "asymmetry_threshold": float(args.asymmetry_threshold),
+        "allow_missing": bool(args.allow_missing),
         "export_tiff": bool(args.export_tiff),
         "entropy_definition": "normalized Shannon entropy over valid off-diagonal gates",
         "test_set_accessed": False,

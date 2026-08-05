@@ -65,6 +65,9 @@ KITAKYUSHU_EXOG_COLUMNS: Tuple[str, ...] = (
     *KITAKYUSHU_CALENDAR_COLUMNS,
 )
 KITAKYUSHU_YEARS: Tuple[int, ...] = tuple(range(2015, 2022))
+# Stage 6-R is validation-only.  It must not even load the sealed 2021
+# test-year files; Stage 7 is the first stage allowed to read that year.
+KITAKYUSHU_STAGE6_YEARS: Tuple[int, ...] = tuple(range(2015, 2021))
 KITAKYUSHU_SPLIT = SplitSpec(
     train_start="2015-01-01 00:00:00",
     train_end="2019-12-31 23:00:00",

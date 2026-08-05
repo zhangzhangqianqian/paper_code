@@ -29,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.data_pipeline import read_heew_canonical  # noqa: E402
 from src.kitakyushu_pipeline import (  # noqa: E402
     KITAKYUSHU_EXOG_COLUMNS,
+    KITAKYUSHU_STAGE6_YEARS,
     KITAKYUSHU_SPLIT,
     KITAKYUSHU_TASKS,
     read_kitakyushu_canonical,
@@ -77,6 +78,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="允许覆盖训练规模/轮数，仅用于CPU冒烟，不得作为正式结论",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="复用已通过完整性检查的运行，适用于中断后继续",
+    )
     parser.add_argument("--max-train-samples", type=int)
     parser.add_argument("--max-validation-samples", type=int)
     parser.add_argument("--max-epochs", type=int)
@@ -111,7 +117,7 @@ def main() -> None:
         if args.energy_file != "dataset/HEEW/cleaned_data/Total_energy.csv" or args.weather_file != "dataset/HEEW/cleaned_data/Total_weather.csv":
             raise ValueError("Kitakyushu 协议不接受 HEEW 的 --energy-file/--weather-file 参数")
         frame, _ = read_kitakyushu_canonical(
-            _resolve_path(args.kitakyushu_data_dir), years=tuple(range(2015, 2022))
+            _resolve_path(args.kitakyushu_data_dir), years=KITAKYUSHU_STAGE6_YEARS
         )
         task_names = KITAKYUSHU_TASKS
         exog_columns = KITAKYUSHU_EXOG_COLUMNS
@@ -137,6 +143,8 @@ def main() -> None:
         seed=int(overrides.get("seed", training["random_seed"])),
         max_train_samples=args.max_train_samples,
         max_validation_samples=args.max_validation_samples,
+        source_years_loaded=KITAKYUSHU_STAGE6_YEARS if args.dataset == "kitakyushu_energy_station" else None,
+        resume=args.resume,
         dataset_kind=args.dataset,
         **({"task_names": task_names, "exog_columns": exog_columns} if task_names is not None else {}),
     )
@@ -147,6 +155,7 @@ def main() -> None:
                 "protocol": "full",
                 "completed_runs": len(completed),
                 "output_dir": str(_resolve_path(args.output_dir)),
+                "source_years_loaded": list(KITAKYUSHU_STAGE6_YEARS),
                 "smoke": bool(args.smoke),
                 "test_set_accessed": False,
             },

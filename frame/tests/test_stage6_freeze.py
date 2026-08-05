@@ -3,7 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.stage6_freeze import FreezeValidationError, _rank_full_candidates, freeze_stage6
+from src.stage6_freeze import (
+    FreezeValidationError,
+    _rank_full_candidates,
+    _validate_stage6_4,
+    freeze_stage6,
+)
 
 
 class Stage6FreezeTest(unittest.TestCase):
@@ -59,6 +64,35 @@ class Stage6FreezeTest(unittest.TestCase):
                     root / "gate",
                     root / "transfer",
                 )
+
+    def test_stage6_4_count_matches_selected_gated_models(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "gate"
+            root.mkdir()
+            analyzed = [
+                {"model": "dynamic_symmetric", "candidate_id": "H2"},
+                *[
+                    {"model": "scheme2r", "candidate_id": f"H2_step{step}"}
+                    for step in range(1, 5)
+                ],
+            ]
+            manifest = {
+                "stage": "6.4",
+                "analyzed_run_count": 5,
+                "analyzed_runs": analyzed,
+                "missing_runs": ["static_gate/H1", "scheme2r/H1"],
+                "test_set_accessed": False,
+            }
+            (root / "stage6_4_manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            (root / "gate_diagnostics_summary.csv").write_text("x\n", encoding="utf-8")
+            (root / "gate_asymmetry.csv").write_text("x\n", encoding="utf-8")
+            result = _validate_stage6_4(
+                root,
+                {("dynamic_symmetric", "H2"), ("scheme2r", "H2")},
+            )
+            self.assertEqual(result["analyzed_run_count"], 5)
 
     def test_freeze_output_contains_required_files(self):
         repo = Path(__file__).resolve().parents[2]

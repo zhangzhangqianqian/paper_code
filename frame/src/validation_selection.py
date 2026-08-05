@@ -72,6 +72,73 @@ def _write_csv(rows: Sequence[Mapping[str, object]], path: Path) -> None:
         writer.writerows(rows)
 
 
+def _load_completed_run(
+    run_dir: Path,
+    *,
+    model_name: str,
+    candidate_id: str,
+    candidate: Mapping[str, object],
+    protocol_name: str,
+    dataset_kind: str,
+    task_names: Sequence[str],
+    contract_version: str,
+) -> Dict[str, object] | None:
+    """Reuse a run only when all validation artifacts match the contract."""
+
+    metrics_path = run_dir / "metrics_validation.json"
+    manifest_path = run_dir / "run_manifest.json"
+    prediction_path = run_dir / "predictions_validation.npz"
+    history_path = run_dir / "history.json"
+    required = (metrics_path, manifest_path, prediction_path, history_path)
+    if not all(path.is_file() for path in required):
+        return None
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        run_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(metrics, Mapping) or not isinstance(run_manifest, Mapping):
+        return None
+    expected = {
+        "model": model_name,
+        "candidate_id": candidate_id,
+        "protocol": protocol_name,
+        "dataset_kind": dataset_kind,
+        "contract_version": contract_version,
+        "test_set_accessed": False,
+    }
+    if any(metrics.get(key) != value for key, value in expected.items()):
+        return None
+    if json.dumps(metrics.get("model_config"), sort_keys=True, default=str) != json.dumps(
+        dict(candidate), sort_keys=True, default=str
+    ):
+        return None
+    if run_manifest.get("test_set_accessed") is not False:
+        return None
+    if run_manifest.get("contract_version") != contract_version:
+        return None
+    if run_manifest.get("candidate_id") not in (None, candidate_id):
+        return None
+    if model_name == MATCHED_STL_MODEL_NAME:
+        best_checkpoints = metrics.get("best_checkpoints")
+        if not isinstance(best_checkpoints, Mapping) or set(best_checkpoints) != set(task_names):
+            return None
+        checkpoint_paths = [
+            run_dir / str(best_checkpoints[task].get("file"))
+            for task in task_names
+            if isinstance(best_checkpoints.get(task), Mapping)
+        ]
+    else:
+        checkpoint_paths = [run_dir / "best_model.pt"]
+    if not checkpoint_paths or not all(path.is_file() for path in checkpoint_paths):
+        return None
+    return {
+        "model": model_name,
+        "candidate_id": candidate_id,
+        "run_dir": str(run_dir),
+    }
+
+
 def _write_validation_gates(
     model: torch.nn.Module,
     model_name: str,
@@ -621,6 +688,7 @@ def _run_matched_stl_candidate(
     seed: int,
     lookback: int,
     horizon: int,
+    contract_version: str,
     dropout: float | None = None,
 ) -> Dict[str, object]:
     """Train the strict structure-matched STL candidate task by task.
@@ -740,6 +808,7 @@ def _run_matched_stl_candidate(
             "model": MATCHED_STL_MODEL_NAME,
             "candidate_id": candidate_id,
             "protocol": protocol_name,
+            "contract_version": contract_version,
             "task_models_trained_independently": True,
             "test_set_accessed": False,
         },
@@ -753,6 +822,7 @@ def _run_matched_stl_candidate(
         "model": MATCHED_STL_MODEL_NAME,
         "candidate_id": candidate_id,
         "protocol": protocol_name,
+        "contract_version": contract_version,
         "tasks": list(task_names),
         "exog_columns": list(exog_columns),
         "window": {"lookback": lookback, "horizon": horizon},
@@ -810,10 +880,14 @@ def run_protocol_sweep(
     seed: int = 2026,
     max_train_samples: int | None = None,
     max_validation_samples: int | None = None,
+    source_years_loaded: Sequence[int] | None = None,
+    resume: bool = False,
 ) -> list[Dict[str, object]]:
     """执行阶段 6.2 全年验证集 sweep；函数绝不构造 test 窗口。"""
 
-    contract_models = set(load_stage6_selection_contract().candidate_models)
+    selection_contract = load_stage6_selection_contract()
+    contract_models = set(selection_contract.candidate_models)
+    contract_version = str(selection_contract.raw.get("contract_version", ""))
     model_names = tuple(str(name) for name in model_names)
     if not model_names or not set(model_names).issubset(contract_models):
         raise ValueError("模型候选必须来自阶段 6.1 契约")
@@ -884,6 +958,24 @@ def run_protocol_sweep(
         name: stats.transform_windows(value) for name, value in windows.items()
     }
     root = Path(output_root)
+    manifest_path = root / manifest_name
+    if resume and manifest_path.is_file():
+        try:
+            existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"无法读取续跑清单：{manifest_path}") from exc
+        if existing_manifest.get("contract_version") != contract_version:
+            raise ValueError(
+                "续跑目录不是当前 Stage 6-R 契约生成的结果；请使用新的输出目录"
+            )
+        if source_years_loaded is not None and existing_manifest.get("source_years_loaded") != [
+            int(year) for year in source_years_loaded
+        ]:
+            raise ValueError("续跑目录的数据年份与当前协议不一致")
+    if root.exists() and any(root.iterdir()) and not resume:
+        raise FileExistsError(
+            f"阶段结果目录非空：{root}；如需继续未完成运行，请显式使用 --resume"
+        )
     root.mkdir(parents=True, exist_ok=True)
     stats.save(root / "normalization_stats.npz")
 
@@ -893,6 +985,20 @@ def run_protocol_sweep(
             candidate_id = str(candidate["candidate_id"])
             run_dir = root / "runs" / model_name / candidate_id
             run_dir.mkdir(parents=True, exist_ok=True)
+            if resume:
+                completed = _load_completed_run(
+                    run_dir,
+                    model_name=model_name,
+                    candidate_id=candidate_id,
+                    candidate=candidate,
+                    protocol_name=protocol_name,
+                    dataset_kind=dataset_kind,
+                    task_names=task_names,
+                    contract_version=contract_version,
+                )
+                if completed is not None:
+                    completed_runs.append(completed)
+                    continue
             if model_name == MATCHED_STL_MODEL_NAME:
                 payload = _run_matched_stl_candidate(
                     run_dir=run_dir,
@@ -912,6 +1018,7 @@ def run_protocol_sweep(
                     seed=seed,
                     lookback=lookback,
                     horizon=horizon,
+                    contract_version=contract_version,
                 )
                 save_json(payload, run_dir / "metrics_validation.json")
                 completed_runs.append(
@@ -1023,6 +1130,7 @@ def run_protocol_sweep(
             )
             payload = {
                 "stage": stage_name,
+                "contract_version": contract_version,
                 "dataset_kind": dataset_kind,
                 "model": model_name,
                 "candidate_id": candidate_id,
@@ -1063,38 +1171,45 @@ def run_protocol_sweep(
             save_json(payload, run_dir / "metrics_validation.json")
             save_json({"history": history}, run_dir / "history.json")
             save_json(
-                {"candidate": dict(candidate), "test_set_accessed": False},
+                {
+                    "candidate": dict(candidate),
+                    "contract_version": contract_version,
+                    "test_set_accessed": False,
+                },
                 run_dir / "run_manifest.json",
             )
             completed_runs.append({"model": model_name, "candidate_id": candidate_id, "run_dir": str(run_dir)})
 
     write_validation_summaries(root, completed_runs, task_names=task_names)
-    save_json(
-        {
-            "stage": stage_name,
-            "protocol": protocol_name,
-            "candidate_run_count": len(completed_runs),
-            "models": list(model_names),
-            "tasks": list(task_names),
-            "hyperparameter_candidates": [dict(value) for value in hyperparameter_candidates],
-            **(
-                {
-                    "model_hyperparameter_candidates": {
-                        model: [dict(value) for value in candidates]
-                        for model, candidates in candidates_by_model.items()
-                    }
+    manifest_payload: Dict[str, object] = {
+        "stage": stage_name,
+        "contract_version": contract_version,
+        "protocol": protocol_name,
+        "candidate_run_count": len(completed_runs),
+        "models": list(model_names),
+        "tasks": list(task_names),
+        "hyperparameter_candidates": [dict(value) for value in hyperparameter_candidates],
+        **(
+            {
+                "model_hyperparameter_candidates": {
+                    model: [dict(value) for value in candidates]
+                    for model, candidates in candidates_by_model.items()
                 }
-                if model_hyperparameter_candidates is not None
-                else {}
-            ),
-            "test_set_accessed": False,
-            "sample_counts": {
-                name: int(len(value["target"])) for name, value in windows.items()
-            },
-            "cleaning": cleaning_report,
+            }
+            if model_hyperparameter_candidates is not None
+            else {}
+        ),
+        "test_set_accessed": False,
+        "sample_counts": {
+            name: int(len(value["target"])) for name, value in windows.items()
         },
-        root / manifest_name,
-    )
+        "cleaning": cleaning_report,
+    }
+    if source_years_loaded is not None:
+        manifest_payload["source_years_loaded"] = [
+            int(year) for year in source_years_loaded
+        ]
+    save_json(manifest_payload, root / manifest_name)
     return completed_runs
 
 

@@ -86,9 +86,15 @@ def _validate_full_stage6_2(
     manifest = _read_json(root / "stage6_2_manifest.json")
     if manifest.get("stage") != "6.2" or manifest.get("protocol") != "full":
         raise FreezeValidationError("阶段 6.2 清单不是正式全年协议")
+    if manifest.get("contract_version") != "stage6.1-r1":
+        raise FreezeValidationError("阶段 6.2 清单不是当前 Stage 6-R 契约版本")
     if int(manifest.get("candidate_run_count", -1)) != 24:
         raise FreezeValidationError("阶段 6.2 必须包含 24 个正式运行")
     _assert_false(manifest.get("test_set_accessed"), "阶段 6.2 test_set_accessed")
+    if manifest.get("source_years_loaded") != list(range(2015, 2021)):
+        raise FreezeValidationError(
+            "阶段 6.2 必须只加载 2015—2020；2021 测试年在 Stage 6-R 中封存"
+        )
     counts = manifest.get("sample_counts") or {}
     if counts.get("train") != FULL_TRAIN_SAMPLES or counts.get("validation") != FULL_VALIDATION_SAMPLES:
         raise FreezeValidationError(
@@ -157,10 +163,16 @@ def _validate_small_stage6_3(
     manifest = _read_json(root / "stage6_3_manifest.json")
     if manifest.get("stage") != "6.3" or manifest.get("protocol") != "small_sample":
         raise FreezeValidationError("阶段 6.3 清单不是正式小样本协议")
+    if manifest.get("contract_version") != "stage6.1-r1":
+        raise FreezeValidationError("阶段 6.3 清单不是当前 Stage 6-R 契约版本")
     candidate_run_count = int(manifest.get("candidate_run_count", -1))
     if candidate_run_count not in {2, 3}:
         raise FreezeValidationError("阶段 6.3 必须包含 2 或 3 个正式运行")
     _assert_false(manifest.get("test_set_accessed"), "阶段 6.3 test_set_accessed")
+    if manifest.get("source_years_loaded") != list(range(2015, 2021)):
+        raise FreezeValidationError(
+            "阶段 6.3 必须只加载 2015—2020；2021 测试年在 Stage 6-R 中封存"
+        )
     counts = manifest.get("sample_counts") or {}
     if counts.get("train") != SMALL_TRAIN_SAMPLES or counts.get("validation") != SMALL_VALIDATION_SAMPLES:
         raise FreezeValidationError(f"阶段 6.3 样本数异常：{counts!r}")
@@ -181,15 +193,74 @@ def _validate_small_stage6_3(
     return manifest, stability
 
 
-def _validate_stage6_4(root: Path) -> dict[str, Any]:
+def _validate_stage6_4(
+    root: Path,
+    selected_pairs: set[tuple[str, str]],
+) -> dict[str, Any]:
     _assert_directory(root, "阶段 6.4")
     manifest = _read_json(root / "stage6_4_manifest.json")
     if manifest.get("stage") != "6.4":
         raise FreezeValidationError("阶段 6.4 清单版本错误")
-    if int(manifest.get("analyzed_run_count", -1)) != 28:
-        raise FreezeValidationError("阶段 6.4 必须分析 28 个门控运行")
+    gated_models = {
+        "static_gate",
+        "dynamic_symmetric",
+        "dynamic_directed",
+        "scheme2r",
+    }
+    expected_gated_pairs = {
+        pair for pair in selected_pairs if pair[0] in gated_models
+    }
+    expected_count = sum(
+        4 if model == "scheme2r" else 1
+        for model, _ in expected_gated_pairs
+    )
+    if int(manifest.get("analyzed_run_count", -1)) != expected_count:
+        raise FreezeValidationError(
+            "阶段 6.4 门控运行数与阶段 6.3 入选模型不一致："
+            f"{manifest.get('analyzed_run_count')} != {expected_count}"
+        )
     if manifest.get("missing_runs") not in ([], None):
-        raise FreezeValidationError(f"阶段 6.4 存在缺失运行：{manifest.get('missing_runs')!r}")
+        missing = {str(value) for value in manifest.get("missing_runs")}
+        selected_missing = {
+            f"{model}/{candidate}"
+            for model, candidate in expected_gated_pairs
+            if f"{model}/{candidate}" in missing
+        }
+        if selected_missing:
+            raise FreezeValidationError(
+                "阶段 6.4 缺少阶段 6.3 入选门控运行："
+                f"{sorted(selected_missing)!r}"
+            )
+    analyzed = manifest.get("analyzed_runs")
+    if not isinstance(analyzed, list):
+        raise FreezeValidationError("阶段 6.4 缺少 analyzed_runs 明细")
+    observed: set[tuple[str, str]] = set()
+    scheme2r_steps: set[int] = set()
+    for entry in analyzed:
+        if not isinstance(entry, dict):
+            raise FreezeValidationError("阶段 6.4 analyzed_runs 包含无效记录")
+        model = str(entry.get("model"))
+        candidate = str(entry.get("candidate_id"))
+        if model == "scheme2r" and "_step" in candidate:
+            base_candidate, step_text = candidate.rsplit("_step", 1)
+            observed.add((model, base_candidate))
+            try:
+                scheme2r_steps.add(int(step_text))
+            except ValueError as exc:
+                raise FreezeValidationError(
+                    f"阶段 6.4 Scheme2R 预测步编号无效：{candidate}"
+                ) from exc
+        else:
+            observed.add((model, candidate))
+    if observed != expected_gated_pairs:
+        raise FreezeValidationError(
+            "阶段 6.4 分析的门控候选与阶段 6.3 入选门控候选不一致："
+            f"{sorted(observed)!r} != {sorted(expected_gated_pairs)!r}"
+        )
+    if any(model == "scheme2r" for model, _ in expected_gated_pairs) and scheme2r_steps != {1, 2, 3, 4}:
+        raise FreezeValidationError(
+            f"阶段 6.4 Scheme2R 必须包含 1—4 步门控诊断，实际为 {sorted(scheme2r_steps)!r}"
+        )
     _assert_false(manifest.get("test_set_accessed"), "阶段 6.4 test_set_accessed")
     if not (root / "gate_diagnostics_summary.csv").exists() or not (root / "gate_asymmetry.csv").exists():
         raise FreezeValidationError("阶段 6.4 缺少门控诊断 CSV")
@@ -201,10 +272,16 @@ def _validate_stage6_5(root: Path) -> dict[str, Any]:
     manifest = _read_json(root / "stage6_5_manifest.json")
     if manifest.get("stage") != "6.5" or manifest.get("protocol") != "full":
         raise FreezeValidationError("阶段 6.5 清单不是正式全年协议")
+    if manifest.get("reference_model") != "stl_matched":
+        raise FreezeValidationError("阶段 6.5 必须以结构匹配 stl_matched 为参照")
     if int(manifest.get("gain_row_count", -1)) != 1920 or int(manifest.get("summary_row_count", -1)) != 240:
         raise FreezeValidationError("阶段 6.5 汇总行数不符合正式全年分析")
     if manifest.get("error_metric_for_significance") != "MAE":
         raise FreezeValidationError("阶段 6.5 冻结要求使用 MAE 进行显著性判断")
+    if manifest.get("bootstrap_replicates") != 500 or manifest.get("bootstrap_block_size") != 24:
+        raise FreezeValidationError(
+            "阶段 6.5 必须固定 500 次、24 小时成对移动块 bootstrap"
+        )
     if tuple(manifest.get("bootstrap_granularities", ())) != ("task", "horizon"):
         raise FreezeValidationError(
             "阶段 6.5 主 bootstrap 粒度必须固定为 task,horizon"
@@ -374,7 +451,7 @@ def freeze_stage6(
         for row in stage6_3_selection["selected_rows"]
     }
     small_manifest, small_stability = _validate_small_stage6_3(small_root, selected_pairs)
-    gate_manifest = _validate_stage6_4(gate_root)
+    gate_manifest = _validate_stage6_4(gate_root, selected_pairs)
     transfer_manifest = _validate_stage6_5(transfer_root)
     primary_model = str(primary_row["model"])
     primary_candidate = str(primary_row["candidate_id"])
@@ -474,7 +551,7 @@ def freeze_stage6(
         "decision": {
             "primary_model": f"{primary_model}-{primary_candidate}",
             "comparison_model": f"{comparison_model}-{comparison_candidate}",
-            "reason": "Candidates were ranked by full-validation overall WAPE, then RMSE, parameter count, fit time, model name, and candidate ID as deterministic tie-breakers.",
+            "reason": "Candidates were ranked by full-validation overall equal-task WAPE; candidates within the fixed tolerance were ordered by maximum task WAPE, negative-transfer rate, parameter count, fit time, model name, and candidate ID.",
             "small_sample_role": "robustness_only; the observed rank reversal does not override full-validation selection.",
         },
         "validation_evidence": {

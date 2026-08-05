@@ -260,7 +260,19 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_gate_diagnostics.py
 D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_transfer_analysis.py
 ```
 
-阶段 6 的模型选择只读取训练集和验证集；测试集在阶段 7 前封存，不用于选模型、调超参数或诊断门控行为。
+阶段 6-R 的 Kitakyushu 脚本只加载 2015—2020 年原始数据，并只构造训练/验证窗口；2021 年原始文件在 Stage 6-R 中不读取，测试集在阶段 7 前封存，不用于选模型、调超参数或诊断门控行为。正式运行目录非空时必须显式使用 `--resume`，脚本只跳过通过完整性检查的运行。
+
+阶段 6.4 以阶段 6.3 入选候选为诊断对象，因此需要允许契约外候选缺失：
+
+```powershell
+D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage6_gate_diagnostics.py `
+  --input-dir "frame\reports\stage6r_3_kitakyushu_small" `
+  --output-dir "frame\reports\stage6r_4_kitakyushu" `
+  --dataset kitakyushu_energy_station `
+  --allow-missing
+```
+
+门控诊断数量由阶段 6.3 的入选模型动态决定：Scheme2R 贡献 4 个预测步诊断，其他入选门控模型各贡献 1 个诊断，通常为 5 或 6 个，而不是固定 28 个。
 
 ### 阶段 7.0—7.2：冻结交接、消融接口与 CPU 冒烟（历史工程记录）
 
@@ -349,7 +361,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
 
 ### 阶段 7-R：严格可复现实验（当前唯一正式入口）
 
-当前状态：实现与审计修复已完成，结构匹配 STL 接口、Scheme2R-loads-only 控制、162 项回归测试和统一 `dry-run` 均已通过；正式 Stage 6-R 选择重跑和正式 Stage 7-R 尚未开始。当前工作区未 clean，因此正式训练仍被准入脚本阻断。
+当前状态：实现与审计修复已完成，结构匹配 STL 接口、Scheme2R-loads-only 控制、163 项回归测试和统一 `dry-run` 均已通过；正式 Stage 6-R 选择重跑和正式 Stage 7-R 尚未开始。当前工作区未 clean，因此正式训练仍被准入脚本阻断。
 
 阶段 7-R 保留所有旧结果，不覆盖旧目录。默认最终有效矩阵为 124 条记录：110 条学习型训练、4 条确定性基线和 10 条 A4 复用；实际物化运行目录为 114 条（不重复训练 A4）。新结果统一写入：
 
