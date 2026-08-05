@@ -37,7 +37,12 @@ def build_formal_run_matrix(
 ) -> List[Dict[str, Any]]:
     primary = freeze.get("primary_model")
     comparison = freeze.get("comparison_model")
-    if not isinstance(primary, Mapping) or not isinstance(comparison, Mapping):
+    scheme2r_reference = freeze.get("scheme2r_ablation_reference")
+    if (
+        not isinstance(primary, Mapping)
+        or not isinstance(comparison, Mapping)
+        or not isinstance(scheme2r_reference, Mapping)
+    ):
         raise ValueError("冻结文件缺少主模型或比较模型")
     selected = [primary, comparison]
     rows: List[Dict[str, Any]] = []
@@ -63,13 +68,19 @@ def build_formal_run_matrix(
             for seed in EXPECTED_SEEDS:
                 add("7.3", protocol, model, candidate, seed, "train", "主模型与主要内部对照")
 
-    primary_candidate = str(primary["candidate_id"])
+    scheme2r_candidate = str(scheme2r_reference["candidate_id"])
     for protocol in ("full", "small_sample"):
         for ablation in ("A0", "A1", "A2", "A3"):
             for seed in EXPECTED_SEEDS:
-                add("7.4", protocol, ablation, primary_candidate, seed, "train", "递进消融")
+                add("7.4", protocol, ablation, scheme2r_candidate, seed, "train", "Scheme2R递进消融")
         for seed in EXPECTED_SEEDS:
-            add("7.4", protocol, "A4", primary_candidate, seed, "reuse", "复用 Stage 7.3 主模型，禁止重复训练")
+            a4_execution = "reuse" if str(primary["model"]) == "scheme2r" else "train"
+            a4_reason = (
+                "复用 Scheme2R 主模型，禁止重复训练"
+                if a4_execution == "reuse"
+                else "主模型非 Scheme2R，单独训练 Scheme2R 完整消融模型"
+            )
+            add("7.4", protocol, "A4", scheme2r_candidate, seed, a4_execution, a4_reason)
 
     for protocol in ("full", "small_sample"):
         for model in ("persistence", "seasonal_naive"):
@@ -77,10 +88,20 @@ def build_formal_run_matrix(
         for model in ("dlinear", "mmoe_lite", "softs"):
             for seed in EXPECTED_SEEDS:
                 add("7.5", protocol, model, "external_fixed", seed, "train", "学习型外部基线")
+        for seed in EXPECTED_SEEDS:
+            add(
+                "7.5",
+                protocol,
+                "scheme2r_loads_only",
+                scheme2r_candidate,
+                seed,
+                "train",
+                "与 loads-only 外部基线公平比较的输入控制",
+            )
 
     for seed in EXPECTED_SEEDS:
         for protocol in ("full", "small_sample"):
-            add("7R.STL", protocol, "stl_matched", primary_candidate, seed, "train", "结构匹配单任务参照")
+            add("7R.STL", protocol, "stl_matched", scheme2r_candidate, seed, "train", "Scheme2R结构匹配单任务参照")
 
     fingerprints = set()
     for row in rows:

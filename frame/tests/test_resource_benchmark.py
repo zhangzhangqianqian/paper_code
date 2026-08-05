@@ -25,6 +25,20 @@ class ResourceBenchmarkTests(unittest.TestCase):
         self.assertGreater(result["macs_per_batch_estimated"], 0)
         self.assertGreater(result["cpu_latency_ms_median"], 0.0)
 
+    def test_loads_only_mode_is_supported(self):
+        model = nn.Linear(3, 2)
+
+        class Wrapper(nn.Module):
+            def forward(self, loads):
+                return model(loads)
+
+        result = benchmark_model_resources(
+            Wrapper(), torch.zeros(2, 3), None,
+            warmup=1, iterations=2, input_mode="loads_only"
+        )
+        self.assertEqual(result["input_mode"], "loads_only")
+        self.assertEqual(result["batch_size"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

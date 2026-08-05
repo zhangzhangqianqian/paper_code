@@ -23,6 +23,7 @@ EXPECTED_EXTERNAL_BASELINES = (
     "mmoe_lite",
     "softs",
 )
+EXPECTED_INPUT_CONTROLS = ("scheme2r_loads_only",)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -101,6 +102,11 @@ def validate_stage6_freeze_config(config: Mapping[str, Any]) -> None:
         comparison.get("model"), comparison.get("candidate_id")
     ):
         raise Stage7ContractError("primary_model和comparison_model不能是同一候选")
+    ablation_reference = config.get("scheme2r_ablation_reference")
+    if not isinstance(ablation_reference, Mapping) or ablation_reference.get("model") != "scheme2r":
+        raise Stage7ContractError("缺少 Scheme2R 消融参照")
+    if not isinstance(ablation_reference.get("hyperparameters"), Mapping):
+        raise Stage7ContractError("Scheme2R 消融参照缺少超参数")
     for label, value in (("primary_model.hyperparameters", primary.get("hyperparameters")), ("comparison_model.hyperparameters", comparison.get("hyperparameters"))):
         if not isinstance(value, Mapping) or value.get("candidate_id") is None:
             raise Stage7ContractError(f"{label}缺少有效候选配置")
@@ -121,6 +127,7 @@ def validate_stage6_freeze_config(config: Mapping[str, Any]) -> None:
     _require_equal(tuple(scope.get("protocols", ())), ("full", "small_sample"), "stage7_scope.protocols")
     _require_equal(tuple(scope.get("ablations", ())), EXPECTED_ABLATIONS, "stage7_scope.ablations")
     _require_equal(tuple(scope.get("external_baselines", ())), EXPECTED_EXTERNAL_BASELINES, "stage7_scope.external_baselines")
+    _require_equal(tuple(scope.get("input_controls", ())), EXPECTED_INPUT_CONTROLS, "stage7_scope.input_controls")
     _require_equal(scope.get("test_usage"), "allowed_only_after_stage6_6_freeze", "stage7_scope.test_usage")
 
     policy = config.get("test_set_policy")
@@ -174,6 +181,7 @@ def build_stage7_contract(config: Mapping[str, Any], freeze_path: str | Path) ->
         "models": {
             "primary": config["primary_model"],
             "comparison": config["comparison_model"],
+            "scheme2r_ablation_reference": config["scheme2r_ablation_reference"],
         },
         "training_policy": {
             "device": training["device"],

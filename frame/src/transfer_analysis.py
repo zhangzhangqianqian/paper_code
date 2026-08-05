@@ -44,7 +44,7 @@ def _safe_mape(actual: np.ndarray, prediction: np.ndarray, epsilon: float = 1e-6
     return float(np.mean(np.abs((actual - prediction) / denominator)) * 100.0)
 
 
-def calculate_error_metrics(actual: np.ndarray, prediction: np.ndarray) -> Dict[str, float]:
+def calculate_error_metrics(actual: np.ndarray, prediction: np.ndarray) -> Dict[str, object]:
     """计算一个任务/步长/季节单元的原始量纲误差。"""
 
     y_true = np.asarray(actual, dtype=np.float64)
@@ -54,19 +54,29 @@ def calculate_error_metrics(actual: np.ndarray, prediction: np.ndarray) -> Dict[
     if not np.isfinite(y_true).all() or not np.isfinite(y_pred).all():
         raise ValueError("误差输入不能包含 NaN 或 Inf")
     error = y_true - y_pred
+    denominator = float(np.sum(np.abs(y_true)))
     return {
         "MAE": float(np.mean(np.abs(error))),
         "RMSE": float(np.sqrt(np.mean(error**2))),
-        "WAPE": float(
-            np.sum(np.abs(error)) / max(np.sum(np.abs(y_true)), 1e-6) * 100.0
+        "WAPE": (
+            float(np.sum(np.abs(error)) / denominator * 100.0)
+            if denominator > 1e-6
+            else None
         ),
         "MAPE": _safe_mape(y_true, y_pred),
     }
 
 
-def calculate_gain(reference_error: float, joint_error: float) -> float:
+def calculate_gain(reference_error: object, joint_error: object) -> float:
     """计算 G=(E_STL-E_MTL)/E_STL*100；参照误差过小时返回 NaN。"""
 
+    if reference_error is None or joint_error is None:
+        return float("nan")
+    try:
+        reference_error = float(reference_error)
+        joint_error = float(joint_error)
+    except (TypeError, ValueError):
+        return float("nan")
     if not np.isfinite(reference_error) or not np.isfinite(joint_error):
         return float("nan")
     if abs(reference_error) < 1e-12:
@@ -204,25 +214,44 @@ def _bootstrap_gain_from_arrays(
             ref_values = np.sqrt(np.mean(ref_error**2, axis=axes))
             joint_values = np.sqrt(np.mean(joint_error**2, axis=axes))
         elif metric == "WAPE":
-            ref_values = np.sum(np.abs(ref_error), axis=axes) / np.maximum(
-                np.sum(np.abs(actual_sample), axis=axes), 1e-6
-            ) * 100.0
-            joint_values = np.sum(np.abs(joint_error), axis=axes) / np.maximum(
-                np.sum(np.abs(actual_sample), axis=axes), 1e-6
-            ) * 100.0
+            denominator = np.sum(np.abs(actual_sample), axis=axes)
+            ref_values = np.divide(
+                np.sum(np.abs(ref_error), axis=axes) * 100.0,
+                denominator,
+                out=np.full_like(denominator, np.nan, dtype=np.float64),
+                where=denominator > 1e-6,
+            )
+            joint_values = np.divide(
+                np.sum(np.abs(joint_error), axis=axes) * 100.0,
+                denominator,
+                out=np.full_like(denominator, np.nan, dtype=np.float64),
+                where=denominator > 1e-6,
+            )
         elif metric == "MAPE":
             denominator = np.maximum(np.abs(actual_sample), 1e-6)
             ref_values = np.mean(np.abs(ref_error) / denominator, axis=axes) * 100.0
             joint_values = np.mean(np.abs(joint_error) / denominator, axis=axes) * 100.0
         else:
             raise ValueError(f"不支持的 bootstrap 指标：{metric}")
-        gains[start : start + count] = (ref_values - joint_values) / np.maximum(
-            np.abs(ref_values), 1e-12
-        ) * 100.0
-    p_value = float((1.0 + np.sum(gains >= 0.0)) / (replicates + 1.0))
+        valid = (
+            np.isfinite(ref_values)
+            & np.isfinite(joint_values)
+            & (np.abs(ref_values) > 1e-12)
+        )
+        batch_gains = np.full(count, np.nan, dtype=np.float64)
+        batch_gains[valid] = (
+            (ref_values[valid] - joint_values[valid])
+            / np.abs(ref_values[valid])
+            * 100.0
+        )
+        gains[start : start + count] = batch_gains
+    finite_gains = gains[np.isfinite(gains)]
+    if finite_gains.size == 0:
+        return float("nan"), float("nan"), float("nan")
+    p_value = float((1.0 + np.sum(finite_gains >= 0.0)) / (finite_gains.size + 1.0))
     return (
-        float(np.percentile(gains, 2.5)),
-        float(np.percentile(gains, 97.5)),
+        float(np.percentile(finite_gains, 2.5)),
+        float(np.percentile(finite_gains, 97.5)),
         p_value,
     )
 
@@ -365,10 +394,10 @@ def analyze_transfer(
     input_root: str | Path,
     output_root: str | Path,
     protocol: str,
-    error_metric: str = "WAPE",
+    error_metric: str = "MAE",
     bootstrap_replicates: int = 500,
     bootstrap_block_size: int = 24,
-    bootstrap_granularities: Sequence[str] = ("task",),
+    bootstrap_granularities: Sequence[str] = ("task", "horizon"),
     seed: int = 2026,
     task_names: Sequence[str] = TASKS,
 ) -> Dict[str, object]:

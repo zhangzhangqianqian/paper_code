@@ -55,6 +55,18 @@ def _safe_mape(y_true: np.ndarray, y_pred: np.ndarray, epsilon: float) -> float:
     return float(np.mean(np.abs((y_true - y_pred) / denominator)) * 100.0)
 
 
+def _wape_or_none(error: np.ndarray, actual: np.ndarray, epsilon: float) -> float | None:
+    denominator = float(np.sum(np.abs(actual)))
+    if denominator <= epsilon:
+        return None
+    return float(np.sum(np.abs(error)) / denominator * 100.0)
+
+
+def _mean_metric(values: Sequence[object]) -> float | None:
+    finite = [float(value) for value in values if value is not None and np.isfinite(float(value))]
+    return float(np.mean(finite)) if finite else None
+
+
 def regression_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -81,7 +93,8 @@ def regression_metrics(
         )
 
     errors = actual - forecast
-    task_metrics: Dict[str, Dict[str, float]] = {}
+    task_metrics: Dict[str, Dict[str, object]] = {}
+    task_wape_validity: Dict[str, Dict[str, int]] = {}
     for task_index, task_name in enumerate(task_names):
         task_actual = actual[:, :, task_index]
         task_forecast = forecast[:, :, task_index]
@@ -89,12 +102,12 @@ def regression_metrics(
         task_metrics[task_name] = {
             "MAE": float(np.mean(np.abs(task_error))),
             "RMSE": float(np.sqrt(np.mean(task_error**2))),
-            "WAPE": float(
-                np.sum(np.abs(task_error))
-                / max(np.sum(np.abs(task_actual)), epsilon)
-                * 100.0
-            ),
+            "WAPE": _wape_or_none(task_error, task_actual, epsilon),
             "MAPE": _safe_mape(task_actual, task_forecast, epsilon),
+        }
+        task_wape_validity[task_name] = {
+            "valid_count": int(np.sum(np.abs(task_actual)) > epsilon),
+            "total_count": 1,
         }
 
     metric_names = ("MAE", "RMSE", "WAPE", "MAPE")
@@ -102,7 +115,8 @@ def regression_metrics(
     horizon_task_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
     for horizon_index in range(actual.shape[1]):
         step_name = f"step_{horizon_index + 1}"
-        task_values: Dict[str, Dict[str, float]] = {}
+        task_values: Dict[str, Dict[str, object]] = {}
+        horizon_validity: Dict[str, int] = {}
         for task_index, task_name in enumerate(task_names):
             step_actual = actual[:, horizon_index, task_index]
             step_forecast = forecast[:, horizon_index, task_index]
@@ -110,23 +124,26 @@ def regression_metrics(
             task_values[task_name] = {
                 "MAE": float(np.mean(np.abs(step_error))),
                 "RMSE": float(np.sqrt(np.mean(step_error**2))),
-                "WAPE": float(
-                    np.sum(np.abs(step_error))
-                    / max(np.sum(np.abs(step_actual)), epsilon)
-                    * 100.0
-                ),
+                "WAPE": _wape_or_none(step_error, step_actual, epsilon),
                 "MAPE": _safe_mape(step_actual, step_forecast, epsilon),
             }
+            horizon_validity[task_name] = int(np.sum(np.abs(step_actual)) > epsilon)
         horizon_task_metrics[step_name] = task_values
         horizon_metrics[step_name] = {
-            metric: float(np.mean([values[metric] for values in task_values.values()]))
+            metric: _mean_metric([values[metric] for values in task_values.values()])
             for metric in metric_names
         }
+        horizon_metrics[step_name]["WAPE_valid_count"] = int(sum(horizon_validity.values()))
+        horizon_metrics[step_name]["WAPE_total_count"] = int(len(horizon_validity))
 
     overall = {
-        metric: float(np.mean([values[metric] for values in task_metrics.values()]))
+        metric: _mean_metric([values[metric] for values in task_metrics.values()])
         for metric in metric_names
     }
+    overall["WAPE_valid_count"] = int(
+        sum(value["valid_count"] for value in task_wape_validity.values())
+    )
+    overall["WAPE_total_count"] = int(len(task_wape_validity))
     return {
         "overall_equal_task_mean": overall,
         "per_task": task_metrics,
@@ -134,6 +151,13 @@ def regression_metrics(
         # Kept as an alias for older reports; its semantics are now explicitly
         # equal-task averaging rather than mixing physical units.
         "per_horizon_equal_element_mean": horizon_metrics,
+        "wape_validity": {
+            "per_task": task_wape_validity,
+            "overall": {
+                "valid_count": int(overall["WAPE_valid_count"]),
+                "total_count": int(overall["WAPE_total_count"]),
+            },
+        },
         "sample_count": int(actual.shape[0]),
         "horizon": int(actual.shape[1]),
         "task_count": int(actual.shape[2]),

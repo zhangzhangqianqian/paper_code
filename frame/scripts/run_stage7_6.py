@@ -33,9 +33,6 @@ from src.data_pipeline import save_json  # noqa: E402
 
 TASKS: Tuple[str, ...] = ("electricity", "cooling", "heating", "gas")
 METRICS: Tuple[str, ...] = ("MAE", "RMSE", "WAPE", "MAPE")
-EXPECTED_STAGE_RUNS = {"7.3": 20, "7.4": 40, "7.5": 34, "7R.STL": 10}
-REUSED_A4_RUNS = 10
-EXPECTED_TOTAL_RUNS = 114
 
 
 def _resolve(value: str) -> Path:
@@ -59,8 +56,32 @@ def _write_csv(rows: Sequence[Mapping[str, object]], path: Path) -> None:
         writer.writerows(rows)
 
 
-def build_stage7_6_source_plan() -> Tuple[Dict[str, object], ...]:
-    """Return the three frozen source groups used by Stage 7.6."""
+def _freeze_primary_is_scheme2r(freeze: Mapping[str, object] | None) -> bool:
+    if not isinstance(freeze, Mapping):
+        return True
+    primary = freeze.get("primary_model")
+    return isinstance(primary, Mapping) and str(primary.get("model")) == "scheme2r"
+
+
+def stage7_6_expected_counts(freeze: Mapping[str, object] | None = None) -> Dict[str, int]:
+    """Derive Stage 7.6 counts from the frozen primary model."""
+
+    primary_is_scheme2r = _freeze_primary_is_scheme2r(freeze)
+    return {
+        "7.3": 20,
+        "7.4": 40 if primary_is_scheme2r else 50,
+        "7.5": 44,
+        "7R.STL": 10,
+        "reused_a4": 10 if primary_is_scheme2r else 0,
+    }
+
+
+def build_stage7_6_source_plan(
+    freeze: Mapping[str, object] | None = None,
+) -> Tuple[Dict[str, object], ...]:
+    """Return source groups with counts derived from the freeze."""
+
+    counts = stage7_6_expected_counts(freeze)
 
     return (
         {
@@ -68,38 +89,43 @@ def build_stage7_6_source_plan() -> Tuple[Dict[str, object], ...]:
             "source_group": "main_internal",
             "default_dir": "frame/reports/stage7_3_kitakyushu_formal",
             "manifest": "stage7_3_manifest.json",
-            "expected_runs": 20,
+            "expected_runs": counts["7.3"],
         },
         {
             "stage": "7.4",
             "source_group": "ablation",
             "default_dir": "frame/reports/stage7_4_kitakyushu_formal",
             "manifest": "stage7_4_manifest.json",
-            "expected_runs": 40,
+            "expected_runs": counts["7.4"],
         },
         {
             "stage": "7.5",
             "source_group": "external_baseline",
             "default_dir": "frame/reports/stage7_5_kitakyushu_formal",
             "manifest": "stage7_5_manifest.json",
-            "expected_runs": 34,
+            "expected_runs": counts["7.5"],
         },
         {
             "stage": "7R.STL",
             "source_group": "matched_stl_reference",
             "default_dir": "frame/reports/stage7_stl_reference_kitakyushu_formal",
             "manifest": "stage7r_stl_manifest.json",
-            "expected_runs": 10,
+            "expected_runs": counts["7R.STL"],
         },
     )
 
 
-def _validate_root_manifest(root: Path, stage: str, manifest_name: str | None = None) -> Dict[str, object]:
+def _validate_root_manifest(
+    root: Path,
+    stage: str,
+    expected_runs: int,
+    manifest_name: str | None = None,
+) -> Dict[str, object]:
     manifest_path = root / (manifest_name or f"stage{stage.replace('.', '_')}_manifest.json")
     if not manifest_path.exists():
         raise FileNotFoundError(f"missing Stage {stage} manifest: {manifest_path}")
     manifest = _read_json(manifest_path)
-    expected = EXPECTED_STAGE_RUNS[stage]
+    expected = int(expected_runs)
     if manifest.get("status") != "passed":
         raise ValueError(f"Stage {stage} manifest is not passed: {manifest_path}")
     if manifest.get("run_count_expected") != expected:
@@ -134,7 +160,12 @@ def _validate_run_manifest(run_dir: Path, stage: str) -> Dict[str, object]:
     return manifest
 
 
-def _iter_runs(root: Path, stage: str, source_group: str) -> List[Dict[str, object]]:
+def _iter_runs(
+    root: Path,
+    stage: str,
+    source_group: str,
+    expected_runs: int,
+) -> List[Dict[str, object]]:
     records: List[Dict[str, object]] = []
     for manifest_path in sorted(root.rglob("run_manifest.json")):
         run_dir = manifest_path.parent
@@ -147,7 +178,7 @@ def _iter_runs(root: Path, stage: str, source_group: str) -> List[Dict[str, obje
                 "manifest": manifest,
             }
         )
-    expected = EXPECTED_STAGE_RUNS[stage]
+    expected = int(expected_runs)
     if len(records) != expected:
         raise ValueError(
             f"Stage {stage} run-directory count mismatch: {len(records)} != {expected}"
@@ -172,9 +203,9 @@ def _add_reused_a4_records(
         if str(record["manifest"].get("model")) == primary_model
         and str(record["manifest"].get("candidate_id")) == primary_candidate
     ]
-    if len(selected) != REUSED_A4_RUNS:
+    if len(selected) != 10:
         raise ValueError(
-            f"A4 reuse requires {REUSED_A4_RUNS} Stage 7.3 primary runs, found {len(selected)}"
+            f"A4 reuse requires 10 Stage 7.3 primary runs, found {len(selected)}"
         )
     for record in selected:
         reused_manifest = dict(record["manifest"])
@@ -293,9 +324,13 @@ def _aggregate_metric_rows(rows: Sequence[Mapping[str, object]]) -> List[Dict[st
             "run_count": len(group),
         }
         for metric in METRICS:
-            values = np.asarray([float(row[metric]) for row in group])
-            item[f"{metric}_mean"] = float(values.mean())
-            item[f"{metric}_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
+            values = np.asarray(
+                [float(row[metric]) for row in group if row.get(metric) is not None]
+            )
+            item[f"{metric}_mean"] = float(values.mean()) if len(values) else None
+            item[f"{metric}_std"] = (
+                float(values.std(ddof=1)) if len(values) > 1 else (0.0 if len(values) else None)
+            )
         output.append(item)
     return output
 
@@ -332,6 +367,29 @@ def _resource_rows(records: Sequence[Mapping[str, object]]) -> List[Dict[str, ob
             )
             item[f"{field}_seconds_mean"] = float(values.mean())
             item[f"{field}_seconds_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
+        resource_values = [
+            manifest.get("resource_benchmark")
+            if isinstance(manifest.get("resource_benchmark"), Mapping)
+            else {}
+            for manifest in group
+        ]
+        for field in (
+            "macs_per_batch_estimated",
+            "flops_per_batch_estimated",
+            "cpu_latency_ms_median",
+            "cpu_latency_ms_iqr",
+            "cpu_throughput_samples_per_second",
+            "peak_rss_bytes",
+        ):
+            values = [entry.get(field) for entry in resource_values if entry.get(field) is not None]
+            item[f"{field}_mean"] = (
+                float(np.asarray(values, dtype=np.float64).mean()) if values else None
+            )
+            item[f"{field}_std"] = (
+                float(np.asarray(values, dtype=np.float64).std(ddof=1))
+                if len(values) > 1
+                else (0.0 if values else None)
+            )
         sample_counts = group[0].get("sample_counts", {})
         item.update(
             {
@@ -424,7 +482,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    plan = build_stage7_6_source_plan()
+    freeze = _read_json(_resolve(args.freeze_config))
+    plan = build_stage7_6_source_plan(freeze)
+    expected_counts = stage7_6_expected_counts(freeze)
+    reused_a4_runs = expected_counts["reused_a4"]
+    expected_total_runs = sum(int(item["expected_runs"]) for item in plan) + reused_a4_runs
     if args.dry_run:
         print(
             json.dumps(
@@ -433,8 +495,8 @@ def main() -> None:
                     "status": "dry_run",
                     "source_stages": [item["stage"] for item in plan],
                     "trained_source_runs": sum(int(item["expected_runs"]) for item in plan),
-                    "reused_a4_runs": REUSED_A4_RUNS,
-                    "expected_formal_runs": EXPECTED_TOTAL_RUNS,
+                    "reused_a4_runs": reused_a4_runs,
+                    "expected_formal_runs": expected_total_runs,
                     "outputs": [
                         "raw_result_index.csv",
                         "metrics_by_run.csv",
@@ -457,7 +519,6 @@ def main() -> None:
         "7.5": _resolve(args.stage7_5_dir),
         "7R.STL": _resolve(args.stage7_stl_dir),
     }
-    freeze = _read_json(_resolve(args.freeze_config))
     output_dir = _resolve(args.output_dir)
     manifest_path = output_dir / "stage7_6_manifest.json"
     if manifest_path.exists() and not args.force:
@@ -466,7 +527,10 @@ def main() -> None:
 
     source_manifests = {
         str(item["stage"]): _validate_root_manifest(
-            roots[str(item["stage"])], str(item["stage"]), str(item["manifest"])
+            roots[str(item["stage"])],
+            str(item["stage"]),
+            int(item["expected_runs"]),
+            str(item["manifest"]),
         )
         for item in plan
     }
@@ -474,14 +538,18 @@ def main() -> None:
     stage73_records: List[Dict[str, object]] = []
     for item in plan:
         source_records = _iter_runs(
-            roots[str(item["stage"])], str(item["stage"]), str(item["source_group"])
+            roots[str(item["stage"])],
+            str(item["stage"]),
+            str(item["source_group"]),
+            int(item["expected_runs"]),
         )
         records.extend(source_records)
         if str(item["stage"]) == "7.3":
             stage73_records = source_records
-    _add_reused_a4_records(records, stage73_records, freeze)
-    if len(records) != EXPECTED_TOTAL_RUNS:
-        raise ValueError(f"expected {EXPECTED_TOTAL_RUNS} effective formal runs, found {len(records)}")
+    if reused_a4_runs:
+        _add_reused_a4_records(records, stage73_records, freeze)
+    if len(records) != expected_total_runs:
+        raise ValueError(f"expected {expected_total_runs} effective formal runs, found {len(records)}")
     if any(record["manifest"].get("test_used_for_selection", False) for record in records):
         raise ValueError("a Stage 7 run reports test-set selection")
 

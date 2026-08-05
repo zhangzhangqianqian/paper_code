@@ -388,6 +388,55 @@ class EnhancedStateEncoder(nn.Module):
         return self.summary_projection(summary)
 
 
+class LoadsOnlyStateEncoder(nn.Module):
+    """State encoder used by the Scheme2R loads-only control.
+
+    The control removes all meteorological/calendar inputs.  Its routing state
+    is therefore derived only from the task representations produced by the
+    load-history encoders, rather than from an empty exogenous tensor.
+    """
+
+    def __init__(
+        self,
+        task_count: int,
+        task_repr_dim: int,
+        state_dim: int = 16,
+        hidden_dim: int = 32,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        if task_count <= 1 or task_repr_dim <= 0:
+            raise ValueError("task_count必须大于1且task_repr_dim必须为正整数")
+        if state_dim <= 0 or hidden_dim <= 0:
+            raise ValueError("state_dim和hidden_dim必须为正整数")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError("dropout必须位于[0,1)")
+        self.task_count = int(task_count)
+        self.task_repr_dim = int(task_repr_dim)
+        self.state_dim = int(state_dim)
+        self.summary_projection = nn.Sequential(
+            nn.Linear(task_repr_dim * 2, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, state_dim),
+            nn.GELU(),
+        )
+
+    def forward(self, task_representations: Tensor) -> Tensor:
+        if task_representations.ndim != 3:
+            raise ValueError(
+                "task_representations必须是[batch, task_count, task_repr_dim]"
+            )
+        if tuple(task_representations.shape[1:]) != (
+            self.task_count,
+            self.task_repr_dim,
+        ):
+            raise ValueError("task_representations的任务数或表示维度不匹配")
+        mean_feature = task_representations.mean(dim=1)
+        std_feature = task_representations.std(dim=1, unbiased=False)
+        return self.summary_projection(torch.cat((mean_feature, std_feature), dim=-1))
+
+
 class ForecastStepEmbedding(nn.Module):
     """未来预测步的可学习位置嵌入。"""
 
@@ -1522,8 +1571,8 @@ class Scheme2RModel(nn.Module):
         head_hidden_dim: int = 16,
     ) -> None:
         super().__init__()
-        if exog_dim <= 0:
-            raise ValueError("Scheme2R需要至少一个外生变量")
+        if exog_dim < 0:
+            raise ValueError("Scheme2R的exog_dim不能为负数")
         if task_count <= 1:
             raise ValueError("Scheme2R至少需要两个任务")
         if hidden_dim <= 0 or lookback <= 0 or horizon <= 0:
@@ -1547,12 +1596,23 @@ class Scheme2RModel(nn.Module):
                 for _ in range(task_count)
             ]
         )
-        self.state_encoder = EnhancedStateEncoder(
-            input_dim=exog_dim,
-            state_dim=state_dim,
-            hidden_dim=state_hidden_dim,
-            dropout=dropout,
-        )
+        if exog_dim > 0:
+            self.state_encoder = EnhancedStateEncoder(
+                input_dim=exog_dim,
+                state_dim=state_dim,
+                hidden_dim=state_hidden_dim,
+                dropout=dropout,
+            )
+            self.state_source = "historical_exogenous_summary"
+        else:
+            self.state_encoder = LoadsOnlyStateEncoder(
+                task_count=task_count,
+                task_repr_dim=hidden_dim,
+                state_dim=state_dim,
+                hidden_dim=state_hidden_dim,
+                dropout=dropout,
+            )
+            self.state_source = "load_task_representation_summary"
         self.step_embeddings = ForecastStepEmbedding(
             horizon=horizon,
             embedding_dim=step_embedding_dim,
@@ -1585,7 +1645,7 @@ class Scheme2RModel(nn.Module):
             head_hidden_dim=head_hidden_dim,
         )
 
-    def _validate_inputs(self, loads: Tensor, exog: Tensor) -> None:
+    def _validate_inputs(self, loads: Tensor, exog: Optional[Tensor]) -> None:
         if (
             loads.ndim != 3
             or loads.shape[1] != self.lookback
@@ -1594,8 +1654,19 @@ class Scheme2RModel(nn.Module):
             raise ValueError(
                 f"loads必须是[batch, {self.lookback}, {self.task_count}]"
             )
+        if self.exog_dim == 0:
+            if exog is not None and (
+                exog.ndim != 3
+                or exog.shape[:2] != loads.shape[:2]
+                or exog.shape[-1] != 0
+            ):
+                raise ValueError(
+                    "loads-only Scheme2R 的 exog 必须为 None 或 [batch, lookback, 0]"
+                )
+            return
         if (
-            exog.ndim != 3
+            exog is None
+            or exog.ndim != 3
             or exog.shape[:2] != loads.shape[:2]
             or exog.shape[-1] != self.exog_dim
         ):
@@ -1603,7 +1674,7 @@ class Scheme2RModel(nn.Module):
                 "exog必须是[batch, lookback, exog_dim]且与loads的batch/time一致"
             )
 
-    def encode_tasks(self, loads: Tensor, exog: Tensor) -> Tensor:
+    def encode_tasks(self, loads: Tensor, exog: Optional[Tensor]) -> Tensor:
         """编码所有任务，返回 [batch, task_count, hidden_dim]。"""
 
         self._validate_inputs(loads, exog)
@@ -1613,8 +1684,14 @@ class Scheme2RModel(nn.Module):
         ]
         return torch.stack(representations, dim=1)
 
-    def encode_state(self, exog: Tensor) -> Tensor:
-        if exog.ndim != 3 or exog.shape[-1] != self.exog_dim:
+    def encode_state(
+        self,
+        exog: Optional[Tensor],
+        representations: Tensor,
+    ) -> Tensor:
+        if self.exog_dim == 0:
+            return self.state_encoder(representations)
+        if exog is None or exog.ndim != 3 or exog.shape[-1] != self.exog_dim:
             raise ValueError("exog必须是[batch, time, exog_dim]")
         if exog.shape[1] != self.lookback:
             raise ValueError(f"exog时间维必须为{self.lookback}")
@@ -1623,10 +1700,10 @@ class Scheme2RModel(nn.Module):
     def forward_with_details(
         self,
         loads: Tensor,
-        exog: Tensor,
+        exog: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Dict[str, Tensor]]:
         representations = self.encode_tasks(loads, exog)
-        state = self.encode_state(exog)
+        state = self.encode_state(exog, representations)
         step_embeddings = self.step_embeddings()
         target_embeddings, source_embeddings = self.role_embeddings()
         rho, pi, gates = self.router(
@@ -1653,7 +1730,7 @@ class Scheme2RModel(nn.Module):
         }
         return predictions, details
 
-    def forward(self, loads: Tensor, exog: Tensor) -> Tensor:
+    def forward(self, loads: Tensor, exog: Optional[Tensor] = None) -> Tensor:
         predictions, _ = self.forward_with_details(loads, exog)
         return predictions
 

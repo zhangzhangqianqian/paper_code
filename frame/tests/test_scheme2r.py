@@ -398,6 +398,21 @@ class Scheme2RModelTest(unittest.TestCase):
             )
         )
 
+    def test_scheme2r_loads_only_control_uses_load_state(self) -> None:
+        model = Scheme2RModel(
+            exog_dim=0,
+            task_count=self.task_count,
+            hidden_dim=32,
+            lookback=self.lookback,
+            horizon=4,
+        )
+        prediction, details = model.forward_with_details(self.loads)
+        self.assertEqual(tuple(prediction.shape), (self.batch_size, 4, self.task_count))
+        self.assertEqual(tuple(details["state"].shape), (self.batch_size, 16))
+        self.assertEqual(model.state_source, "load_task_representation_summary")
+        with self.assertRaises(ValueError):
+            model(self.loads, self.exog)
+
     def test_scheme2r_factory_and_lookback_contract(self) -> None:
         model = build_forecasting_model(
             "scheme2r",

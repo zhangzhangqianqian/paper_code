@@ -8,10 +8,11 @@ class FormalRunMatrixTests(unittest.TestCase):
         freeze = {
             "primary_model": {"model": "scheme2r", "candidate_id": "H2"},
             "comparison_model": {"model": "dynamic_symmetric", "candidate_id": "H3"},
+            "scheme2r_ablation_reference": {"model": "scheme2r", "candidate_id": "H2"},
         }
         rows = build_formal_run_matrix(freeze, {})
-        self.assertEqual(len(rows), 114)
-        self.assertEqual(sum(row["execution"] == "train" for row in rows), 100)
+        self.assertEqual(len(rows), 124)
+        self.assertEqual(sum(row["execution"] == "train" for row in rows), 110)
         self.assertEqual(sum(row["execution"] == "reuse" for row in rows), 10)
         self.assertEqual(sum(row["execution"] == "deterministic" for row in rows), 4)
         fingerprints = {
@@ -21,6 +22,7 @@ class FormalRunMatrixTests(unittest.TestCase):
         self.assertEqual(len(fingerprints), len(rows))
         self.assertEqual(sum(row["model"] == "A4" for row in rows), 10)
         self.assertEqual(sum(row["model"] == "stl_matched" for row in rows), 10)
+        self.assertEqual(sum(row["model"] == "scheme2r_loads_only" for row in rows), 10)
 
 
 if __name__ == "__main__":

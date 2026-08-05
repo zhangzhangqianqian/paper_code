@@ -25,6 +25,12 @@ class TransferAnalysisTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["WAPE"], 20.0)
         self.assertAlmostEqual(metrics["MAPE"], 20.0)
 
+    def test_zero_denominator_wape_is_missing(self):
+        actual = np.zeros((8, 1), dtype=np.float64)
+        prediction = np.ones_like(actual)
+        metrics = calculate_error_metrics(actual, prediction)
+        self.assertIsNone(metrics["WAPE"])
+
     def test_moving_block_bootstrap_preserves_local_successors(self):
         indices = _moving_block_indices(
             n=12,

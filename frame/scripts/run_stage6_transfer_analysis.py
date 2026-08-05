@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--error-metric",
         choices=METRICS,
-        default="WAPE",
+        default="MAE",
         help="用于显著负迁移bootstrap判定的主要误差指标",
     )
     parser.add_argument(
@@ -73,8 +73,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bootstrap-granularities",
-        default="task",
-        help="进行显著性bootstrap的粒度，逗号分隔：task,horizon,season_horizon",
+        default="task,horizon",
+        help="进行显著性bootstrap的粒度，逗号分隔：task,horizon,season_horizon；正式主检验固定为task,horizon",
     )
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument(

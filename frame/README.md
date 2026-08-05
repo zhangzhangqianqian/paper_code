@@ -1,6 +1,6 @@
 # 多能源负荷预测算法框架
 
-本目录的当前实现、方案 2-R 优化及后续阶段安排统一以 `plan/Methodology与算法框架-分阶段执行计划.md` 为准。旧版阶段 7 已完成 104 次运行与汇总，但由于随机种子未覆盖模型初始化，旧结果仅保留为 `legacy_non_strict_seed_control` 工程记录。完成新的 Stage 6-R 冻结后，将使用阶段 7-R 在独立目录重跑 114 条有效结果，并补充结构匹配 STL。
+本目录的当前实现、方案 2-R 优化及后续阶段安排统一以 `plan/Methodology与算法框架-分阶段执行计划.md` 为准。旧版阶段 7 已完成 104 次运行与汇总，但由于随机种子未覆盖模型初始化，旧结果仅保留为 `legacy_non_strict_seed_control` 工程记录。完成新的 Stage 6-R 冻结后，将使用阶段 7-R 在独立目录重跑默认 124 条有效记录（其中 114 条实际物化运行、10 条 A4 复用），并补充结构匹配 STL 与 Scheme2R-loads-only 控制。
 
 ## 当前数据集：Kitakyushu Energy Station Data
 
@@ -314,7 +314,7 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
 
 ### 历史阶段 7.5：外部基线（legacy，不得作为论文结果）
 
-旧阶段 7.5 的 34 次运行同样只保留为工程追溯。修复后的阶段 7-R 会重新按严格随机种子和新契约运行这些外部基线。
+旧阶段 7.5 的 34 次运行同样只保留为工程追溯。修复后的阶段 7-R 会重新按严格随机种子和新契约运行 44 条记录：4 条确定性基线、30 条外部学习基线，以及 10 条 Scheme2R-loads-only 公平输入控制。
 
 ```powershell
 & $py frame\scripts\run_stage7_5.py --dry-run
@@ -328,17 +328,17 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
   --output-dir "frame\reports\stage7_5_kitakyushu_formal"
 ```
 
-脚本不接受样本上限或冒烟 epoch 参数，逐运行保存指标、预测和训练模型文件，并在根目录生成 `external_runs.csv`、`external_summary_mean_std.csv` 和 `stage7_5_manifest.json`。34 次正式运行已经全部成功，结果位于 `frame/reports/stage7_5_kitakyushu_formal`。下一步是阶段 7.6 统一汇总与阶段 7 验收。
+脚本不接受样本上限或冒烟 epoch 参数，逐运行保存指标、预测和训练模型文件，并在根目录生成 `external_runs.csv`、`external_summary_mean_std.csv` 和 `stage7_5_manifest.json`。修复后的正式计划为 44 次运行，结果位于 `frame/reports/stage7_5_kitakyushu_formal`。下一步是阶段 7.6 统一汇总与阶段 7 验收。
 
 ### 历史阶段 7.6：统一汇总（legacy，不得作为论文结果）
 
-旧阶段 7.6 只汇总旧版 104 次运行，不能与修复后结果混合。修复后的汇总必须读取阶段 7-R 的四个来源：7.3（20）、7.4 训练（40）、7.5（34）和结构匹配 STL（10），并为 A4 追加 10 条复用记录，最终得到 114 条有效记录。
+旧阶段 7.6 只汇总旧版 104 次运行，不能与修复后结果混合。修复后的汇总必须读取阶段 7-R 的四个来源：7.3（20）、7.4 训练（40）、7.5（44）和结构匹配 STL（10），并在 Scheme2R 为主模型时为 A4 追加 10 条复用记录，默认最终得到 124 条有效记录。
 
 ```powershell
 & $py frame\scripts\run_stage7_6.py --dry-run
 ```
 
-确认三个源阶段均为 `passed` 后运行：
+确认四个源阶段均为 `passed` 后运行：
 
 ```powershell
 & $py frame\scripts\run_stage7_6.py `
@@ -349,9 +349,9 @@ D:\anaconda\envs\pytorch\python.exe frame\scripts\run_stage7_3.py `
 
 ### 阶段 7-R：严格可复现实验（当前唯一正式入口）
 
-当前状态：实现与审计修复已完成，结构匹配 STL 接口、156 项回归测试和统一 `dry-run` 均已通过；正式 Stage 6-R 选择重跑和正式 Stage 7-R 尚未开始。当前工作区未 clean，因此正式训练仍被准入脚本阻断。
+当前状态：实现与审计修复已完成，结构匹配 STL 接口、Scheme2R-loads-only 控制、162 项回归测试和统一 `dry-run` 均已通过；正式 Stage 6-R 选择重跑和正式 Stage 7-R 尚未开始。当前工作区未 clean，因此正式训练仍被准入脚本阻断。
 
-阶段 7-R 保留所有旧结果，不覆盖旧目录。最终有效矩阵为 114 条记录：100 条学习型训练、4 条确定性基线和 10 条 A4 复用；实际物化运行目录为 104 条（不重复训练 A4）。新结果统一写入：
+阶段 7-R 保留所有旧结果，不覆盖旧目录。默认最终有效矩阵为 124 条记录：110 条学习型训练、4 条确定性基线和 10 条 A4 复用；实际物化运行目录为 114 条（不重复训练 A4）。新结果统一写入：
 
 ```text
 frame/reports/stage7r_kitakyushu_reproducible/
@@ -368,7 +368,7 @@ frame/reports/stage7r_kitakyushu_reproducible/
   --force
 ```
 
-然后检查完整的 114 条有效计划：
+然后检查完整的默认 124 条有效计划：
 
 ```powershell
 & $py frame\scripts\run_stage7r_reproducible.py --dry-run
@@ -394,4 +394,4 @@ frame/reports/stage7r_kitakyushu_reproducible/
 & $py frame\scripts\run_stage7r_acceptance.py
 ```
 
-只有 `stage7r_acceptance_manifest.json` 显示 `status=passed`、`formal_run_count=114` 和 `strict_seed_control=true` 后，阶段 7-R 才算完成。
+兼容性验收脚本只汇总 114 条“实际物化运行”，因此其 `stage7r_acceptance_manifest.json` 应显示 `status=passed`、`formal_run_count=114` 和 `strict_seed_control=true`。最终论文汇总仍须运行规范的 Stage 7.6；在 Scheme2R 主模型且 A4 可复用时，Stage 7.6 的有效矩阵为 124 条（114 条物化运行 + 10 条 A4 复用）。

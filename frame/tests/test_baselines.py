@@ -58,6 +58,18 @@ class BaselineTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["overall_equal_task_mean"]["WAPE"], 20.0)
         self.assertAlmostEqual(metrics["overall_equal_task_mean"]["MAPE"], 20.0)
 
+    def test_zero_denominator_wape_is_missing_not_huge(self):
+        actual = np.zeros((2, 4, 2), dtype=np.float32)
+        prediction = np.ones_like(actual)
+        metrics = regression_metrics(
+            actual,
+            prediction,
+            task_names=("cooling", "heating"),
+        )
+        self.assertIsNone(metrics["per_task"]["cooling"]["WAPE"])
+        self.assertEqual(metrics["overall_equal_task_mean"]["WAPE_valid_count"], 0)
+        self.assertIsNone(metrics["overall_equal_task_mean"]["WAPE"])
+
     def test_metrics_accept_four_task_names(self):
         actual = np.ones((2, 4, 4), dtype=np.float32)
         prediction = np.zeros_like(actual)

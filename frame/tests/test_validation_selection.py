@@ -191,6 +191,31 @@ class ValidationSelectionTest(unittest.TestCase):
                 {"scheme2r": ["H4"], "dynamic_symmetric": ["H3"]},
             )
 
+    def test_stage6_3_selection_adds_scheme2r_when_absent_from_top_two(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fieldnames = ["model", "candidate_id", "WAPE"]
+            rows = [
+                {"model": "stl_matched", "candidate_id": "H1", "WAPE": "1.0"},
+                {"model": "hard_share", "candidate_id": "H2", "WAPE": "2.0"},
+                {"model": "scheme2r", "candidate_id": "H4", "WAPE": "9.0"},
+                {"model": "dynamic_symmetric", "candidate_id": "H3", "WAPE": "10.0"},
+                {"model": "dynamic_directed", "candidate_id": "H1", "WAPE": "11.0"},
+                {"model": "static_gate", "candidate_id": "H1", "WAPE": "12.0"},
+            ]
+            with (root / "validation_model_comparison.csv").open(
+                "w", encoding="utf-8-sig", newline=""
+            ) as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            selection = select_stage6_3_candidates(root)
+            self.assertEqual(
+                selection["models"], ("stl_matched", "hard_share", "scheme2r")
+            )
+            self.assertEqual(len(selection["selected_rows"]), 3)
+
     def test_stability_comparison_accepts_selected_subset(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

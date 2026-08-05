@@ -11,7 +11,10 @@ class Stage7ContractTest(unittest.TestCase):
         path = Path(__file__).resolve().parents[2] / "frame" / "reports" / "stage6_6_kitakyushu" / "stage6_selected_config.json"
         if not path.exists():
             self.skipTest("阶段 6.6 冻结配置尚未生成")
-        return json.loads(path.read_text(encoding="utf-8")), path
+        config = json.loads(path.read_text(encoding="utf-8"))
+        if "scheme2r_ablation_reference" not in config:
+            self.skipTest("当前冻结配置为旧版，等待 Stage 6-R 重新生成")
+        return config, path
 
     def test_build_contract_uses_frozen_models_and_seeds(self):
         config, path = self._freeze_config()
@@ -49,4 +52,3 @@ class Stage7ContractTest(unittest.TestCase):
             self.assertEqual(report["stage"], "7.0")
             self.assertTrue(contract_path.exists())
             self.assertTrue(report_path.exists())
-

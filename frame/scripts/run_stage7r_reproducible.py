@@ -41,7 +41,19 @@ def _read_json(path: Path) -> Dict[str, object]:
     return value
 
 
-def build_revision_plan() -> Tuple[Dict[str, object], ...]:
+def _primary_is_scheme2r(freeze: Mapping[str, object] | None) -> bool:
+    if not isinstance(freeze, Mapping):
+        return True
+    primary = freeze.get("primary_model")
+    return isinstance(primary, Mapping) and primary.get("model") == "scheme2r"
+
+
+def build_revision_plan(
+    freeze: Mapping[str, object] | None = None,
+) -> Tuple[Dict[str, object], ...]:
+    """Build materialized child groups from the frozen primary model."""
+
+    include_a4 = not _primary_is_scheme2r(freeze)
     return (
         {
             "group": "stage7_3",
@@ -53,7 +65,7 @@ def build_revision_plan() -> Tuple[Dict[str, object], ...]:
             "group": "stage7_4",
             "script": "run_stage7_4.py",
             "manifest": "stage7_4_manifest.json",
-            "run_count": len(build_ablation_run_plan(include_a4=False)),
+            "run_count": len(build_ablation_run_plan(include_a4=include_a4)),
         },
         {
             "group": "stage7_5",
@@ -76,25 +88,28 @@ def _validate_contract(contract: Mapping[str, object]) -> None:
     if contract.get("dataset") != "kitakyushu_energy_station":
         raise ValueError("Stage 7-R is frozen for Kitakyushu Energy Station")
     matrix = contract.get("run_matrix")
-    expected_matrix = {
-        "stage7_3_main_internal": 20,
-        "stage7_4_ablations": 40,
-        "stage7_5_external": 34,
-        "stage7r_matched_stl": 10,
-        "formal_run_count": 114,
-        "materialized_run_count": 104,
-        "trained_run_count": 100,
-        "reused_a4_run_count": 10,
-        "deterministic_run_count": 4,
-    }
-    if not isinstance(matrix, Mapping) or any(
-        matrix.get(key) != value for key, value in expected_matrix.items()
-    ):
-        raise ValueError(
-            "Stage 7-R contract run matrix must be "
-            "20/40/34/10 with 114 effective, 104 materialized, "
-            "100 trained, 10 reused A4 and 4 deterministic runs"
-        )
+    if not isinstance(matrix, Mapping):
+        raise ValueError("Stage 7-R contract run matrix is missing")
+    if matrix.get("stage7_3_main_internal") != 20:
+        raise ValueError("Stage 7-R Stage 7.3 must contain 20 runs")
+    if matrix.get("stage7_5_external") != 44:
+        raise ValueError("Stage 7-R Stage 7.5 must contain 44 runs including loads-only control")
+    if matrix.get("stage7r_matched_stl") != 10:
+        raise ValueError("Stage 7-R matched STL must contain 10 runs")
+    stage7_4 = matrix.get("stage7_4_ablations")
+    if stage7_4 not in (40, 50):
+        raise ValueError("Stage 7-R Stage 7.4 must contain 40 or 50 runs")
+    materialized = 20 + int(stage7_4) + 44 + 10
+    reused = int(matrix.get("reused_a4_run_count", -1))
+    formal = int(matrix.get("formal_run_count", -1))
+    if int(matrix.get("materialized_run_count", -1)) != materialized:
+        raise ValueError("Stage 7-R materialized run count is inconsistent")
+    if formal != materialized + reused:
+        raise ValueError("Stage 7-R effective run count is inconsistent")
+    if int(matrix.get("deterministic_run_count", -1)) != 4:
+        raise ValueError("Stage 7-R deterministic run count must be 4")
+    if int(matrix.get("trained_run_count", -1)) != materialized - 4:
+        raise ValueError("Stage 7-R trained run count is inconsistent")
     seed_control = contract.get("seed_control")
     if not isinstance(seed_control, Mapping) or not all(seed_control.values()):
         raise ValueError("Stage 7-R strict seed controls are incomplete")
@@ -139,10 +154,27 @@ def main() -> None:
     contract_path = _resolve(args.revision_contract)
     contract = _read_json(contract_path)
     _validate_contract(contract)
-    plan = build_revision_plan()
+    freeze = _read_json(_resolve(args.freeze_config))
+    plan = build_revision_plan(freeze)
     run_count = sum(int(item["run_count"]) for item in plan)
-    if run_count != 104:
-        raise ValueError(f"Stage 7-R materialized plan must contain 104 runs, found {run_count}")
+    primary_is_scheme2r = _primary_is_scheme2r(freeze)
+    reused_a4 = 10 if primary_is_scheme2r else 0
+    formal_run_count = run_count + reused_a4
+    trained_run_count = run_count - 4
+    matrix = contract["run_matrix"]
+    expected_stage7_4 = next(
+        int(item["run_count"]) for item in plan if item["group"] == "stage7_4"
+    )
+    if (
+        matrix.get("stage7_4_ablations") != expected_stage7_4
+        or matrix.get("materialized_run_count") != run_count
+        or matrix.get("formal_run_count") != formal_run_count
+        or matrix.get("trained_run_count") != trained_run_count
+        or matrix.get("reused_a4_run_count") != reused_a4
+    ):
+        raise ValueError(
+            "Stage 7-R revision contract does not match the supplied Stage 6 freeze"
+        )
     output_root = _resolve(args.output_root)
 
     commands: List[Dict[str, object]] = []
@@ -179,11 +211,11 @@ def main() -> None:
                     "stage": "7-R",
                     "revision_version": REVISION_VERSION,
                     "status": "dry_run",
-                    "formal_run_count": 114,
+                    "formal_run_count": formal_run_count,
                     "materialized_run_count": run_count,
-                    "trained_run_count": 100,
+                    "trained_run_count": trained_run_count,
                     "deterministic_run_count": 4,
-                    "reused_a4_run_count": 10,
+                    "reused_a4_run_count": reused_a4,
                     "legacy_results_preserved": True,
                     "output_root": str(output_root),
                     "groups": commands,
@@ -257,7 +289,10 @@ def main() -> None:
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "revision_contract": str(contract_path),
         "output_root": str(output_root),
-        "formal_run_count_expected": 114,
+        "formal_run_count_expected": formal_run_count,
+        "materialized_run_count_expected": run_count,
+        "trained_run_count_expected": trained_run_count,
+        "reused_a4_run_count_expected": reused_a4,
         "completed_groups": completed_groups,
         "failed_group": failed_group,
         "legacy_results_preserved": True,

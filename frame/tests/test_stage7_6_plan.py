@@ -19,9 +19,19 @@ class Stage76PlanTests(unittest.TestCase):
     def test_source_plan_tracks_trained_runs_and_reused_a4(self):
         plan = self.module["build_stage7_6_source_plan"]()
         self.assertEqual([item["stage"] for item in plan], ["7.3", "7.4", "7.5", "7R.STL"])
-        self.assertEqual(sum(item["expected_runs"] for item in plan), 104)
-        self.assertEqual(self.module["REUSED_A4_RUNS"], 10)
-        self.assertEqual(self.module["EXPECTED_TOTAL_RUNS"], 114)
+        self.assertEqual(sum(item["expected_runs"] for item in plan), 114)
+        self.assertEqual(self.module["stage7_6_expected_counts"]()["reused_a4"], 10)
+        self.assertEqual(
+            sum(item["expected_runs"] for item in plan)
+            + self.module["stage7_6_expected_counts"]()["reused_a4"],
+            124,
+        )
+
+    def test_non_scheme2r_freeze_trains_a4_instead_of_reusing(self):
+        freeze = {"primary_model": {"model": "dynamic_directed"}}
+        counts = self.module["stage7_6_expected_counts"](freeze)
+        self.assertEqual(counts["7.4"], 50)
+        self.assertEqual(counts["reused_a4"], 0)
 
 
 if __name__ == "__main__":

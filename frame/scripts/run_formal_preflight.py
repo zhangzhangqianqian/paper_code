@@ -39,14 +39,14 @@ def _check_stage6r_smoke(smoke_root: Path) -> Dict[str, Any]:
     """Validate the four short smoke outputs without touching training data."""
 
     expectations = {
-        "stage6r_2_smoke": ("stage6_2_manifest.json", "candidate_run_count", 24),
-        "stage6r_3_smoke": ("stage6_3_manifest.json", "candidate_run_count", 2),
-        "stage6r_4_smoke": ("stage6_4_manifest.json", "analyzed_run_count", 1),
-        "stage6r_5_smoke": ("stage6_5_manifest.json", "summary_row_count", 1),
+        "stage6r_2_smoke": ("stage6_2_manifest.json", "candidate_run_count", {24}),
+        "stage6r_3_smoke": ("stage6_3_manifest.json", "candidate_run_count", {2, 3}),
+        "stage6r_4_smoke": ("stage6_4_manifest.json", "analyzed_run_count", None),
+        "stage6r_5_smoke": ("stage6_5_manifest.json", "summary_row_count", None),
     }
     entries: Dict[str, Any] = {}
     passed = True
-    for name, (manifest_name, count_key, minimum) in expectations.items():
+    for name, (manifest_name, count_key, allowed_counts) in expectations.items():
         root = smoke_root / name
         manifest_path = root / manifest_name
         entry: Dict[str, Any] = {
@@ -81,10 +81,17 @@ def _check_stage6r_smoke(smoke_root: Path) -> Dict[str, Any]:
                 "forbidden_test_artifacts": forbidden,
             }
         )
+        count_ok = (
+            isinstance(count, int)
+            and (
+                count in allowed_counts
+                if allowed_counts is not None
+                else count >= 1
+            )
+        )
         entry["status"] = (
             "pass"
-            if isinstance(count, int)
-            and count >= minimum
+            if count_ok
             and test_accessed is False
             and not forbidden
             else "failed"
@@ -121,16 +128,30 @@ def run_preflight(
         "Weather data.zip",
     ):
         checks["required_zip_files"].append({"name": name, "exists": (data_dir / name).is_file()})
-    if freeze is not None:
-        rows = build_formal_run_matrix(freeze, {"contract": "stage7.0"})
-        checks["matrix"] = {
-            "status": "pass",
-            "effective_runs": len(rows),
-            "duplicate_count": len(rows) - len({
-                (r["stage"], r["protocol"], r["model"], r["candidate_id"], r["seed"], r["execution"])
-                for r in rows
-            }),
-        }
+    # Stage 6-R creates the freeze; an old freeze must not be used to
+    # validate or block the Stage 6-R run.  Matrix validation belongs to the
+    # post-freeze Stage 7-R preflight.
+    if phase == "stage6r":
+        checks["matrix"] = "not_required"
+    elif freeze is not None:
+        try:
+            rows = build_formal_run_matrix(freeze, {"contract": "stage7.0"})
+            checks["matrix"] = {
+                "status": "pass",
+                "effective_runs": len(rows),
+                "duplicate_count": len(rows) - len({
+                    (r["stage"], r["protocol"], r["model"], r["candidate_id"], r["seed"], r["execution"])
+                    for r in rows
+                }),
+            }
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            # A legacy or incomplete freeze must block formal training without
+            # crashing preflight; report why a fresh Stage 6-R freeze is needed.
+            checks["matrix"] = {
+                "status": "failed",
+                "error": str(exc),
+                "duplicate_count": None,
+            }
     if phase == "stage7r":
         if stage7_contract_path is None or not stage7_contract_path.exists():
             checks["stage7_contract"] = "missing"
@@ -162,8 +183,9 @@ def run_preflight(
     stage7_ready = bool(
         stage6_data_ready
         and checks["freeze_present"]
-        and checks["matrix"] != "pending"
-        and checks["matrix"]["duplicate_count"] == 0
+        and isinstance(checks["matrix"], dict)
+        and checks["matrix"].get("status") == "pass"
+        and checks["matrix"].get("duplicate_count") == 0
         and checks["stage7_contract"] == "pass"
     )
     checks["phase"] = phase
@@ -197,7 +219,11 @@ def main() -> None:
     print(json.dumps(checks, ensure_ascii=False, indent=2))
     if checks["formal_training_allowed"]:
         return
-    print("formal_training_allowed=false; do not start Stage 6-R", file=sys.stderr)
+    blocked_phase = "Stage 6-R" if args.phase == "stage6r" else "Stage 7-R"
+    print(
+        f"formal_training_allowed=false; do not start {blocked_phase}",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 
 

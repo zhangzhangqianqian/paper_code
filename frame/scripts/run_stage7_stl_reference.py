@@ -453,8 +453,11 @@ def main() -> None:
         protocol_stats[protocol] = stats
         stats.save(output_dir / protocol / "normalization_stats.npz")
 
-    hyperparameters = freeze["primary_model"]["hyperparameters"]
-    primary_candidate = str(freeze["primary_model"]["candidate_id"])
+    scheme2r_reference = freeze.get("scheme2r_ablation_reference")
+    if not isinstance(scheme2r_reference, Mapping):
+        raise ValueError("Stage 7-R STL requires the frozen Scheme2R ablation reference")
+    hyperparameters = scheme2r_reference["hyperparameters"]
+    primary_candidate = str(scheme2r_reference["candidate_id"])
     plan = tuple(
         {**run, "candidate_id": primary_candidate}
         for run in plan
@@ -560,7 +563,7 @@ def main() -> None:
         "formal_training": True,
         "test_set_accessed": True,
         "test_used_for_selection": False,
-        "selection_source": "stage6.6_frozen_primary_candidate_structure_only",
+        "selection_source": "stage6.6_frozen_scheme2r_ablation_reference_structure_only",
         "reference_purpose": "task-level negative-transfer measurement",
         "reproducibility_revision": "stage7R.1",
         "strict_seed_control": True,

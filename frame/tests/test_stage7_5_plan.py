@@ -16,21 +16,23 @@ class Stage75PlanTests(unittest.TestCase):
     def setUpClass(cls):
         cls.module = runpy.run_path(str(SCRIPT), run_name="stage7_5_test_module")
 
-    def test_frozen_plan_has_34_runs(self):
+    def test_frozen_plan_has_44_runs(self):
         plan = self.module["build_external_run_plan"]()
-        self.assertEqual(len(plan), 34)
+        self.assertEqual(len(plan), 44)
         deterministic = [row for row in plan if row["seed"] is None]
         learned = [row for row in plan if row["seed"] is not None]
         self.assertEqual(len(deterministic), 4)
-        self.assertEqual(len(learned), 30)
+        self.assertEqual(len(learned), 40)
         self.assertEqual(
             {row["model"] for row in deterministic},
             {"persistence", "seasonal_naive"},
         )
         self.assertEqual(
             {row["model"] for row in learned},
-            {"dlinear", "mmoe-lite", "softs"},
+            {"dlinear", "mmoe-lite", "softs", "scheme2r_loads_only"},
         )
+        controls = [row for row in learned if row["model"] == "scheme2r_loads_only"]
+        self.assertEqual(len(controls), 10)
         self.assertEqual(
             {row["protocol"] for row in plan}, {"full", "small_sample"}
         )

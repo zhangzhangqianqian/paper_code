@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .stage6_contract import Stage6SelectionContract, load_stage6_selection_contract
+from .validation_selection import select_stage6_3_candidates
 
 
 class FreezeValidationError(ValueError):
@@ -102,9 +103,34 @@ def _validate_full_stage6_2(
         if row.get("stage") != "6.2" or row.get("protocol") != "full":
             raise FreezeValidationError(f"阶段 6.2 存在非正式运行：{row.get('_path')}")
         _assert_false(row.get("test_set_accessed"), f"{row.get('_path')} test_set_accessed")
-        trainer = row.get("trainer_config") or {}
-        if trainer.get("max_epochs") != 100 or trainer.get("early_stopping_patience") != 12:
-            raise FreezeValidationError(f"阶段 6.2 存在冒烟训练限制：{row.get('_path')}")
+        if str(row.get("model")) == "stl_matched":
+            checkpoints = row.get("best_checkpoints")
+            expected_tasks = tuple(str(value) for value in contract.raw.get("tasks", ()))
+            if not isinstance(checkpoints, dict) or set(checkpoints) != set(expected_tasks):
+                raise FreezeValidationError(
+                    f"结构匹配 STL 缺少四任务独立检查点：{row.get('_path')}"
+                )
+            run_dir = Path(str(row["_path"])).parent
+            for task_name in expected_tasks:
+                task_checkpoint = checkpoints.get(task_name)
+                if not isinstance(task_checkpoint, dict):
+                    raise FreezeValidationError(
+                        f"结构匹配 STL 的 {task_name} 检查点记录无效：{row.get('_path')}"
+                    )
+                trainer = task_checkpoint.get("trainer_config") or {}
+                if trainer.get("max_epochs") != 100 or trainer.get("early_stopping_patience") != 12:
+                    raise FreezeValidationError(
+                        f"结构匹配 STL 的 {task_name} 存在冒烟训练限制：{row.get('_path')}"
+                    )
+                checkpoint_file = task_checkpoint.get("file")
+                if not checkpoint_file or not (run_dir / str(checkpoint_file)).is_file():
+                    raise FreezeValidationError(
+                        f"结构匹配 STL 的 {task_name} 检查点文件缺失：{row.get('_path')}"
+                    )
+        else:
+            trainer = row.get("trainer_config") or {}
+            if trainer.get("max_epochs") != 100 or trainer.get("early_stopping_patience") != 12:
+                raise FreezeValidationError(f"阶段 6.2 存在冒烟训练限制：{row.get('_path')}")
         sample_counts = row.get("sample_counts") or {}
         if sample_counts.get("train") != FULL_TRAIN_SAMPLES or sample_counts.get("validation") != FULL_VALIDATION_SAMPLES:
             raise FreezeValidationError(f"阶段 6.2 单次运行样本数异常：{row.get('_path')}")
@@ -131,8 +157,9 @@ def _validate_small_stage6_3(
     manifest = _read_json(root / "stage6_3_manifest.json")
     if manifest.get("stage") != "6.3" or manifest.get("protocol") != "small_sample":
         raise FreezeValidationError("阶段 6.3 清单不是正式小样本协议")
-    if int(manifest.get("candidate_run_count", -1)) != 2:
-        raise FreezeValidationError("阶段 6.3 必须包含 2 个正式运行")
+    candidate_run_count = int(manifest.get("candidate_run_count", -1))
+    if candidate_run_count not in {2, 3}:
+        raise FreezeValidationError("阶段 6.3 必须包含 2 或 3 个正式运行")
     _assert_false(manifest.get("test_set_accessed"), "阶段 6.3 test_set_accessed")
     counts = manifest.get("sample_counts") or {}
     if counts.get("train") != SMALL_TRAIN_SAMPLES or counts.get("validation") != SMALL_VALIDATION_SAMPLES:
@@ -141,6 +168,10 @@ def _validate_small_stage6_3(
         (str(row.get("model")), str(row.get("candidate_id")))
         for row in _metric_rows(root)
     }
+    if len(actual_models) != candidate_run_count:
+        raise FreezeValidationError(
+            f"阶段 6.3 manifest 运行数与指标文件不一致：{candidate_run_count} != {len(actual_models)}"
+        )
     if actual_models != expected_pairs:
         raise FreezeValidationError(
             f"阶段 6.3 候选集合异常：{sorted(actual_models)!r}，期望 {sorted(expected_pairs)!r}"
@@ -174,6 +205,10 @@ def _validate_stage6_5(root: Path) -> dict[str, Any]:
         raise FreezeValidationError("阶段 6.5 汇总行数不符合正式全年分析")
     if manifest.get("error_metric_for_significance") != "MAE":
         raise FreezeValidationError("阶段 6.5 冻结要求使用 MAE 进行显著性判断")
+    if tuple(manifest.get("bootstrap_granularities", ())) != ("task", "horizon"):
+        raise FreezeValidationError(
+            "阶段 6.5 主 bootstrap 粒度必须固定为 task,horizon"
+        )
     _assert_false(manifest.get("test_set_accessed"), "阶段 6.5 test_set_accessed")
     if not (root / "transfer_gains.csv").exists() or not (root / "negative_transfer_summary.csv").exists():
         raise FreezeValidationError("阶段 6.5 缺少迁移分析 CSV")
@@ -318,13 +353,25 @@ def freeze_stage6(
     full_manifest, full_metrics = _validate_full_stage6_2(full_root, contract)
     comparison_rows = _read_csv(full_root / "validation_model_comparison.csv")
     ranked_candidates = _rank_full_candidates(comparison_rows, contract)
-    if len(ranked_candidates) < 2:
-        raise FreezeValidationError("阶段 6.2 至少需要两个合法候选才能冻结主模型和比较模型")
+    if len({str(row["model"]) for row in ranked_candidates}) < 2:
+        raise FreezeValidationError("阶段 6.2 至少需要两个不同模型才能冻结主模型和比较模型")
     primary_row = ranked_candidates[0]
-    comparison_row = ranked_candidates[1]
+    comparison_row = next(
+        row for row in ranked_candidates[1:]
+        if str(row["model"]) != str(primary_row["model"])
+    )
+    scheme2r_row = next(
+        (row for row in ranked_candidates if str(row["model"]) == "scheme2r"),
+        None,
+    )
+    if scheme2r_row is None:
+        raise FreezeValidationError("阶段 6.2 缺少 Scheme2R 候选，无法生成其消融参照")
+    stage6_3_selection = select_stage6_3_candidates(
+        full_root, contract=contract, required_model="scheme2r"
+    )
     selected_pairs = {
-        (str(primary_row["model"]), str(primary_row["candidate_id"])),
-        (str(comparison_row["model"]), str(comparison_row["candidate_id"])),
+        (str(row["model"]), str(row["candidate_id"]))
+        for row in stage6_3_selection["selected_rows"]
     }
     small_manifest, small_stability = _validate_small_stage6_3(small_root, selected_pairs)
     gate_manifest = _validate_stage6_4(gate_root)
@@ -346,7 +393,7 @@ def freeze_stage6(
         "frozen_at_utc": now,
         "dataset": contract.raw["dataset"],
         "data_protocol": {
-            "years": [2015, 2021],
+            "years": list(range(2015, 2022)),
             "tasks": list(contract.raw["tasks"]),
             "task_order": list(contract.raw["tasks"]),
             "sampling": contract.raw["data_protocol"]["sampling"],
@@ -369,6 +416,12 @@ def freeze_stage6(
             "hyperparameters": _candidate_config(contract, comparison_candidate),
             "full_validation_metrics": comparison_row,
         },
+        "scheme2r_ablation_reference": {
+            "model": "scheme2r",
+            "candidate_id": str(scheme2r_row["candidate_id"]),
+            "hyperparameters": _candidate_config(contract, str(scheme2r_row["candidate_id"])),
+            "full_validation_metrics": scheme2r_row,
+        },
         "training_policy": {
             **dict(contract.raw["training_policy"]),
             "formal_random_seeds": [2026, 2027, 2028, 2029, 2030],
@@ -384,6 +437,7 @@ def freeze_stage6(
             "protocols": ["full", "small_sample"],
             "ablations": ["A0", "A1", "A2", "A3", "A4"],
             "external_baselines": ["persistence", "seasonal_naive", "dlinear", "mmoe_lite", "softs"],
+            "input_controls": ["scheme2r_loads_only"],
             "test_usage": "allowed_only_after_stage6_6_freeze",
         },
         "test_set_policy": {
@@ -406,7 +460,7 @@ def freeze_stage6(
         {"source": "stage6.2", "check": "primary_model", "value": f"{primary_model}-{primary_candidate}", "status": "pass"},
         {"source": "stage6.2", "check": "primary_WAPE", "value": primary_row.get("WAPE"), "status": "pass"},
         {"source": "stage6.2", "check": "comparison_model", "value": f"{comparison_model}-{comparison_candidate}", "status": "pass"},
-        {"source": "stage6.3", "check": "formal_run_count", "value": 2, "status": "pass"},
+        {"source": "stage6.3", "check": "formal_run_count", "value": len(selected_pairs), "status": "pass"},
         {"source": "stage6.3", "check": "rank_order_changed", "value": small_stability.get("rank_order_changed"), "status": "recorded"},
         {"source": "stage6.4", "check": "analyzed_run_count", "value": gate_manifest.get("analyzed_run_count"), "status": "pass"},
         {"source": "stage6.5", "check": "gain_row_count", "value": transfer_manifest.get("gain_row_count"), "status": "pass"},

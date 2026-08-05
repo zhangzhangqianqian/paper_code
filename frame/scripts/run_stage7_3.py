@@ -326,6 +326,25 @@ def _run_one(
     hp = hyperparameters.get((model_name, candidate_id)) or hyperparameters.get(model_name)
     if hp is None:
         raise ValueError(f"missing hyperparameters for {model_name}/{candidate_id}")
+    if model_name == "stl_matched":
+        # Keep the selected STL candidate on the same independent-task path as
+        # the dedicated Stage 7-R STL reference; never train it through the
+        # joint model wrapper used by the other candidates.
+        from run_stage7_stl_reference import _run_one as _run_matched_stl_one
+
+        result = _run_matched_stl_one(
+            run,
+            run_dir,
+            windows,
+            stats,
+            hp,
+            training_policy,
+        )
+        result = dict(result)
+        result["stage"] = "7.3"
+        result["stage7_role"] = "selected_structure_matched_stl"
+        save_json(result, run_dir / "run_manifest.json")
+        return result
     seed = int(run["seed"])
     run_dir.mkdir(parents=True, exist_ok=True)
     trainer_config = TrainerConfig(
@@ -496,9 +515,14 @@ def _aggregate_rows(rows: Sequence[Mapping[str, object]]) -> List[Dict[str, obje
             "seed_count": len(group),
         }
         for metric in metric_names:
-            values = np.asarray([float(row[metric]) for row in group], dtype=np.float64)
-            item[f"{metric}_mean"] = float(values.mean())
-            item[f"{metric}_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
+            values = np.asarray(
+                [float(row[metric]) for row in group if row.get(metric) is not None],
+                dtype=np.float64,
+            )
+            item[f"{metric}_mean"] = float(values.mean()) if len(values) else None
+            item[f"{metric}_std"] = (
+                float(values.std(ddof=1)) if len(values) > 1 else (0.0 if len(values) else None)
+            )
         for field in ("parameter_count", "train_samples", "validation_samples", "test_samples"):
             item[field] = group[0][field]
         for field in ("fit_seconds", "validation_evaluation_seconds", "test_evaluation_seconds"):

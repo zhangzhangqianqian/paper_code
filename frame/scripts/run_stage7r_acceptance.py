@@ -36,7 +36,7 @@ from src.data_pipeline import save_json  # noqa: E402
 
 
 REVISION_VERSION = "stage7R.1"
-EXPECTED_TOTAL = 104
+EXPECTED_DEFAULT_TOTAL = 114
 
 
 def _resolve(value: str) -> Path:
@@ -44,7 +44,10 @@ def _resolve(value: str) -> Path:
     return path if path.is_absolute() else REPOSITORY_ROOT / path
 
 
-def build_acceptance_sources(root: Path) -> Tuple[Dict[str, object], ...]:
+def build_acceptance_sources(
+    root: Path,
+    stage7_4_runs: int = 40,
+) -> Tuple[Dict[str, object], ...]:
     return (
         {
             "stage": "7.3",
@@ -58,14 +61,14 @@ def build_acceptance_sources(root: Path) -> Tuple[Dict[str, object], ...]:
             "source_group": "ablation_reproducible",
             "root": root / "stage7_4",
             "manifest": "stage7_4_manifest.json",
-            "expected_runs": 40,
+            "expected_runs": int(stage7_4_runs),
         },
         {
             "stage": "7.5",
             "source_group": "external_baseline_reproducible",
             "root": root / "stage7_5",
             "manifest": "stage7_5_manifest.json",
-            "expected_runs": 34,
+            "expected_runs": 44,
         },
         {
             "stage": "7R.STL",
@@ -129,7 +132,7 @@ def _collect_runs(item: Mapping[str, object]) -> List[Dict[str, object]]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Aggregate the 104 materialized legacy Stage 7-R runs"
+        description="Aggregate the 114 materialized Stage 7-R runs"
     )
     parser.add_argument(
         "--stage7r-root",
@@ -157,10 +160,17 @@ def main() -> None:
     contract = _read_json(_resolve(args.revision_contract))
     if contract.get("revision_version") != REVISION_VERSION:
         raise ValueError("Stage 7-R acceptance requires the stage7R.1 contract")
-    sources = build_acceptance_sources(root)
+    matrix = contract.get("run_matrix")
+    if not isinstance(matrix, Mapping):
+        raise ValueError("revision contract run_matrix is missing")
+    stage7_4_runs = int(matrix["stage7_4_ablations"])
+    expected_total = int(matrix["materialized_run_count"])
+    sources = build_acceptance_sources(root, stage7_4_runs=stage7_4_runs)
     planned = sum(int(item["expected_runs"]) for item in sources)
-    if planned != EXPECTED_TOTAL:
-        raise ValueError(f"acceptance plan must contain 104 runs, found {planned}")
+    if planned != expected_total:
+        raise ValueError(
+            f"acceptance plan must contain {expected_total} runs, found {planned}"
+        )
     output_dir = _resolve(args.output_dir) if args.output_dir else root / "acceptance"
     if args.dry_run:
         print(
@@ -169,7 +179,7 @@ def main() -> None:
                     "stage": "7-R acceptance",
                     "revision_version": REVISION_VERSION,
                     "status": "dry_run",
-                    "expected_formal_runs": EXPECTED_TOTAL,
+                    "expected_formal_runs": expected_total,
                     "stage7r_root": str(root),
                     "output_dir": str(output_dir),
                     "sources": [
@@ -197,8 +207,10 @@ def main() -> None:
     records: List[Dict[str, object]] = []
     for item in sources:
         records.extend(_collect_runs(item))
-    if len(records) != EXPECTED_TOTAL:
-        raise ValueError(f"expected 104 materialized runs, found {len(records)}")
+    if len(records) != expected_total:
+        raise ValueError(
+            f"expected {expected_total} materialized runs, found {len(records)}"
+        )
     if any(record["manifest"].get("test_used_for_selection", False) for record in records):
         raise ValueError("a Stage 7-R run reports test-set selection")
 

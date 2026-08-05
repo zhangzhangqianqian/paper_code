@@ -195,15 +195,21 @@ def _metric_rows(
     if not isinstance(per_task, Mapping) or not isinstance(per_horizon, Mapping):
         raise ValueError(f"{model_name}/{candidate_id}缺少逐任务或逐步长指标")
 
+    task_wape_values = [
+        float(values.get("WAPE"))
+        for values in per_task.values()
+        if isinstance(values, Mapping)
+        and values.get("WAPE") is not None
+        and np.isfinite(float(values.get("WAPE")))
+    ]
+
     overall_row: Dict[str, object] = {
         "model": model_name,
         "candidate_id": candidate_id,
         **{metric: overall.get(metric) for metric in METRICS},
-        "validation_max_per_task_WAPE": max(
-            float(values.get("WAPE"))
-            for values in per_task.values()
-            if isinstance(values, Mapping)
-        ),
+        "validation_max_per_task_WAPE": max(task_wape_values) if task_wape_values else None,
+        "validation_per_task_WAPE_valid_count": len(task_wape_values),
+        "validation_per_task_WAPE_total_count": len(task_names),
     }
     task_rows: list[Dict[str, object]] = []
     for task in task_names:
@@ -304,28 +310,31 @@ def write_validation_summaries(
         (str(row["candidate_id"]), str(row["task"])): float(row["WAPE"])
         for row in task_rows
         if str(row["model"]) == "stl_matched"
+        and row.get("WAPE") is not None
     }
     for row in overall_rows:
         model = str(row["model"])
         candidate = str(row["candidate_id"])
-        task_values = [
-            float(task_row["WAPE"])
+        task_values = {
+            str(task_row["task"]): float(task_row["WAPE"])
             for task_row in task_rows
             if str(task_row["model"]) == model
             and str(task_row["candidate_id"]) == candidate
-        ]
-        reference_values = [
-            stl_task_wape[(candidate, task)]
+            and task_row.get("WAPE") is not None
+        }
+        reference_values = {
+            task: stl_task_wape[(candidate, task)]
             for task in task_names
             if (candidate, task) in stl_task_wape
-        ]
+        }
+        comparable_tasks = tuple(sorted(set(task_values) & set(reference_values)))
         row["validation_negative_transfer_rate"] = (
             0.0
             if model == "stl_matched"
             else (
-                float(sum(value > reference for value, reference in zip(task_values, reference_values)))
-                / float(len(reference_values))
-                if len(reference_values) == len(task_values) and reference_values
+                float(sum(task_values[task] > reference_values[task] for task in comparable_tasks))
+                / float(len(comparable_tasks))
+                if comparable_tasks
                 else None
             )
         )
@@ -338,7 +347,7 @@ def write_validation_summaries(
 
     overall_rows.sort(
         key=lambda row: (
-            float(row["WAPE"]),
+            _numeric_or_inf(row.get("WAPE")),
             _numeric_or_inf(row.get("validation_max_per_task_WAPE")),
             _numeric_or_inf(row.get("validation_negative_transfer_rate")),
             _numeric_or_inf(row.get("parameter_count")),
@@ -455,13 +464,15 @@ def write_stability_comparison(
 def select_stage6_3_candidates(
     stage6_2_root: str | Path,
     contract=None,
-    required_model: str | None = None,
+    required_model: str | None = "scheme2r",
 ) -> Dict[str, object]:
     """从阶段 6.2 总体 WAPE 表自动选择阶段 6.3 的模型和配置。
 
-    直接按全年验证集总体 WAPE 及契约规定的确定性 tie-breaker 选择前两名。
-    ``required_model`` 仅保留为显式兼容参数；正式 Stage 6-R 不传入它，
-    因而不会强行保留提出模型。返回的配置来自阶段 6.1 契约。
+    先为每个模型保留其全年验证集表现最好的配置，再选择前两种不同模型。
+    如果 ``required_model`` 不在前两种模型中，则追加该模型的最佳配置；
+    正式契约默认要求保留 Scheme2R，因此合法候选数为 2 或 3。
+    传入 ``required_model=None`` 可用于不带提出模型保留规则的诊断测试。
+    返回的配置来自阶段 6.1 契约。
     """
 
     root = Path(stage6_2_root)
@@ -510,27 +521,15 @@ def select_stage6_3_candidates(
             "full_validation_rank": int(row.get("validation_rank_by_WAPE", 0) or 0),
         }
         validated_rows.append(normalized)
-        current = best_by_model.get(model)
-        if current is None or (wape, candidate_id) < (
-            float(current["WAPE"]), str(current["candidate_id"])
-        ):
-            best_by_model[model] = normalized
 
-    missing_models = sorted(contract_model_set - set(best_by_model))
-    if missing_models:
-        raise ValueError(
-            "阶段6.2结果缺少候选模型，不能进行阶段6.3筛选："
-            f"{missing_models}"
-        )
     def numeric_or_inf(value: object) -> float:
         try:
             return float(value) if value is not None else float("inf")
         except (TypeError, ValueError):
             return float("inf")
 
-    ranked_models = sorted(
-        validated_rows,
-        key=lambda row: (
+    def ranking_key(row: Mapping[str, object]) -> tuple[float, float, float, float, float, str, str]:
+        return (
             float(row["WAPE"]),
             numeric_or_inf(row.get("validation_max_per_task_WAPE")),
             numeric_or_inf(row.get("validation_negative_transfer_rate")),
@@ -538,9 +537,25 @@ def select_stage6_3_candidates(
             numeric_or_inf(row.get("fit_seconds")),
             str(row["model"]),
             str(row["candidate_id"]),
-        ),
+        )
+
+    missing_models = sorted(contract_model_set - {str(row["model"]) for row in validated_rows})
+    if missing_models:
+        raise ValueError(
+            "阶段6.2结果缺少候选模型，不能进行阶段6.3筛选："
+            f"{missing_models}"
+        )
+    for model in contract_model_set:
+        model_rows = [row for row in validated_rows if str(row["model"]) == model]
+        best_by_model[model] = min(model_rows, key=ranking_key)
+
+    ranked_models = sorted(
+        best_by_model.values(),
+        key=ranking_key,
     )
     selected_rows = ranked_models[:2]
+    if required_model is not None and required_model not in contract_model_set:
+        raise ValueError(f"required_model不在阶段6.1契约中：{required_model}")
     if required_model is not None and required_model not in {str(row["model"]) for row in selected_rows}:
         selected_rows.append(best_by_model[required_model])
 

@@ -356,10 +356,18 @@ def main() -> None:
     _validate_freeze_and_training_policy(freeze, contract)
     if tuple(contract["stage7_scope"]["ablations"]) != ABLATION_NAMES:
         raise ValueError("Stage 7.0 ablation list does not match A0-A4")
-    primary_candidate = str(freeze["primary_model"]["candidate_id"])
-    # A4 is the complete Scheme2R endpoint and is copied from Stage 7.3 when
-    # the selected primary candidate is Scheme2R; it must not be trained twice.
-    plan = build_ablation_run_plan(include_a4=False, candidate_id=primary_candidate)
+    scheme2r_reference = freeze.get("scheme2r_ablation_reference")
+    if not isinstance(scheme2r_reference, Mapping):
+        raise ValueError("Stage 7.4 requires the frozen Scheme2R ablation reference")
+    scheme2r_candidate = str(scheme2r_reference["candidate_id"])
+    primary_model = str(freeze["primary_model"]["model"])
+    # A4 is the complete Scheme2R endpoint.  Reuse is legal only when the
+    # selected primary is Scheme2R; otherwise A4 must be trained explicitly.
+    include_a4 = primary_model != "scheme2r"
+    plan = build_ablation_run_plan(
+        include_a4=include_a4,
+        candidate_id=scheme2r_candidate,
+    )
     if args.dry_run:
         print(
             json.dumps(
@@ -368,7 +376,7 @@ def main() -> None:
                     "status": "dry_run",
                     "run_count": len(plan),
                     "ablations": list(ABLATION_NAMES),
-                    "reused_ablations": ["A4"],
+                    "reused_ablations": [] if include_a4 else ["A4"],
                     "protocols": list(FORMAL_PROTOCOLS),
                     "seeds": list(EXPECTED_SEEDS),
                     "sample_limits": None,
@@ -407,7 +415,7 @@ def main() -> None:
         protocol_stats[protocol] = stats
         stats.save(output_dir / protocol / "normalization_stats.npz")
 
-    hyperparameters = freeze["primary_model"]["hyperparameters"]
+    hyperparameters = scheme2r_reference["hyperparameters"]
     protocol_policies = contract.get("protocol_training_policies") or {
         "full": contract["training_policy"],
         "small_sample": contract["training_policy"],
