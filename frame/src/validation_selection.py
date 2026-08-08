@@ -51,6 +51,63 @@ from .training import (
 METRICS: Tuple[str, ...] = ("MAE", "RMSE", "WAPE", "MAPE")
 
 
+def _numeric_or_inf(value: object) -> float:
+    try:
+        return float(value) if value is not None else float("inf")
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def rank_validation_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    tie_tolerance_percentage_points: float = 0.1,
+) -> list[Dict[str, object]]:
+    """Rank validation candidates with the Stage 6 WAPE tie contract.
+
+    Rows are first ordered by raw WAPE.  Starting from the smallest remaining
+    WAPE, every row within ``tie_tolerance_percentage_points`` of that anchor
+    belongs to the same near-tie group.  Members of a group are ordered by the
+    frozen tie-breakers, while groups remain ordered by their WAPE anchors.
+    """
+
+    tolerance = float(tie_tolerance_percentage_points)
+    if not np.isfinite(tolerance) or tolerance < 0.0:
+        raise ValueError("tie_tolerance_percentage_points must be finite and non-negative")
+
+    remaining = sorted(
+        (dict(row) for row in rows),
+        key=lambda row: (
+            _numeric_or_inf(row.get("WAPE")),
+            str(row.get("model", "")),
+            str(row.get("candidate_id", "")),
+        ),
+    )
+    ranked: list[Dict[str, object]] = []
+    while remaining:
+        anchor = _numeric_or_inf(remaining[0].get("WAPE"))
+        group_end = 1
+        while group_end < len(remaining):
+            value = _numeric_or_inf(remaining[group_end].get("WAPE"))
+            if value - anchor > tolerance:
+                break
+            group_end += 1
+        group = remaining[:group_end]
+        remaining = remaining[group_end:]
+        group.sort(
+            key=lambda row: (
+                _numeric_or_inf(row.get("validation_max_per_task_WAPE")),
+                _numeric_or_inf(row.get("validation_negative_transfer_rate")),
+                _numeric_or_inf(row.get("parameter_count")),
+                _numeric_or_inf(row.get("fit_seconds")),
+                str(row.get("model", "")),
+                str(row.get("candidate_id", "")),
+            )
+        )
+        ranked.extend(group)
+    return ranked
+
+
 def _limit_windows(
     windows: Mapping[str, np.ndarray], limit: int | None
 ) -> Dict[str, np.ndarray]:
@@ -311,6 +368,7 @@ def write_validation_summaries(
     output_root: str | Path,
     completed_runs: Sequence[Mapping[str, object]],
     task_names: Sequence[str] = TASKS,
+    tie_tolerance_percentage_points: float = 0.1,
 ) -> None:
     """把每个运行的验证 JSON 汇总为阶段 6.2 的三张 CSV 表。"""
 
@@ -406,22 +464,9 @@ def write_validation_summaries(
             )
         )
 
-    def _numeric_or_inf(value: object) -> float:
-        try:
-            return float(value) if value is not None else float("inf")
-        except (TypeError, ValueError):
-            return float("inf")
-
-    overall_rows.sort(
-        key=lambda row: (
-            _numeric_or_inf(row.get("WAPE")),
-            _numeric_or_inf(row.get("validation_max_per_task_WAPE")),
-            _numeric_or_inf(row.get("validation_negative_transfer_rate")),
-            _numeric_or_inf(row.get("parameter_count")),
-            _numeric_or_inf(row.get("fit_seconds")),
-            str(row["model"]),
-            str(row["candidate_id"]),
-        )
+    overall_rows = rank_validation_rows(
+        overall_rows,
+        tie_tolerance_percentage_points=tie_tolerance_percentage_points,
     )
     for rank, row in enumerate(overall_rows, start=1):
         row["validation_rank_by_WAPE"] = rank

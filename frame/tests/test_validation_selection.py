@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.stage6_contract import load_stage6_selection_contract
 from src.validation_selection import (
+    rank_validation_rows,
     select_stage6_3_candidates,
     write_stability_comparison,
     write_validation_summaries,
@@ -13,6 +14,70 @@ from src.validation_selection import (
 
 
 class ValidationSelectionTest(unittest.TestCase):
+    @staticmethod
+    def _ranking_row(
+        model,
+        wape,
+        max_task_wape,
+        negative_transfer_rate=0.0,
+        parameter_count=10,
+        fit_seconds=2.0,
+    ):
+        return {
+            "model": model,
+            "candidate_id": "H1",
+            "WAPE": wape,
+            "validation_max_per_task_WAPE": max_task_wape,
+            "validation_negative_transfer_rate": negative_transfer_rate,
+            "parameter_count": parameter_count,
+            "fit_seconds": fit_seconds,
+        }
+
+    def test_rank_validation_rows_uses_max_task_wape_inside_tolerance(self):
+        rows = [
+            self._ranking_row("a", 10.00, 20.0),
+            self._ranking_row("b", 10.05, 19.0),
+        ]
+
+        ranked = rank_validation_rows(
+            rows, tie_tolerance_percentage_points=0.1
+        )
+
+        self.assertEqual([row["model"] for row in ranked], ["b", "a"])
+
+    def test_rank_validation_rows_keeps_wape_order_outside_tolerance(self):
+        rows = [
+            self._ranking_row("a", 10.00, 20.0),
+            self._ranking_row("b", 10.11, 1.0),
+        ]
+
+        ranked = rank_validation_rows(
+            rows, tie_tolerance_percentage_points=0.1
+        )
+
+        self.assertEqual([row["model"] for row in ranked], ["a", "b"])
+
+    def test_rank_validation_rows_applies_all_tie_breakers_in_order(self):
+        rows = [
+            self._ranking_row("fit", 10.00, 20.0, 0.5, 100, 1.0),
+            self._ranking_row("parameters", 10.00, 20.0, 0.5, 90, 9.0),
+            self._ranking_row("transfer", 10.00, 20.0, 0.25, 500, 9.0),
+            self._ranking_row("max_task", 10.09, 19.0, 1.0, 500, 9.0),
+        ]
+
+        ranked = rank_validation_rows(
+            rows, tie_tolerance_percentage_points=0.1
+        )
+
+        self.assertEqual(
+            [row["model"] for row in ranked],
+            ["max_task", "transfer", "parameters", "fit"],
+        )
+
+    def test_rank_validation_rows_rejects_negative_tolerance(self):
+        with self.assertRaises(ValueError):
+            rank_validation_rows([], tie_tolerance_percentage_points=-0.1)
+
     def test_stage6_contract_expands_to_twenty_four_runs(self):
         contract = load_stage6_selection_contract()
         combinations = [
