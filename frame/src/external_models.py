@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional, Sequence
 
 import torch
 from torch import Tensor, nn
@@ -208,6 +208,282 @@ class MMoELiteBaseline(nn.Module):
         predictions = [
             head(task_representations[:, task_index, :])
             for task_index, head in enumerate(self.heads)
+        ]
+        return torch.stack(predictions, dim=-1)
+
+
+class PLEExpert(nn.Module):
+    """Two-layer lightweight expert used by a PLE extraction layer."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        if min(input_dim, hidden_dim, output_dim) <= 0:
+            raise ValueError("PLE expert dimensions must be positive")
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError("dropout must be in [0, 1)")
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, output_dim),
+            nn.GELU(),
+        )
+
+    def forward(self, values: Tensor) -> Tensor:
+        if values.ndim != 2:
+            raise ValueError("PLE expert input must be [batch, features]")
+        return self.network(values)
+
+
+class PLECGCLayer(nn.Module):
+    """One Customized Gate Control layer for the two-level PLE-lite model.
+
+    A task gate can see only that task's private experts and the shared
+    experts.  The optional shared gate can see every private expert and every
+    shared expert, which creates the shared stream consumed by the next level.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        task_count: int,
+        shared_expert_count: int,
+        task_expert_count: int,
+        expert_hidden_dim: int,
+        representation_dim: int,
+        dropout: float,
+        *,
+        produce_shared: bool,
+    ) -> None:
+        super().__init__()
+        if input_dim <= 0 or task_count <= 0:
+            raise ValueError("input_dim and task_count must be positive")
+        if shared_expert_count <= 0 or task_expert_count <= 0:
+            raise ValueError("PLE requires positive shared and task expert counts")
+        self.input_dim = input_dim
+        self.task_count = task_count
+        self.shared_expert_count = shared_expert_count
+        self.task_expert_count = task_expert_count
+        self.representation_dim = representation_dim
+        self.produce_shared = produce_shared
+
+        def make_expert() -> PLEExpert:
+            return PLEExpert(
+                input_dim,
+                expert_hidden_dim,
+                representation_dim,
+                dropout,
+            )
+
+        self.task_experts = nn.ModuleList(
+            [
+                nn.ModuleList([make_expert() for _ in range(task_expert_count)])
+                for _ in range(task_count)
+            ]
+        )
+        self.shared_experts = nn.ModuleList(
+            [make_expert() for _ in range(shared_expert_count)]
+        )
+        task_gate_width = task_expert_count + shared_expert_count
+        self.task_gates = nn.ModuleList(
+            [nn.Linear(input_dim, task_gate_width) for _ in range(task_count)]
+        )
+        self.shared_gate = (
+            nn.Linear(
+                input_dim,
+                task_count * task_expert_count + shared_expert_count,
+            )
+            if produce_shared
+            else None
+        )
+
+    def _validate_inputs(
+        self,
+        task_inputs: Sequence[Tensor],
+        shared_input: Tensor,
+    ) -> None:
+        if len(task_inputs) != self.task_count:
+            raise ValueError(
+                f"expected {self.task_count} task streams, got {len(task_inputs)}"
+            )
+        if shared_input.ndim != 2 or shared_input.shape[1] != self.input_dim:
+            raise ValueError("shared stream has an unexpected shape")
+        batch_size = shared_input.shape[0]
+        for values in task_inputs:
+            if values.ndim != 2 or tuple(values.shape) != (
+                batch_size,
+                self.input_dim,
+            ):
+                raise ValueError("task stream has an unexpected shape")
+
+    def forward(
+        self,
+        task_inputs: Sequence[Tensor],
+        shared_input: Tensor,
+    ) -> tuple[list[Tensor], Optional[Tensor], Dict[str, Tensor]]:
+        self._validate_inputs(task_inputs, shared_input)
+        private_outputs = [
+            [expert(task_inputs[index]) for expert in self.task_experts[index]]
+            for index in range(self.task_count)
+        ]
+        shared_outputs = [expert(shared_input) for expert in self.shared_experts]
+
+        task_gate_values: list[Tensor] = []
+        task_outputs: list[Tensor] = []
+        for task_index in range(self.task_count):
+            gate = torch.softmax(
+                self.task_gates[task_index](task_inputs[task_index]), dim=-1
+            )
+            candidates = torch.stack(
+                [*private_outputs[task_index], *shared_outputs], dim=1
+            )
+            task_outputs.append(torch.einsum("be,ber->br", gate, candidates))
+            task_gate_values.append(gate)
+
+        shared_output: Optional[Tensor] = None
+        gates: Dict[str, Tensor] = {
+            "task": torch.stack(task_gate_values, dim=1)
+        }
+        if self.shared_gate is not None:
+            shared_weights = torch.softmax(self.shared_gate(shared_input), dim=-1)
+            shared_candidates = torch.stack(
+                [
+                    *[
+                        output
+                        for task_outputs_for_one_task in private_outputs
+                        for output in task_outputs_for_one_task
+                    ],
+                    *shared_outputs,
+                ],
+                dim=1,
+            )
+            shared_output = torch.einsum(
+                "be,ber->br", shared_weights, shared_candidates
+            )
+            gates["shared"] = shared_weights
+        return task_outputs, shared_output, gates
+
+
+class PLELiteBaseline(nn.Module):
+    """Two-level PLE adaptation for four-task multi-energy forecasting.
+
+    The model consumes historical loads and historical exogenous variables,
+    but never future exogenous variables.  It preserves PLE's progressive
+    shared/private extraction while keeping expert widths CPU-friendly.
+    """
+
+    def __init__(
+        self,
+        lookback: int = 24,
+        horizon: int = 4,
+        task_count: int = 4,
+        exog_dim: int = 12,
+        shared_expert_count: int = 2,
+        task_expert_count: int = 1,
+        expert_hidden_dim: int = 32,
+        representation_dim: int = 32,
+        head_hidden_dim: int = 16,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        if lookback <= 0 or horizon <= 0 or task_count <= 0 or exog_dim <= 0:
+            raise ValueError("lookback, horizon, task_count and exog_dim must be positive")
+        if min(expert_hidden_dim, representation_dim, head_hidden_dim) <= 0:
+            raise ValueError("PLE hidden dimensions must be positive")
+        self.lookback = lookback
+        self.horizon = horizon
+        self.task_count = task_count
+        self.exog_dim = exog_dim
+        self.input_dim = lookback * (task_count + exog_dim)
+        self.layer1 = PLECGCLayer(
+            self.input_dim,
+            task_count,
+            shared_expert_count,
+            task_expert_count,
+            expert_hidden_dim,
+            representation_dim,
+            dropout,
+            produce_shared=True,
+        )
+        self.layer2 = PLECGCLayer(
+            representation_dim,
+            task_count,
+            shared_expert_count,
+            task_expert_count,
+            expert_hidden_dim,
+            representation_dim,
+            dropout,
+            produce_shared=False,
+        )
+        self.heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(representation_dim, head_hidden_dim),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(head_hidden_dim, horizon),
+                )
+                for _ in range(task_count)
+            ]
+        )
+
+    def _flatten_inputs(self, loads: Tensor, exog: Optional[Tensor]) -> Tensor:
+        if loads.ndim != 3 or tuple(loads.shape[1:]) != (
+            self.lookback,
+            self.task_count,
+        ):
+            raise ValueError("loads must be [batch, lookback, task_count]")
+        if exog is None:
+            raise ValueError("PLELiteBaseline requires historical exogenous variables")
+        if exog.ndim != 3 or tuple(exog.shape[1:]) != (
+            self.lookback,
+            self.exog_dim,
+        ):
+            raise ValueError("exog must be [batch, lookback, exog_dim]")
+        if exog.shape[0] != loads.shape[0]:
+            raise ValueError("loads and exog batch dimensions must match")
+        return torch.cat((loads, exog), dim=-1).reshape(loads.shape[0], -1)
+
+    def _route(
+        self,
+        loads: Tensor,
+        exog: Optional[Tensor],
+    ) -> tuple[list[Tensor], Dict[str, Tensor]]:
+        flattened = self._flatten_inputs(loads, exog)
+        first_tasks, first_shared, first_gates = self.layer1(
+            [flattened for _ in range(self.task_count)], flattened
+        )
+        if first_shared is None:
+            raise RuntimeError("the first PLE layer must produce a shared stream")
+        second_tasks, second_shared, second_gates = self.layer2(
+            first_tasks, first_shared
+        )
+        if second_shared is not None:
+            raise RuntimeError("the final PLE layer must not produce a shared stream")
+        return second_tasks, {
+            "layer1_task": first_gates["task"],
+            "layer1_shared": first_gates["shared"],
+            "layer2_task": second_gates["task"],
+        }
+
+    def gate_weights(
+        self,
+        loads: Tensor,
+        exog: Optional[Tensor],
+    ) -> Dict[str, Tensor]:
+        return self._route(loads, exog)[1]
+
+    def forward(self, loads: Tensor, exog: Optional[Tensor] = None) -> Tensor:
+        task_representations, _ = self._route(loads, exog)
+        predictions = [
+            self.heads[index](task_representations[index])
+            for index in range(self.task_count)
         ]
         return torch.stack(predictions, dim=-1)
 
