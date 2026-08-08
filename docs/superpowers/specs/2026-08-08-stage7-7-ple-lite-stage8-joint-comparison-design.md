@@ -81,8 +81,8 @@ PLE-lite 不读取未来外生变量。
 | Weight decay | 0.0001 |
 | 全年最大 epoch | 100 |
 | 全年早停 patience | 12 |
-| 小样本最大 epoch | 200 |
-| 小样本早停 patience | 20 |
+| 小样本最大 epoch | 100 |
+| 小样本早停 patience | 12 |
 
 该实现命名为 `PLE-lite`，定义为面向多能源负荷预测的轻量两层 PLE 适配，不声称复现推荐系统场景下的完整原始 PLE。
 
