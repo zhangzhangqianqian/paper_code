@@ -187,22 +187,21 @@ git commit -m "add two-level PLE-lite baseline"
 
 **Files:**
 - Modify: `frame/scripts/run_stage7_3.py`
-- Modify: `frame/scripts/train_external_baseline.py`
-- Modify: `frame/tests/test_training.py`
+- Modify: `frame/tests/test_ple_lite.py`
 
 **Interfaces:**
 - Extends: `_build_model(model_name, hyperparameters, exog_dim)` with public model name `ple-lite`.
 - Extends: `_run_one(..., stage_label="7.3", stage_role=None)` without changing existing callers.
-- Extends: `train_external_baseline.py --model` choices with `ple-lite`.
+- Keeps the legacy Stage 5 external-baseline CLI unchanged; Stage 7.7 uses the strict formal `_run_one` path directly.
 
 - [ ] **Step 1: Write failing builder and training-interface tests**
 
-Assert `_build_model("ple-lite", PLE_FIXED_CONFIG, 12)` returns `PLELiteBaseline`, `input_mode` remains `loads_and_exog`, and the external CLI parser accepts `ple-lite`.
+Assert `_build_model("ple-lite", PLE_FIXED_CONFIG, 12)` returns `PLELiteBaseline` and the formal input mode remains `loads_and_exog`.
 
 - [ ] **Step 2: Run focused tests and verify failure**
 
 ```powershell
-& "D:\anaconda\envs\pytorch\python.exe" -m unittest frame.tests.test_training frame.tests.test_ple_lite -v
+& "D:\anaconda\envs\pytorch\python.exe" -m unittest frame.tests.test_ple_lite -v
 ```
 
 - [ ] **Step 3: Add PLE construction and manifest fields**
@@ -221,7 +220,7 @@ Use fixed fields:
 }
 ```
 
-Export `baseline_family="progressive_expert_routing"`, `implementation_variant="two_level_ple_lite"`, `future_exogenous_used=False`, and gate arrays where the standalone training script is used.
+Persist `future_exogenous_used=False` and the Stage 7.7 evidence role in the formal run manifest. Do not extend the legacy Stage 5 fairness contract because PLE-lite is a preregistered Stage 7.7 addendum, not one of the historical three Stage 5 baselines.
 
 - [ ] **Step 4: Parameterize `_run_one` stage metadata**
 
@@ -234,7 +233,7 @@ Run the command from Step 2 and `frame.tests.test_stage7_3_plan`.
 - [ ] **Step 6: Commit Task 3**
 
 ```powershell
-git add -- frame/scripts/run_stage7_3.py frame/scripts/train_external_baseline.py frame/tests/test_training.py
+git add -- frame/scripts/run_stage7_3.py frame/tests/test_ple_lite.py
 git commit -m "integrate PLE-lite with formal training"
 ```
 
