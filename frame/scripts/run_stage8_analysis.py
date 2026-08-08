@@ -860,7 +860,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage7-6-dir", default="frame/reports/stage7r_6_kitakyushu_acceptance")
     parser.add_argument("--stage7-7-dir", default="frame/reports/stage7r_7_joint_baselines_formal")
     parser.add_argument("--resource-file", default="frame/reports/stage7r_resource_benchmarks.csv")
-    parser.add_argument("--output-dir", default="frame/reports/stage8_kitakyushu_analysis")
+    parser.add_argument("--output-dir", default="frame/reports/stage8r_joint_revised")
     parser.add_argument("--bootstrap-replicates", type=int, default=2000)
     parser.add_argument("--bootstrap-block-size", type=int, default=24)
     parser.add_argument("--gate-batch-size", type=int, default=256)
