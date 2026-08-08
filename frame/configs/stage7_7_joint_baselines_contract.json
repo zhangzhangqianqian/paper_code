@@ -1,0 +1,85 @@
+{
+  "contract_version": "stage7.7-addendum-v1",
+  "contract_status": "frozen_before_stage7_7_test_evaluation",
+  "purpose": "Add formal same-track multi-task baselines without modifying the Stage 6.6 freeze or existing Stage 7-R results.",
+  "dataset": "kitakyushu_energy_station",
+  "tasks": ["electricity", "cooling", "heating", "gas"],
+  "protocols": ["full", "small_sample"],
+  "seeds": [2026, 2027, 2028, 2029, 2030],
+  "input_output": {
+    "lookback": 24,
+    "horizon": 4,
+    "input_mode": "loads_and_exog",
+    "prediction_shape": ["batch", 4, 4],
+    "future_exogenous_allowed": false
+  },
+  "training_policy": {
+    "device": "cpu",
+    "loss": "SmoothL1Loss",
+    "optimizer": "AdamW",
+    "weight_decay": 0.0001,
+    "gradient_clip_norm": 1.0,
+    "batch_size": 256,
+    "max_epochs": 100,
+    "early_stopping_patience": 12,
+    "early_stopping_monitor": "validation_loss",
+    "checkpoint_policy": "restore_best_validation_loss",
+    "threads": 8
+  },
+  "models": [
+    {
+      "model": "hard_share",
+      "candidate_id": "H2",
+      "selection_source": "stage6_full_validation_best_for_model",
+      "hyperparameters": {
+        "candidate_id": "H2",
+        "hidden_dim": 32,
+        "kernel_size": 5,
+        "dilations": [1, 2, 4],
+        "dropout": 0.1,
+        "learning_rate": 0.001,
+        "prediction_head_hidden_dim": 16
+      }
+    },
+    {
+      "model": "dynamic_symmetric",
+      "candidate_id": "H1",
+      "selection_source": "stage6_full_validation_best_for_model",
+      "hyperparameters": {
+        "candidate_id": "H1",
+        "hidden_dim": 16,
+        "kernel_size": 5,
+        "dilations": [1, 2, 4],
+        "dropout": 0.0,
+        "learning_rate": 0.001,
+        "prediction_head_hidden_dim": 16
+      }
+    },
+    {
+      "model": "ple-lite",
+      "candidate_id": "ple_lite_fixed_v1",
+      "selection_source": "preregistered_fixed_configuration",
+      "hyperparameters": {
+        "candidate_id": "ple_lite_fixed_v1",
+        "shared_expert_count": 2,
+        "task_expert_count": 1,
+        "expert_hidden_dim": 32,
+        "representation_dim": 32,
+        "dropout": 0.1,
+        "learning_rate": 0.001,
+        "prediction_head_hidden_dim": 16
+      }
+    }
+  ],
+  "test_policy": {
+    "test_set_accessed_during_formal_evaluation": true,
+    "test_used_for_selection": false,
+    "test_may_not_change_model_or_hyperparameters": true
+  },
+  "existing_results": {
+    "scheme2r": "reuse_stage7r_3_scheme2r_H4",
+    "mmoe_lite": "reuse_stage7r_5_mmoe_lite"
+  },
+  "expected_formal_run_count": 30,
+  "output_directory_must_be_new": true
+}
