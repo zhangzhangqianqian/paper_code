@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from src.external_models import PLELiteBaseline
+from scripts.run_stage7_3 import _build_model
 
 
 class PLELiteBaselineTest(unittest.TestCase):
@@ -92,6 +93,27 @@ class PLELiteBaselineTest(unittest.TestCase):
         self.assertTrue(all(gradient is not None for gradient in gradients))
         self.assertTrue(
             all(torch.isfinite(gradient).all() for gradient in gradients)
+        )
+
+    def test_stage7_formal_builder_supports_ple_lite(self):
+        model = _build_model(
+            "ple-lite",
+            {
+                "shared_expert_count": 2,
+                "task_expert_count": 1,
+                "expert_hidden_dim": 32,
+                "representation_dim": 32,
+                "prediction_head_hidden_dim": 16,
+                "dropout": 0.1,
+                "learning_rate": 0.001,
+            },
+            self.exog_dim,
+        )
+
+        self.assertIsInstance(model, PLELiteBaseline)
+        self.assertEqual(
+            tuple(model(self.loads, self.exog).shape),
+            (self.batch_size, self.horizon, self.task_count),
         )
 
 

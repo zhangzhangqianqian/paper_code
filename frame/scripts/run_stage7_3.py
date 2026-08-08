@@ -44,6 +44,7 @@ from src.kitakyushu_pipeline import (  # noqa: E402
     read_kitakyushu_canonical,
 )
 from src.models import build_forecasting_model, count_trainable_parameters  # noqa: E402
+from src.external_models import PLELiteBaseline  # noqa: E402
 from src.stage7_contract import EXPECTED_SEEDS  # noqa: E402
 from src.training import (  # noqa: E402
     StandardizationStats,
@@ -124,6 +125,21 @@ def _build_model(
     hyperparameters: Mapping[str, object],
     exog_dim: int,
 ):
+    if model_name == "ple-lite":
+        return PLELiteBaseline(
+            lookback=LOOKBACK,
+            horizon=HORIZON,
+            task_count=len(KITAKYUSHU_TASKS),
+            exog_dim=exog_dim,
+            shared_expert_count=int(hyperparameters["shared_expert_count"]),
+            task_expert_count=int(hyperparameters["task_expert_count"]),
+            expert_hidden_dim=int(hyperparameters["expert_hidden_dim"]),
+            representation_dim=int(hyperparameters["representation_dim"]),
+            head_hidden_dim=int(
+                hyperparameters["prediction_head_hidden_dim"]
+            ),
+            dropout=float(hyperparameters["dropout"]),
+        )
     common = {
         "exog_dim": exog_dim,
         "task_count": len(KITAKYUSHU_TASKS),
@@ -319,6 +335,9 @@ def _run_one(
     stats: StandardizationStats,
     hyperparameters: Mapping[str, Mapping[str, object]],
     training_policy: Mapping[str, object],
+    *,
+    stage_label: str = "7.3",
+    stage_role: str | None = None,
 ) -> Dict[str, object]:
     protocol = str(run["protocol"])
     model_name = str(run["model"])
@@ -341,8 +360,10 @@ def _run_one(
             training_policy,
         )
         result = dict(result)
-        result["stage"] = "7.3"
-        result["stage7_role"] = "selected_structure_matched_stl"
+        result["stage"] = stage_label
+        result["stage7_role"] = (
+            stage_role or "selected_structure_matched_stl"
+        )
         save_json(result, run_dir / "run_manifest.json")
         return result
     seed = int(run["seed"])
@@ -431,7 +452,7 @@ def _run_one(
     save_json(test_metrics, run_dir / "metrics_test.json")
 
     manifest = {
-        "stage": "7.3",
+        "stage": stage_label,
         "status": "passed",
         "protocol": protocol,
         "model": model_name,
@@ -472,6 +493,8 @@ def _run_one(
             "predictions_test.npz",
         ],
     }
+    if stage_role is not None:
+        manifest["stage7_role"] = stage_role
     save_json(manifest, run_dir / "run_manifest.json")
     return manifest
 
