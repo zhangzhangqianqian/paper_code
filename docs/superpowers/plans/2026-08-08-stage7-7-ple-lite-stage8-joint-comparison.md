@@ -17,7 +17,7 @@
 - Historical exogenous variables are allowed; future exogenous variables are forbidden.
 - Formal protocols: `full`, `small_sample`.
 - Formal seeds: `2026, 2027, 2028, 2029, 2030`.
-- Formal training budget for both protocols: maximum 100 epochs, early-stopping patience 12, batch size 256, CPU, AdamW, SmoothL1Loss.
+- Formal training budget follows the accepted Stage 7 protocol: full uses maximum 100 epochs, patience 12, batch size 256; small-sample uses maximum 200 epochs, patience 20, batch size 32. Both use CPU, AdamW, and SmoothL1Loss.
 - Never overwrite Stage 6-R or Stage 7-R formal result directories.
 - Never use test metrics to select a model or hyperparameter.
 - Preserve unrelated dirty-worktree changes and stage only task-specific files.

@@ -150,9 +150,6 @@ def validate_stage7_7_contract(contract: Mapping[str, object]) -> None:
         "optimizer": "AdamW",
         "weight_decay": 0.0001,
         "gradient_clip_norm": 1.0,
-        "batch_size": 256,
-        "max_epochs": 100,
-        "early_stopping_patience": 12,
         "threads": 8,
     }
     for key, expected in expected_policy.items():
@@ -160,6 +157,23 @@ def validate_stage7_7_contract(contract: Mapping[str, object]) -> None:
             raise ValueError(
                 f"Stage 7.7 training policy mismatch for {key}: {policy.get(key)!r}"
             )
+    protocol_policies = policy.get("protocols")
+    if not isinstance(protocol_policies, Mapping):
+        raise ValueError("Stage 7.7 protocol-specific training policies are missing")
+    expected_protocol_policies = {
+        "full": {"batch_size": 256, "max_epochs": 100, "early_stopping_patience": 12},
+        "small_sample": {"batch_size": 32, "max_epochs": 200, "early_stopping_patience": 20},
+    }
+    for protocol, expected_values in expected_protocol_policies.items():
+        actual = protocol_policies.get(protocol)
+        if not isinstance(actual, Mapping):
+            raise ValueError(f"missing training policy for {protocol}")
+        for key, expected in expected_values.items():
+            if actual.get(key) != expected:
+                raise ValueError(
+                    f"Stage 7.7 {protocol} training policy mismatch for {key}: "
+                    f"{actual.get(key)!r}"
+                )
 
     model_map = _model_contract_map(contract)
     if set(model_map) != set(EXPECTED_MODELS):
@@ -364,16 +378,19 @@ def main() -> None:
         for model, item in model_contracts.items()
     }
     base_policy = dict(contract["training_policy"])
+    protocol_policy_overrides = base_policy.pop("protocols")
+    policies = {
+        protocol: {**base_policy, **dict(protocol_policy_overrides[protocol])}
+        for protocol in FORMAL_PROTOCOLS
+    }
     if args.smoke:
-        base_policy.update(
-            {
+        for policy in policies.values():
+            policy.update({
                 "batch_size": 16,
                 "max_epochs": 1,
                 "early_stopping_patience": 1,
                 "threads": 2,
-            }
-        )
-    policies = {protocol: dict(base_policy) for protocol in FORMAL_PROTOCOLS}
+            })
 
     completed: List[Dict[str, object]] = []
     failed: List[Dict[str, object]] = []

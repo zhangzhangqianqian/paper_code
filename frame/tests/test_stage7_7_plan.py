@@ -49,6 +49,25 @@ class Stage77JointBaselinePlanTest(unittest.TestCase):
         self.assertEqual(contract["expected_formal_run_count"], 30)
         self.assertFalse(contract["test_policy"]["test_used_for_selection"])
         self.assertFalse(contract["input_output"]["future_exogenous_allowed"])
+        self.assertEqual(
+            contract["training_policy"]["protocols"]["full"],
+            {"batch_size": 256, "max_epochs": 100, "early_stopping_patience": 12},
+        )
+        self.assertEqual(
+            contract["training_policy"]["protocols"]["small_sample"],
+            {"batch_size": 32, "max_epochs": 200, "early_stopping_patience": 20},
+        )
+
+    def test_contract_rejects_full_budget_for_small_sample(self):
+        contract_path = FRAME_ROOT / "configs" / "stage7_7_joint_baselines_contract.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["training_policy"]["protocols"]["small_sample"] = {
+            "batch_size": 256,
+            "max_epochs": 100,
+            "early_stopping_patience": 12,
+        }
+        with self.assertRaises(ValueError):
+            validate_stage7_7_contract(contract)
 
     def test_wrong_candidate_is_rejected(self):
         contract_path = (
