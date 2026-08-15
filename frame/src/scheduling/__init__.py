@@ -25,6 +25,9 @@ from .renewables import pv_available, wt_available
 from .real_replay import EnergyNomination, ReplayResult, build_energy_nomination, settle_real_replay
 from .imbalance_settlement import summarize_replay
 from .benchmark_parameters import SchedulingParameters, derive_benchmark_parameters
+from .dispatch_lp import DispatchInputs, DispatchResult, solve_dispatch_lp
+from .recourse import RealizedStep, settle_first_step
+from .rolling_horizon import ActualStream, RollingForecastSet, RollingResult, run_rolling_dispatch
 
 __all__ = [
     "AuditReport",
@@ -50,6 +53,15 @@ __all__ = [
     "summarize_replay",
     "SchedulingParameters",
     "derive_benchmark_parameters",
+    "DispatchInputs",
+    "DispatchResult",
+    "solve_dispatch_lp",
+    "RealizedStep",
+    "settle_first_step",
+    "ActualStream",
+    "RollingForecastSet",
+    "RollingResult",
+    "run_rolling_dispatch",
     "read_parameter_ledger",
     "validate_scheduling_contract",
 ]
