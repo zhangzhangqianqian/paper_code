@@ -20,12 +20,15 @@ from .data import (
     make_plan_view,
     make_settlement_view,
 )
+from .renewable_forecasts import FrozenRenewableForecaster, fit_renewable_forecaster
+from .renewables import pv_available, wt_available
 
 __all__ = [
     "AuditReport",
     "PlanningInformation",
     "RealizedInformation",
     "SchedulingFrame",
+    "FrozenRenewableForecaster",
     "DEFAULT_SCHEDULING_CONTRACT_PATH",
     "ParameterLedger",
     "SchedulingContract",
@@ -34,6 +37,9 @@ __all__ = [
     "load_scheduling_contract",
     "make_plan_view",
     "make_settlement_view",
+    "fit_renewable_forecaster",
+    "pv_available",
+    "wt_available",
     "read_parameter_ledger",
     "validate_scheduling_contract",
 ]
