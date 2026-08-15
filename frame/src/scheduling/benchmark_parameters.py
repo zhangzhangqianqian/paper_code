@@ -82,6 +82,7 @@ def derive_benchmark_parameters(
         "electric_chiller_cop": _ledger_value(ledger, "electric_chiller_cop"),
         "absorption_chiller_cop": _ledger_value(ledger, "absorption_chiller_cop"),
         "bess_roundtrip_efficiency": _ledger_value(ledger, "bess_roundtrip_efficiency"),
+        "bess_throughput_cost": _ledger_value(ledger, "bess_throughput_cost"),
         "grid_energy_price": _ledger_value(ledger, "grid_energy_price"),
         "gas_energy_price": _ledger_value(ledger, "gas_energy_price"),
         "unserved_penalty": _ledger_value(ledger, "unserved_penalty"),

@@ -21,6 +21,7 @@ LEDGER = {
     "electric_chiller_cop": 3.5,
     "absorption_chiller_cop": 0.75,
     "bess_roundtrip_efficiency": 0.9,
+    "bess_throughput_cost": 0.000001,
     "grid_energy_price": 1.0,
     "gas_energy_price": 0.6,
     "unserved_penalty": 100.0,
