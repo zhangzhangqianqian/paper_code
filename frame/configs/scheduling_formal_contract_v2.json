@@ -1,0 +1,25 @@
+{
+  "schema_version": "scheduling-formal-contract-v2",
+  "dataset": "kitakyushu_energy_station",
+  "test_year": 2021,
+  "history_hours": 24,
+  "horizon_hours": 4,
+  "task_order": ["electricity", "cooling", "heating", "gas"],
+  "models": ["scheme2r", "dynamic_symmetric", "hard_share", "mmoe_lite", "ple_lite"],
+  "seeds": [2026, 2027, 2028, 2029, 2030],
+  "prediction_sources": {
+    "scheme2r": {"root": "frame/reports/stage7r_4_kitakyushu_formal/full/A4/H4", "candidate": "H4"},
+    "dynamic_symmetric": {"root": "frame/reports/stage7r_7_joint_baselines_formal/full/dynamic_symmetric/H1", "candidate": "H1"},
+    "hard_share": {"root": "frame/reports/stage7r_7_joint_baselines_formal/full/hard_share/H2", "candidate": "H2"},
+    "mmoe_lite": {"root": "frame/reports/stage7r_5_kitakyushu_formal/full/mmoe_lite", "candidate": "external_fixed"},
+    "ple_lite": {"root": "frame/reports/stage7r_7_joint_baselines_formal/full/ple_lite/ple_lite_fixed_v1", "candidate": "ple_lite_fixed_v1"}
+  },
+  "origin_count": 8757,
+  "tracks": ["real_replay", "simulated_dispatch"],
+  "simulated_scenarios": ["core", "no_bess", "no_chp", "no_renewables", "single_hour", "carbon_price_sensitivity"],
+  "gas_main_balance": false,
+  "ordinary_future_actual_allowed": false,
+  "freeze_required": true,
+  "no_test_tuning_after_freeze": true,
+  "note": "Run freeze_scheduling_contract_v2.py after a passing stage-10.11 preflight; this template is not evidence of formal execution."
+}
