@@ -1,0 +1,47 @@
+schema_version: scheduling-dual-track-v2
+dataset: kitakyushu_energy_station
+
+time:
+  sampling: 1h
+  history_hours: 24
+  horizon_hours: 4
+  train_years: [2015, 2016, 2017, 2018, 2019]
+  validation_year: 2020
+  test_year: 2021
+
+task_order: [electricity, cooling, heating, gas]
+tracks: [real_replay, simulated_dispatch]
+
+track_configs:
+  real_replay:
+    label: Real-station replay
+    output_subdir: real_replay
+    uses_real_equipment: true
+    ordinary_mode_allow_actual_future: false
+    allowed_actual_data_role: settlement_only
+  simulated_dispatch:
+    label: Standard-IES dispatch benchmark
+    output_subdir: simulated_dispatch
+    uses_real_equipment: false
+    ordinary_mode_allow_actual_future: false
+    gas_demand_balance: false
+    topology: [grid, city_gas, pv, wt, chp, gas_boiler, electric_chiller, absorption_chiller, bess]
+
+gas:
+  role: station_side_device_consumption
+  main_dispatch_balance: false
+  allowed_s_uses: [diagnostic, gas_prior_ablation]
+
+solver:
+  name: scipy.optimize.linprog
+  method: highs
+  version_constraint: ">=1.13,<1.14"
+
+leakage:
+  ordinary_planning_forbids_actual_future: true
+  test_year_used_for_selection: false
+  test_year_used_for_scaling: false
+
+outputs:
+  real_replay_root: frame/reports/scheduling_v2/real_replay
+  simulated_dispatch_root: frame/reports/scheduling_v2/simulated_dispatch
