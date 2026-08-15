@@ -71,7 +71,8 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
     args.output.write_text(text, encoding="utf-8")
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # Hash the exact bytes on disk (Windows may normalize line endings).
+    digest = hashlib.sha256(args.output.read_bytes()).hexdigest()
     args.output.with_suffix(args.output.suffix + ".sha256").write_text(digest + "\n", encoding="utf-8")
     manifest = {
         "stage": "10.7",
