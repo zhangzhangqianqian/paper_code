@@ -22,6 +22,8 @@ from .data import (
 )
 from .renewable_forecasts import FrozenRenewableForecaster, fit_renewable_forecaster
 from .renewables import pv_available, wt_available
+from .real_replay import EnergyNomination, ReplayResult, build_energy_nomination, settle_real_replay
+from .imbalance_settlement import summarize_replay
 
 __all__ = [
     "AuditReport",
@@ -40,6 +42,11 @@ __all__ = [
     "fit_renewable_forecaster",
     "pv_available",
     "wt_available",
+    "EnergyNomination",
+    "ReplayResult",
+    "build_energy_nomination",
+    "settle_real_replay",
+    "summarize_replay",
     "read_parameter_ledger",
     "validate_scheduling_contract",
 ]
