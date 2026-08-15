@@ -24,6 +24,7 @@ from .renewable_forecasts import FrozenRenewableForecaster, fit_renewable_foreca
 from .renewables import pv_available, wt_available
 from .real_replay import EnergyNomination, ReplayResult, build_energy_nomination, settle_real_replay
 from .imbalance_settlement import summarize_replay
+from .benchmark_parameters import SchedulingParameters, derive_benchmark_parameters
 
 __all__ = [
     "AuditReport",
@@ -47,6 +48,8 @@ __all__ = [
     "build_energy_nomination",
     "settle_real_replay",
     "summarize_replay",
+    "SchedulingParameters",
+    "derive_benchmark_parameters",
     "read_parameter_ledger",
     "validate_scheduling_contract",
 ]
