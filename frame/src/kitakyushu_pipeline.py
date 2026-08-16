@@ -97,6 +97,23 @@ GAS_SOURCE_COLUMNS: Tuple[str, ...] = (
     "absorption_chiller_2",
     "absorption_chiller_3",
 )
+GAS_SOURCE_ALIASES: Mapping[str, Tuple[str, ...]] = {
+    "boiler": ("Boiler (m3)", "boiler"),
+    "fuel_cell": ("Fuel cell (m3)", "fuel cell", "fuel_cell"),
+    "gas_engine": ("Gas engine (m3)", "gas engine", "gas_engine"),
+    "absorption_chiller_1": (
+        "Absorption chiller 1 (m3)",
+        "absorption chiller 1",
+    ),
+    "absorption_chiller_2": (
+        "Absorption chiller 2 (m3)",
+        "absorption chiller 2",
+    ),
+    "absorption_chiller_3": (
+        "Absorption chiller 3 (m3)",
+        "absorption chiller 3",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -231,37 +248,36 @@ def _read_load_year(year: int, paths: KitakyushuPaths) -> Tuple[pd.DataFrame, Di
     return result, resolved
 
 
-def _read_gas_year(year: int, paths: KitakyushuPaths) -> Tuple[pd.DataFrame, Dict[str, str]]:
+def _read_gas_components_year(
+    year: int, paths: KitakyushuPaths
+) -> Tuple[pd.DataFrame, Dict[str, str]]:
     raw = _read_yearly_excel(paths.gas_zip, year, "gas")
     timestamp = _parse_timestamp(raw, "gas")
-    aliases = {
-        "boiler": ("Boiler (m3)", "boiler"),
-        "fuel_cell": ("Fuel cell (m3)", "fuel cell", "fuel_cell"),
-        "gas_engine": ("Gas engine (m3)", "gas engine", "gas_engine"),
-        "absorption_chiller_1": (
-            "Absorption chiller 1 (m3)",
-            "absorption chiller 1",
-        ),
-        "absorption_chiller_2": (
-            "Absorption chiller 2 (m3)",
-            "absorption chiller 2",
-        ),
-        "absorption_chiller_3": (
-            "Absorption chiller 3 (m3)",
-            "absorption chiller 3",
-        ),
-    }
     resolved = {
         "timestamp": _resolve_column(raw.columns, ("Date", "datetime", "timestamp"))
     }
-    for canonical, candidates in aliases.items():
+    for canonical, candidates in GAS_SOURCE_ALIASES.items():
         resolved[canonical] = _resolve_column(
             raw.columns,
             candidates,
             token_groups=((canonical.replace("_", " "),),),
         )
-    gas = sum(_numeric(raw, resolved[column]) for column in GAS_SOURCE_COLUMNS)
-    result = pd.DataFrame({"timestamp": timestamp, "gas": gas})
+    result = pd.DataFrame({"timestamp": timestamp})
+    for column in GAS_SOURCE_COLUMNS:
+        result[column] = _numeric(raw, resolved[column])
+    return result, resolved
+
+
+def _read_gas_year(year: int, paths: KitakyushuPaths) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    components, resolved = _read_gas_components_year(year, paths)
+    # Preserve the original aggregation semantics: a row is usable only when
+    # all six source columns are present.  Partial component missingness must
+    # remain missing rather than being silently ignored.
+    gas = components[list(GAS_SOURCE_COLUMNS)].sum(
+        axis=1, min_count=len(GAS_SOURCE_COLUMNS)
+    )
+    result = components[["timestamp"]].copy()
+    result["gas"] = gas
     return result, resolved
 
 
@@ -381,6 +397,34 @@ def read_kitakyushu_canonical(
         },
     }
     return canonical, metadata
+
+
+def read_kitakyushu_gas_components(
+    data_dir: str | Path,
+    years: Sequence[int],
+) -> pd.DataFrame:
+    """读取指定年份的六类能源站燃气设备分量，不读取负荷或气象文件。
+
+    返回 ``timestamp`` 与 :data:`GAS_SOURCE_COLUMNS`，单位沿用原始数据的
+    ``m3``。该接口用于设备运行阶段审计；常规预测任务仍使用聚合后的 ``gas``。
+    """
+
+    paths = KitakyushuPaths.from_root(data_dir)
+    paths.validate()
+    selected_years = tuple(int(year) for year in years)
+    if not selected_years:
+        raise ValueError("years不能为空")
+    pieces = []
+    for year in selected_years:
+        components, _ = _read_gas_components_year(year, paths)
+        if components["timestamp"].duplicated().any():
+            raise ValueError(f"{year} 年 gas 文件存在重复时间戳")
+        pieces.append(components)
+    result = pd.concat(pieces, ignore_index=True).sort_values("timestamp")
+    result = result.reset_index(drop=True)
+    if result["timestamp"].duplicated().any():
+        raise ValueError("年度 gas 分量合并后存在重复时间戳")
+    return result[["timestamp", *GAS_SOURCE_COLUMNS]]
 
 
 def clean_kitakyushu_dataframe(
