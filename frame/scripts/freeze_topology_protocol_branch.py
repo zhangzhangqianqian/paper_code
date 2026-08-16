@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -42,6 +43,40 @@ def _git_revision() -> str:
         return "unavailable"
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _phase_b_matrix(contract: dict[str, object], branch: str) -> dict[str, object]:
+    phase_a = contract["phase_a"]
+    phase_b = contract["phase_b"]
+    if branch == "core_conclusion_stable":
+        models = [
+            {"model": str(item["model"]), "candidate_id": str(item["candidate_id"])}
+            for item in phase_a["models"]
+        ]
+        seeds = [int(value) for value in phase_a["seeds"]]
+    else:
+        models = [
+            {"model": str(item["model"]), "candidate_id": str(item["candidate_id"])}
+            for item in phase_b["joint_models"]
+        ]
+        seeds = [int(value) for value in phase_b["formal_seeds"]]
+    return {
+        "models": models,
+        "seeds": seeds,
+        "training_years": [2017, 2018, 2019],
+        "validation_year": 2020,
+        "test_year": 2021,
+        "forecast_years": [2017, 2018, 2019, 2020, 2021],
+        "scheduling_tracks": ["real_replay", "simulated_dispatch"],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cross-registry")
@@ -56,9 +91,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    contract = None
     if args.contract:
         from src.topology_protocol_contract import load_topology_contract
-        load_topology_contract(_resolve(args.contract))
+        contract = load_topology_contract(_resolve(args.contract))
     if args.pilot_dir and not args.post_output_dir:
         args.post_output_dir = args.pilot_dir
     if args.audit_dir and not args.cross_registry:
@@ -89,11 +125,26 @@ def main(argv: list[str] | None = None) -> int:
     effect_rows = _read_effect_rows(output_root / "protocol_effect_bootstrap.csv")
     did_rows = _read_did_rows(output_root / "model_gap_difference_in_differences.csv")
     branch = decide_topology_branch(effect_rows, did_rows)
+    if contract is None:
+        raise ValueError("formal branch freeze requires --contract")
+    phase_b_matrix = _phase_b_matrix(contract, branch)
+    input_hashes: dict[str, object] = {
+        "contract": _sha256(_resolve(args.contract)),
+        "comparison_manifest": _sha256(output_root / "validation_comparison_manifest.json"),
+    }
+    if args.audit_dir:
+        audit_root = _resolve(args.audit_dir)
+        audit_files = sorted(path for path in audit_root.rglob("*") if path.is_file())
+        input_hashes["audit_files"] = {
+            str(path.relative_to(audit_root)): _sha256(path) for path in audit_files
+        }
     freeze = freeze_topology_branch(
         branch,
         manifest,
         output_root / "branch_freeze",
         git_revision=_git_revision(),
+        phase_b_matrix=phase_b_matrix,
+        input_hashes=input_hashes,
     )
     print(json.dumps({
         "stage": "topology_protocol_pilot_task7",

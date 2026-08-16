@@ -526,6 +526,7 @@ def freeze_topology_branch(
     *,
     git_revision: str = "unavailable",
     phase_b_matrix: Mapping[str, object] | None = None,
+    input_hashes: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Write an immutable validation branch freeze (or pilot-invalid marker)."""
 
@@ -544,6 +545,7 @@ def freeze_topology_branch(
         "git_revision": git_revision,
         "comparison_manifest": dict(comparison_manifest),
         "phase_b_run_matrix": dict(phase_b_matrix or {}),
+        "input_hashes": dict(input_hashes or {}),
     }
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if path.exists() and path.read_text(encoding="utf-8") != encoded:
