@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch-freeze", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--audit-dir")
     parser.add_argument("--expected-freeze-sha256")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--smoke", action="store_true")
@@ -65,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         _resolve(args.data_dir), freeze_path, _resolve(args.output_dir),
         contract_path=contract_path, smoke=args.smoke, resume=args.resume,
         expected_freeze_sha256=args.expected_freeze_sha256,
+        audit_dir=_resolve(args.audit_dir) if args.audit_dir else None,
     )
     print(json.dumps({
         "stage": manifest["stage"],

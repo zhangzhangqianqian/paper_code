@@ -184,6 +184,35 @@ def load_branch_freeze(path: str | Path, *, expected_sha256: str | None = None) 
     return freeze
 
 
+def validate_recorded_input_hashes(
+    freeze: Mapping[str, object],
+    *,
+    contract_path: str | Path | None = None,
+    audit_dir: str | Path | None = None,
+    current_git_revision: str | None = None,
+) -> None:
+    """Verify immutable Phase-A inputs before any Phase-B data read."""
+
+    recorded = freeze.get("input_hashes", {})
+    if not isinstance(recorded, Mapping):
+        raise ValueError("branch freeze input_hashes must be an object")
+    if contract_path is not None and recorded.get("contract"):
+        path = Path(contract_path)
+        if not path.is_file() or _sha256(path) != str(recorded["contract"]):
+            raise ValueError("topology contract SHA-256 mismatch")
+    audit_hashes = recorded.get("audit_files")
+    if audit_dir is not None and audit_hashes:
+        root = Path(audit_dir)
+        if not isinstance(audit_hashes, Mapping):
+            raise ValueError("audit_files hash record must be an object")
+        for relative, expected in audit_hashes.items():
+            path = root / str(relative)
+            if not path.is_file() or _sha256(path) != str(expected):
+                raise ValueError(f"topology audit SHA-256 mismatch: {path}")
+    if current_git_revision is not None and freeze.get("git_revision") not in {None, "unavailable", current_git_revision}:
+        raise ValueError("repository revision differs from the branch-freeze revision")
+
+
 def validate_phase_b_years(years: Sequence[int]) -> Tuple[int, ...]:
     selected = tuple(int(year) for year in years)
     if selected != PHASE_B_YEARS:
@@ -309,16 +338,42 @@ def _run_one(
     return manifest
 
 
+def _strict_resume_manifest(run_dir: Path, run: Mapping[str, object]) -> dict[str, object]:
+    manifest_path = run_dir / "run_manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"missing Phase-B run manifest: {run_dir}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid Phase-B run manifest: {manifest_path}") from exc
+    if manifest.get("status") != "passed" or manifest.get("branch") != run["branch"]:
+        raise ValueError(f"cannot resume invalid Phase-B run: {run_dir}")
+    for name, expected in (manifest.get("artifact_sha256") or {}).items():
+        path = run_dir / str(name)
+        if not path.is_file() or _sha256(path) != str(expected):
+            raise ValueError(f"Phase-B artifact SHA-256 mismatch: {path}")
+    if manifest.get("test_set_accessed") is not True or manifest.get("test_used_for_selection") is not False:
+        raise ValueError(f"Phase-B run manifest violates test-use policy: {run_dir}")
+    return manifest
+
+
 def run_phase_b(
     data_dir: str | Path, branch_freeze_path: str | Path, output_dir: str | Path,
     *, contract_path: str | Path | None = None, smoke: bool = False,
     resume: bool = False, expected_freeze_sha256: str | None = None,
+    audit_dir: str | Path | None = None,
 ) -> dict[str, object]:
     freeze = load_branch_freeze(branch_freeze_path, expected_sha256=expected_freeze_sha256)
     if contract_path is not None:
         contract = load_topology_contract(contract_path)
         branch = validate_phase_b_authorization(freeze)
         resolve_phase_b_matrix(contract, branch)
+        validate_recorded_input_hashes(
+            freeze,
+            contract_path=contract_path,
+            audit_dir=audit_dir,
+            current_git_revision=_git_revision(),
+        )
     frame, metadata = _load_data_after_authorization(data_dir, freeze)
     windows, stats = build_phase_b_windows(frame)
     if smoke:
@@ -331,9 +386,7 @@ def run_phase_b(
         run_dir = root / str(run["model"]) / str(run["candidate_id"]) / f"seed_{run['seed']}"
         manifest_path = run_dir / "run_manifest.json"
         if resume and manifest_path.is_file():
-            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if existing.get("status") != "passed" or existing.get("branch") != run["branch"]:
-                raise ValueError(f"cannot resume invalid Phase-B run: {run_dir}")
+            existing = _strict_resume_manifest(run_dir, run)
             completed.append(existing)
             continue
         if manifest_path.exists() and not resume:
@@ -356,5 +409,5 @@ __all__ = [
     "JOINT_MODELS", "PHASE_A_MODELS", "PHASE_A_SEEDS", "PHASE_B_FORMAL_SEEDS",
     "PHASE_B_YEARS", "build_phase_b_run_plan", "build_phase_b_windows",
     "load_branch_freeze", "run_phase_b", "validate_phase_b_authorization",
-    "validate_phase_b_years",
+    "validate_phase_b_years", "validate_recorded_input_hashes",
 ]

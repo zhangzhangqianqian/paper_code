@@ -10,6 +10,7 @@ from frame.src.topology_test_runner import (
     PHASE_B_FORMAL_SEEDS,
     build_phase_b_run_plan,
     load_branch_freeze,
+    validate_recorded_input_hashes,
     validate_phase_b_authorization,
 )
 
@@ -81,6 +82,26 @@ class TopologyTestRunnerTests(unittest.TestCase):
         self.assertEqual(validate_phase_b_years((2017, 2018, 2019, 2020, 2021)), (2017, 2018, 2019, 2020, 2021))
         with self.assertRaises(ValueError):
             validate_phase_b_years((2017, 2018, 2019, 2020))
+
+    def test_contract_and_audit_hash_mismatch_is_rejected(self) -> None:
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = root / "contract.json"
+            audit = root / "audit.json"
+            contract.write_text("contract", encoding="utf-8")
+            audit.write_text("audit", encoding="utf-8")
+            digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+            freeze = _freeze("core_conclusion_stable")
+            freeze["input_hashes"] = {
+                "contract": digest(contract),
+                "audit_files": {"audit.json": digest(audit)},
+            }
+            validate_recorded_input_hashes(freeze, contract_path=contract, audit_dir=root)
+            audit.write_text("changed", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                validate_recorded_input_hashes(freeze, contract_path=contract, audit_dir=root)
 
 
 if __name__ == "__main__":
