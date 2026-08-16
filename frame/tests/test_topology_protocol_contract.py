@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from frame.src.topology_protocol_contract import (
     resolve_phase_b_matrix,
     validate_topology_contract,
 )
+from frame.scripts.validate_topology_phase_a import build_preflight_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +107,23 @@ class TopologyProtocolContractTests(unittest.TestCase):
         with self.assertRaises(TopologyProtocolContractError):
             validate_topology_contract(altered)
 
+    def test_phase_a_preflight_blocks_missing_inputs_and_revision_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = root / "contract.json"
+            contract.write_text(json.dumps(self.contract), encoding="utf-8")
+            report = build_preflight_report(
+                contract,
+                root / "missing_data",
+                root / "preflight",
+                repo_root=root,
+                expected_revision="different-revision",
+                run_tests=False,
+            )
+            self.assertFalse(report["formal_training_allowed"])
+            self.assertEqual(report["checks"]["contract"]["status"], "passed")
+            self.assertEqual(report["checks"]["data"]["status"], "failed")
+            self.assertEqual(report["checks"]["git"]["status"], "failed")
 
 if __name__ == "__main__":
     unittest.main()
