@@ -1,0 +1,141 @@
+{
+  "contract_version": "topology_protocol_pilot_v1",
+  "contract_status": "frozen_for_phase_a",
+  "dataset": "kitakyushu_energy_station",
+  "task_order": [
+    "electricity",
+    "cooling",
+    "heating",
+    "gas"
+  ],
+  "window": {
+    "sampling": "1h",
+    "lookback": 24,
+    "horizon": 4,
+    "output_shape": ["N", 4, 4],
+    "standardization": "train_split_only_zscore",
+    "future_exogenous_allowed": false
+  },
+  "protocols": {
+    "cross_topology": {
+      "train_start": "2015-01-01 00:00:00",
+      "train_end": "2019-12-31 23:00:00",
+      "validation_start": "2020-01-01 00:00:00",
+      "validation_end": "2020-12-31 23:00:00",
+      "test_start": "2021-01-01 00:00:00",
+      "test_end": "2021-12-31 23:00:00"
+    },
+    "post_ge_regular_operation": {
+      "train_start": "2017-01-01 00:00:00",
+      "train_end": "2019-12-31 23:00:00",
+      "validation_start": "2020-01-01 00:00:00",
+      "validation_end": "2020-12-31 23:00:00",
+      "test_start": "2021-01-01 00:00:00",
+      "test_end": "2021-12-31 23:00:00"
+    }
+  },
+  "phase_a": {
+    "allowed_years": [2015, 2016, 2017, 2018, 2019, 2020],
+    "forbidden_years": [2021],
+    "models": [
+      {
+        "model": "scheme2r",
+        "candidate_id": "H4",
+        "hyperparameters": {
+          "candidate_id": "H4",
+          "hidden_dim": 32,
+          "kernel_size": 5,
+          "dilations": [1, 2, 4],
+          "dropout": 0.1,
+          "learning_rate": 0.0005,
+          "scheme2r_kernel_size": 5,
+          "scheme2r_dilations": [1, 2, 4],
+          "scheme2r_rank": 8,
+          "scheme2r_gate_hidden_dim": 16,
+          "scheme2r_step_embedding_dim": 4,
+          "prediction_head_hidden_dim": 16
+        }
+      },
+      {
+        "model": "dynamic_symmetric",
+        "candidate_id": "H1",
+        "hyperparameters": {
+          "candidate_id": "H1",
+          "hidden_dim": 16,
+          "kernel_size": 5,
+          "dilations": [1, 2, 4],
+          "dropout": 0.0,
+          "learning_rate": 0.001,
+          "prediction_head_hidden_dim": 16
+        }
+      }
+    ],
+    "seeds": [2026, 2027, 2028],
+    "training_policy": {
+      "device": "cpu",
+      "loss": "SmoothL1Loss",
+      "optimizer": "AdamW",
+      "weight_decay": 0.0001,
+      "gradient_clip_norm": 1.0,
+      "batch_size": 256,
+      "max_epochs": 100,
+      "early_stopping_patience": 12,
+      "early_stopping_monitor": "validation_loss",
+      "checkpoint_policy": "restore_best_validation_loss"
+    }
+  },
+  "phase_b": {
+    "formal_seeds": [2026, 2027, 2028, 2029, 2030],
+    "joint_models": [
+      {"model": "hard_share", "candidate_id": "H2"},
+      {"model": "dynamic_symmetric", "candidate_id": "H1"},
+      {"model": "mmoe-lite", "candidate_id": "external_fixed"},
+      {"model": "ple-lite", "candidate_id": "ple_lite_fixed_v1"},
+      {"model": "scheme2r", "candidate_id": "H4"}
+    ],
+    "branch_matrices": {
+      "core_prediction_changed": {
+        "forecast_models": "joint_models",
+        "forecast_seeds": "formal_seeds",
+        "scheduling_tracks": ["real_replay", "simulated_dispatch"],
+        "simulated_dispatch_scenarios": "full_frozen_matrix"
+      },
+      "gas_only_changed": {
+        "forecast_models": "joint_models",
+        "forecast_seeds": "formal_seeds",
+        "scheduling_tracks": ["real_replay", "simulated_dispatch"],
+        "simulated_dispatch_scenarios": "pilot_models_core_only"
+      },
+      "core_conclusion_stable": {
+        "forecast_models": "phase_a_models",
+        "forecast_seeds": "phase_a_seeds",
+        "scheduling_tracks": ["real_replay", "simulated_dispatch"],
+        "simulated_dispatch_scenarios": "pilot_models_core_only"
+      }
+    }
+  },
+  "statistics": {
+    "primary_metrics": ["MAE", "RMSE", "WAPE"],
+    "auxiliary_metrics": ["MAPE"],
+    "method": "paired_circular_moving_block_bootstrap",
+    "block_length_origins": 168,
+    "replicates": 2000,
+    "confidence_level": 0.95,
+    "multiple_testing": "benjamini_hochberg",
+    "seed": 2026
+  },
+  "branch_rules": {
+    "valid_branches": [
+      "core_prediction_changed",
+      "gas_only_changed",
+      "core_conclusion_stable"
+    ],
+    "invalid_status": "pilot_invalid",
+    "model_gap": "scheme2r_error_minus_dynamic_symmetric_error",
+    "core_tasks": ["electricity", "cooling", "heating"],
+    "core_change_requires": "gap_sign_reversal_with_ci_excluding_zero_or_two_core_tasks_direction_consistent_and_bh_significant",
+    "gas_only_requires": "gas_effect_bh_significant_and_core_change_false",
+    "invalid_requires": "training_or_data_reliability_failure"
+  },
+  "output_root": "frame/reports/topology_protocol_pilot/post_ge_regular_operation"
+}
