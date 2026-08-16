@@ -31,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch-freeze", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument(
+        "--phase-a-dir",
+        help="Phase-A validation output root used to reuse matching checkpoints",
+    )
     parser.add_argument("--audit-dir")
     parser.add_argument("--expected-freeze-sha256")
     parser.add_argument("--dry-run", action="store_true")
@@ -67,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         contract_path=contract_path, smoke=args.smoke, resume=args.resume,
         expected_freeze_sha256=args.expected_freeze_sha256,
         audit_dir=_resolve(args.audit_dir) if args.audit_dir else None,
+        phase_a_dir=_resolve(args.phase_a_dir) if args.phase_a_dir else None,
     )
     print(json.dumps({
         "stage": manifest["stage"],
@@ -75,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         "run_count_completed": manifest["run_count_completed"],
         "run_count_expected": manifest["run_count_expected"],
         "test_set_accessed": manifest["test_set_accessed"],
+        "phase_a_reuse": manifest["phase_a_reuse"],
         "output_dir": str(_resolve(args.output_dir)),
     }, ensure_ascii=False))
     return 0

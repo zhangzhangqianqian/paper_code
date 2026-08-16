@@ -5,14 +5,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from frame.src.topology_test_runner import (
     PHASE_A_SEEDS,
     PHASE_B_FORMAL_SEEDS,
     build_phase_b_run_plan,
     load_branch_freeze,
+    run_phase_b,
+    _validate_phase_a_reuse_source,
     validate_recorded_input_hashes,
     validate_phase_b_authorization,
 )
+from frame.src.training import StandardizationStats
 
 
 def _freeze(branch: str) -> dict[str, object]:
@@ -102,6 +107,64 @@ class TopologyTestRunnerTests(unittest.TestCase):
             audit.write_text("changed", encoding="utf-8")
             with self.assertRaises(ValueError):
                 validate_recorded_input_hashes(freeze, contract_path=contract, audit_dir=root)
+
+    def test_stable_branch_requires_phase_a_reuse_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            freeze_path = Path(directory) / "freeze.json"
+            freeze_path.write_text(json.dumps(_freeze("core_conclusion_stable")), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                run_phase_b(
+                    data_dir=directory,
+                    branch_freeze_path=freeze_path,
+                    output_dir=Path(directory) / "out",
+                )
+
+    def test_phase_a_reuse_source_is_hash_and_protocol_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scheme2r" / "H4" / "seed_2026"
+            source.mkdir(parents=True)
+            stats = StandardizationStats(
+                load_mean=np.zeros(4, dtype=np.float32),
+                load_scale=np.ones(4, dtype=np.float32),
+                exog_mean=np.zeros(12, dtype=np.float32),
+                exog_scale=np.ones(12, dtype=np.float32),
+                exog_columns=tuple(f"x{i}" for i in range(12)),
+                task_columns=("electricity", "cooling", "heating", "gas"),
+            )
+            stats.save(source / "normalization_stats.npz")
+            (source / "best_model.pt").write_bytes(b"checkpoint")
+            (source / "history.json").write_text(json.dumps({"history": []}), encoding="utf-8")
+            import hashlib
+
+            def digest(path: Path) -> str:
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+
+            manifest = {
+                "stage": "topology_protocol_pilot_phase_a",
+                "status": "passed",
+                "model": "scheme2r",
+                "candidate_id": "H4",
+                "seed": 2026,
+                "years_loaded": [2017, 2018, 2019, 2020],
+                "test_set_accessed": False,
+                "window": {"output_shape": [8781, 4, 4]},
+                "git_revision": "test-revision",
+                "artifact_sha256": {
+                    "best_model.pt": digest(source / "best_model.pt"),
+                    "normalization_stats.npz": digest(source / "normalization_stats.npz"),
+                    "history.json": digest(source / "history.json"),
+                },
+            }
+            (source / "run_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            loaded, reused_stats = _validate_phase_a_reuse_source(
+                source,
+                {"model": "scheme2r", "candidate_id": "H4", "seed": 2026},
+                expected_git_revision="test-revision",
+                expected_stats=stats,
+            )
+            self.assertEqual(loaded["stage"], "topology_protocol_pilot_phase_a")
+            self.assertTrue(np.array_equal(reused_stats.load_scale, stats.load_scale))
 
 
 if __name__ == "__main__":

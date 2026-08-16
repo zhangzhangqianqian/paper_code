@@ -1,0 +1,73 @@
+{
+  "freeze_id": "scheme2r-v1",
+  "freeze_status": "architecture_frozen_for_manuscript",
+  "freeze_basis": {
+    "stage6_selection": "frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json",
+    "stage6_candidate": "H4",
+    "stage7r_formal_runs": 124,
+    "stage8_analysis": "frame/reports/stage8r_joint_revised"
+  },
+  "dataset": {
+    "name": "kitakyushu_energy_station",
+    "tasks": ["electricity", "cooling", "heating", "gas"],
+    "task_order_is_fixed": true,
+    "lookback": 24,
+    "horizon": 4,
+    "sampling": "1h",
+    "exog_dim": 12,
+    "input_shapes": {
+      "loads": ["B", 24, 4],
+      "exog": ["B", 24, 12]
+    },
+    "output_shape": ["B", 4, 4]
+  },
+  "encoder": {
+    "type": "full_window_depthwise_separable_tcn",
+    "task_specific_encoders": 4,
+    "hidden_dim": 32,
+    "kernel_size": 5,
+    "dilations": [1, 2, 4],
+    "dropout": 0.1,
+    "representation_shape": ["B", 4, 32]
+  },
+  "context_and_routing": {
+    "state_source": "historical_exogenous_summary",
+    "state_dim": 16,
+    "state_hidden_dim": 32,
+    "task_role_embedding_dim": 8,
+    "forecast_step_embedding_dim": 4,
+    "gate_hidden_dim": 16,
+    "shared_strength": "rho[B,4,4]",
+    "source_allocation": "pi[B,4,4,4]",
+    "final_gate": "gates[B,4,4,4] = rho[...,target] * pi[...,target,source]",
+    "self_route": "gates[...,i,i] == 0",
+    "routing": "dynamic_directed_state_and_horizon_conditioned"
+  },
+  "message_and_prediction": {
+    "message_projection": "directed_low_rank",
+    "low_rank": 8,
+    "fusion": "layer_norm_learned_residual_scale",
+    "head": "task_step_scalar_heads",
+    "head_hidden_dim": 16,
+    "parameter_count": 39834
+  },
+  "claims_boundary": {
+    "supported": [
+      "competitive_full_protocol_joint_forecasting",
+      "explicit_state_and_horizon_conditioned_directed_task_sharing",
+      "controlled_model_size_relative_to_mmoe_lite_and_ple_lite"
+    ],
+    "not_supported": [
+      "universal_superiority_over_all_joint_models",
+      "universal_superiority_over_matched_single_task_models",
+      "universal_negative_transfer_elimination",
+      "cross_dataset_state_of_the_art_claim"
+    ]
+  },
+  "prohibited_after_freeze": [
+    "architecture_changes_without_a_new_v2_experiment",
+    "hyperparameter_reselection_using_test_results",
+    "adding_transformer_star_frequency_or_stim_modules_to_v1",
+    "mixing_legacy_results_into_final_tables"
+  ]
+}

@@ -22,10 +22,30 @@ def _resolve(value: str) -> Path:
     return path if path.is_absolute() else REPOSITORY_ROOT / path
 
 
+def _locate_freeze(root: Path, explicit: str | None = None) -> Path:
+    """Locate the immutable branch freeze across legacy and current layouts."""
+
+    candidates = []
+    if explicit:
+        candidates.append(_resolve(explicit))
+    candidates.extend(
+        (
+            root / "branch_freeze" / "topology_branch_freeze.json",
+            root / "protocol_comparison" / "validation_2020" / "branch_freeze" / "topology_branch_freeze.json",
+            root / "protocol_comparison" / "branch_freeze" / "topology_branch_freeze.json",
+        )
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("no topology branch freeze found; checked: " + ", ".join(str(path) for path in candidates))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", required=True)
     parser.add_argument("--root", required=True)
+    parser.add_argument("--branch-freeze")
     parser.add_argument("--prediction-dir")
     parser.add_argument("--scheduling-manifest")
     parser.add_argument("--dry-run", action="store_true")
@@ -33,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
 
     contract = load_topology_contract(_resolve(args.contract))
     root = _resolve(args.root)
-    freeze_path = root / "branch_freeze" / "topology_branch_freeze.json"
+    freeze_path = _locate_freeze(root, args.branch_freeze)
     freeze = load_branch_freeze(freeze_path)
     resolve_phase_b_matrix(contract, str(freeze["branch"]))
     if args.dry_run:

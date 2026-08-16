@@ -33,6 +33,7 @@ from src.data_pipeline import save_json  # noqa: E402
 
 TASKS: Tuple[str, ...] = ("electricity", "cooling", "heating", "gas")
 METRICS: Tuple[str, ...] = ("MAE", "RMSE", "WAPE", "MAPE")
+FORMAL_SEEDS: Tuple[int, ...] = (2026, 2027, 2028, 2029, 2030)
 
 
 def _resolve(value: str) -> Path:
@@ -54,6 +55,28 @@ def _write_csv(rows: Sequence[Mapping[str, object]], path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _read_resource_csv(path: Path) -> Dict[Tuple[str, str, str, str, str, str], Dict[str, object]]:
+    """Read post-hoc resource benchmarks keyed by the formal logical run."""
+
+    if not path.exists():
+        return {}
+    lookup: Dict[Tuple[str, str, str, str, str, str], Dict[str, object]] = {}
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            key = (
+                str(row.get("stage", "")),
+                str(row.get("source_group", "")),
+                str(row.get("protocol", "")),
+                str(row.get("model", "")),
+                str(row.get("candidate_id", "")),
+                str(row.get("seed", "")),
+            )
+            if key in lookup:
+                raise ValueError(f"duplicate resource benchmark key: {key}")
+            lookup[key] = dict(row)
+    return lookup
 
 
 def _freeze_primary_is_scheme2r(freeze: Mapping[str, object] | None) -> bool:
@@ -157,6 +180,17 @@ def _validate_run_manifest(run_dir: Path, stage: str) -> Dict[str, object]:
         raise ValueError(f"window protocol mismatch: {manifest_path}")
     if manifest.get("test_used_for_selection", False):
         raise ValueError(f"run reports test-set selection: {manifest_path}")
+    baseline_type = str(manifest.get("baseline_type", "learned"))
+    if baseline_type == "deterministic":
+        if manifest.get("seed") is not None:
+            raise ValueError(f"deterministic run must not have a training seed: {manifest_path}")
+    else:
+        try:
+            seed = int(manifest.get("seed"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"learned run is missing a valid seed: {manifest_path}") from exc
+        if seed not in FORMAL_SEEDS:
+            raise ValueError(f"unexpected formal seed {seed}: {manifest_path}")
     return manifest
 
 
@@ -167,9 +201,24 @@ def _iter_runs(
     expected_runs: int,
 ) -> List[Dict[str, object]]:
     records: List[Dict[str, object]] = []
+    logical_keys = set()
     for manifest_path in sorted(root.rglob("run_manifest.json")):
         run_dir = manifest_path.parent
         manifest = _validate_run_manifest(run_dir, stage)
+        seed_key = (
+            "deterministic"
+            if manifest.get("baseline_type") == "deterministic"
+            else int(manifest["seed"])
+        )
+        logical_key = (
+            str(manifest.get("protocol")),
+            str(manifest.get("model")),
+            str(manifest.get("candidate_id")),
+            seed_key,
+        )
+        if logical_key in logical_keys:
+            raise ValueError(f"duplicate logical run key in {root}: {logical_key}")
+        logical_keys.add(logical_key)
         records.append(
             {
                 "stage": stage,
@@ -335,7 +384,10 @@ def _aggregate_metric_rows(rows: Sequence[Mapping[str, object]]) -> List[Dict[st
     return output
 
 
-def _resource_rows(records: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
+def _resource_rows(
+    records: Sequence[Mapping[str, object]],
+    resource_lookup: Mapping[Tuple[str, str, str, str, str, str], Mapping[str, object]] | None = None,
+) -> List[Dict[str, object]]:
     groups: Dict[Tuple[str, str, str, str], List[Mapping[str, object]]] = defaultdict(list)
     for record in records:
         manifest = record["manifest"]
@@ -368,10 +420,26 @@ def _resource_rows(records: Sequence[Mapping[str, object]]) -> List[Dict[str, ob
             item[f"{field}_seconds_mean"] = float(values.mean())
             item[f"{field}_seconds_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
         resource_values = [
-            manifest.get("resource_benchmark")
-            if isinstance(manifest.get("resource_benchmark"), Mapping)
-            else {}
-            for manifest in group
+            (
+                resource_lookup.get(
+                    (
+                        stage,
+                        source_group,
+                        str(item.get("protocol", "")),
+                        str(item.get("model", "")),
+                        str(item.get("candidate_id", "")),
+                        str(item.get("seed") if item.get("seed") is not None else "deterministic"),
+                    ),
+                    {},
+                )
+                if resource_lookup is not None
+                else (
+                    item.get("resource_benchmark")
+                    if isinstance(item.get("resource_benchmark"), Mapping)
+                    else {}
+                )
+            )
+            for item in group
         ]
         for field in (
             "macs_per_batch_estimated",
@@ -412,6 +480,18 @@ def _index_rows(records: Sequence[Mapping[str, object]]) -> List[Dict[str, objec
                 "source_group": record["source_group"],
                 "protocol": manifest.get("protocol", ""),
                 "model": manifest.get("model", ""),
+                "candidate_id": manifest.get("candidate_id", ""),
+                "input_mode": manifest.get("input_mode", ""),
+                "future_exogenous_used": manifest.get("future_exogenous_used", False),
+                "model_role": (
+                    "matched_stl_reference"
+                    if record["source_group"] == "matched_stl_reference"
+                    else "ablation_scheme2r"
+                    if record["stage"] == "7.4" and manifest.get("model") == "A4"
+                    else "external_baseline"
+                    if record["source_group"] == "external_baseline"
+                    else "main_internal"
+                ),
                 "seed": manifest.get("seed") if manifest.get("seed") is not None else "deterministic",
                 "status": manifest.get("status"),
                 "test_set_accessed": manifest.get("test_set_accessed"),
@@ -475,6 +555,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage6-5-dir", default="frame/reports/stage6r_5_kitakyushu_full")
     parser.add_argument("--freeze-config", default="frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json")
     parser.add_argument("--output-dir", default="frame/reports/stage7r_6_kitakyushu_acceptance")
+    parser.add_argument(
+        "--resource-file",
+        default="frame/reports/stage7r_resource_benchmarks.csv",
+        help="post-hoc CPU resource benchmark CSV; omitted fields remain NA",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
@@ -520,6 +605,7 @@ def main() -> None:
         "7R.STL": _resolve(args.stage7_stl_dir),
     }
     output_dir = _resolve(args.output_dir)
+    resource_path = _resolve(args.resource_file)
     manifest_path = output_dir / "stage7_6_manifest.json"
     if manifest_path.exists() and not args.force:
         raise FileExistsError(f"manifest exists; use --force: {manifest_path}")
@@ -567,7 +653,8 @@ def main() -> None:
         )
 
     index_rows = _index_rows(records)
-    resource_rows = _resource_rows(records)
+    resource_lookup = _read_resource_csv(resource_path)
+    resource_rows = _resource_rows(records, resource_lookup)
     aggregate_rows = _aggregate_metric_rows(metric_rows)
     overall_rows = [row for row in aggregate_rows if row["granularity"] == "overall"]
     linkage_rows = _diagnostic_linkage(
@@ -600,6 +687,11 @@ def main() -> None:
             "gate_diagnostics_dir": str(_resolve(args.stage6_4_dir)),
             "transfer_analysis_dir": str(_resolve(args.stage6_5_dir)),
             "test_set_accessed": False,
+        },
+        "resource_benchmark": {
+            "file": str(resource_path),
+            "record_count": len(resource_lookup),
+            "complete_for_formal_runs": len(resource_lookup) == len(records),
         },
         "output_files": [
             "raw_result_index.csv",

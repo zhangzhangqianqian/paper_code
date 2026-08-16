@@ -102,9 +102,12 @@ def solve_dispatch_lp(inputs: DispatchInputs) -> DispatchResult:
 
     c = np.zeros(total, dtype=np.float64)
     for t in range(horizon):
-        c[idx("grid", t)] = p["grid_energy_price"]
-        c[idx("g_chp", t)] = p["gas_energy_price"]
-        c[idx("g_gb", t)] = p["gas_energy_price"]
+        carbon_price = p.get("carbon_price", p.get("carbon_price_default", 0.0))
+        grid_carbon = carbon_price * p.get("grid_emission_factor", 0.0)
+        gas_carbon = carbon_price * p.get("gas_emission_factor", 0.0)
+        c[idx("grid", t)] = p["grid_energy_price"] + grid_carbon
+        c[idx("g_chp", t)] = p["gas_energy_price"] + gas_carbon
+        c[idx("g_gb", t)] = p["gas_energy_price"] + gas_carbon
         c[idx("slack_e", t)] = p["unserved_penalty"]
         c[idx("slack_c", t)] = p["unserved_penalty"]
         c[idx("slack_h", t)] = p["unserved_penalty"]

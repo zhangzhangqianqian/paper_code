@@ -1,4 +1,4 @@
-"""Legacy Stage 7-R aggregator.
+"""Compatibility Stage 7-R aggregator.
 
 The canonical acceptance path is ``run_stage7_6.py``.  This compatibility
 script aggregates only materialized source runs and therefore does not add
@@ -36,7 +36,7 @@ from src.data_pipeline import save_json  # noqa: E402
 
 
 REVISION_VERSION = "stage7R.1"
-EXPECTED_DEFAULT_TOTAL = 114
+EXPECTED_DEFAULT_TOTAL = 124
 
 
 def _resolve(value: str) -> Path:
@@ -46,7 +46,7 @@ def _resolve(value: str) -> Path:
 
 def build_acceptance_sources(
     root: Path,
-    stage7_4_runs: int = 40,
+    stage7_4_runs: int = 50,
 ) -> Tuple[Dict[str, object], ...]:
     return (
         {
@@ -132,7 +132,7 @@ def _collect_runs(item: Mapping[str, object]) -> List[Dict[str, object]]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Aggregate the 114 materialized Stage 7-R runs"
+        description="Aggregate the 124 current Stage 7-R runs"
     )
     parser.add_argument(
         "--stage7r-root",

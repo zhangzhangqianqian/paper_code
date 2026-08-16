@@ -44,16 +44,17 @@
 |---|---|---|---|---:|
 | 主模型与内部对照 | Scheme2R、Dynamic Symmetric | full、small_sample | 2026—2030 | 20 |
 | 递进消融 | A0—A4 | full、small_sample | 2026—2030 | 50 |
-| 外部基线 | DLinear、MMoE-lite、SOFTS | full、small_sample × 5 种子 | 30 |
+| 外部学习基线 | DLinear、MMoE-lite、SOFTS | full、small_sample × 5 种子 | 30 |
 | 确定性基线 | Persistence、Seasonal Naive | 每套协议各 1 次 | 4 |
-| 结构匹配参照 | Independent STL-H3 | full、small_sample × 5 种子 | 10 |
-| 合计 |  |  |  | 114 |
+| Scheme2R-loads-only 控制 | Scheme2R 去除外生变量 | full、small_sample × 5 种子 | 10 |
+| 结构匹配参照 | Independent STL-H4 | full、small_sample × 5 种子 | 10 |
+| 合计 |  |  |  | 124 |
 
-其中 110 次需要训练，4 次确定性基线只进行计算。
+其中 120 次需要训练，4 次确定性基线只进行计算。结构匹配 STL 使用与 Scheme2R-H4 相同的编码器和任务—预测步预测头；Stage 7.3 中的 STL-H3 仍作为冻结主参照的独立正式运行，但不能替代 Stage 7-R.STL-H4 的负迁移参照。
 
 ## 6. STL 公平性约束
 
-- 使用与冻结 H3 相同的隐藏维度、卷积核、dropout、学习率、batch size、最大 epoch 和 early stopping。
+- 使用与 Scheme2R-H4 相同的隐藏维度、卷积核、dropout、学习率、batch size、最大 epoch 和 early stopping。
 - 每个任务使用相同结构但参数独立的 DS-TCN 编码器和任务预测头。
 - 使用相同训练、验证、测试时间切分，相同 24→4 窗口和训练集专属标准化。
 - 不允许使用未来外生变量。
@@ -63,8 +64,8 @@
 
 1. 修复共享训练工具和阶段 7.3、7.4、7.5 的种子调用顺序。
 2. 新增 STL 正式运行器，支持 `--dry-run`、断点续跑、`--force` 和独立输出目录。
-3. 新增阶段 7-R 总控脚本，展示 114 次运行计划；实际训练可以按子阶段分别执行。
-4. 新增独立的阶段 7-R 汇总脚本 `run_stage7r_acceptance.py`，使其读取四组修订结果并验收 114 次运行；原阶段 7.6 汇总器保持不变，只用于追溯旧版 104 次结果。
+3. 新增阶段 7-R 总控脚本，依据冻结文件动态展示运行计划；当前冻结下为124条记录。
+4. 新增独立的阶段 7-R 汇总脚本 `run_stage7r_acceptance.py`，使其读取四组修订结果并按冻结文件动态验收；原阶段 7.6 汇总器保持对旧结果的兼容性，同时承担当前124条结果的规范汇总。
 5. 任一运行失败时写入失败清单并返回非零退出码，不静默跳过。
 
 ## 8. 测试与验收
@@ -73,8 +74,8 @@
 - 不同种子至少存在一项初始参数不同；
 - 相同种子的训练 DataLoader 首批索引一致；
 - 原有 130 项测试继续通过；
-- 各脚本 dry-run 的运行数分别为 20、50、34、10，总计 114；
-- 修订汇总清单显示 114/114 成功，失败数为 0；
+- 各脚本 dry-run 的运行数分别为 20、50、44、10，总计 124；
+- 修订汇总清单显示 124/124 成功，失败数为 0；
 - 所有正式运行记录 `test_used_for_selection=false`；
 - 阶段 8 只使用修订后的可复现结果计算测试集迁移收益。
 

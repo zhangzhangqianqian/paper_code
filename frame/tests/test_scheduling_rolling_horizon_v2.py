@@ -52,6 +52,20 @@ class RollingHorizonTest(unittest.TestCase):
             self.assertEqual(len(first.rows), 1)
             resumed = run_rolling_dispatch(RollingForecastSet(origins, demand, zeros, zeros), actual, PARAMETERS, checkpoint_path=checkpoint)
             self.assertEqual(len(resumed.rows), 2)
+            self.assertEqual(len(resumed.plans), 2)
+            self.assertEqual(len(resumed.realized_steps), 2)
+
+    def test_single_hour_and_zero_bess_scenario_are_supported(self):
+        origins = np.array(["2021-01-01T00"], dtype="datetime64[h]")
+        demand = np.asarray([[[12.0, 5.0, 4.0]]], dtype=float)
+        zeros = np.zeros((1, 1), dtype=float)
+        actual = ActualStream(origins, np.array([12.0]), np.array([5.0]), np.array([4.0]), np.zeros(1), np.zeros(1))
+        parameters = dict(PARAMETERS)
+        parameters["bess_power_capacity"] = 0.0
+        parameters["bess_energy_capacity"] = 0.0
+        result = run_rolling_dispatch(RollingForecastSet(origins, demand, zeros, zeros), actual, parameters)
+        self.assertEqual(len(result.rows), 1)
+        self.assertTrue(np.isfinite(result.final_soc))
 
 
 if __name__ == "__main__":

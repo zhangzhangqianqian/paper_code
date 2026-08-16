@@ -25,6 +25,52 @@ class RealizedStep:
     unserved_heating: float
     curtailment: float
     realized_cost: float
+    electric_chiller_electricity: float = 0.0
+    electric_chiller_cooling: float = 0.0
+    gas_boiler_heat: float = 0.0
+    absorption_chiller_cooling: float = 0.0
+    chp_electricity: float = 0.0
+    chp_heat: float = 0.0
+    bess_charge: float = 0.0
+    bess_discharge: float = 0.0
+    soc_after_execution: float = 0.0
+    actual_electricity: float = 0.0
+    actual_cooling: float = 0.0
+    actual_heating: float = 0.0
+    actual_pv: float = 0.0
+    actual_wt: float = 0.0
+
+
+def evaluate_planned_first_step(
+    plan: DispatchResult,
+    parameters: Mapping[str, float],
+) -> Mapping[str, float]:
+    """Evaluate only the first hour of a multi-hour planning result."""
+
+    if not plan.success:
+        raise ValueError("Cannot evaluate an unsuccessful dispatch plan")
+    values = plan.values
+    p = {key: float(value) for key, value in parameters.items()}
+    carbon_price = p.get("carbon_price", p.get("carbon_price_default", 0.0))
+    grid = float(values["grid"][0])
+    gas = float(values["g_chp"][0] + values["g_gb"][0])
+    slack = float(values["slack_e"][0] + values["slack_c"][0] + values["slack_h"][0])
+    charge = float(values["p_charge"][0])
+    discharge = float(values["p_discharge"][0])
+    grid_factor = p.get("grid_emission_factor", 0.0)
+    gas_factor = p.get("gas_emission_factor", 0.0)
+    return {
+        "planned_cost_first_step": float(
+            grid * (p["grid_energy_price"] + carbon_price * grid_factor)
+            + gas * (p["gas_energy_price"] + carbon_price * gas_factor)
+            + p["unserved_penalty"] * slack
+            + p.get("bess_throughput_cost", 0.0) * (charge + discharge)
+        ),
+        "planned_carbon_first_step": float(grid * grid_factor + gas * gas_factor),
+        "planned_curtailment_first_step": float(values["pv_curt"][0] + values["wt_curt"][0]),
+        "planned_grid_first_step": grid,
+        "planned_gas_first_step": gas,
+    }
 
 
 def settle_first_step(
@@ -73,9 +119,10 @@ def settle_first_step(
     grid_downward = max(-grid_error, 0.0)
     gas_upward = max(gas_error, 0.0)
     gas_downward = max(-gas_error, 0.0)
+    carbon_price = p.get("carbon_price", p.get("carbon_price_default", 0.0))
     realized_cost = (
-        realized_grid * p["grid_energy_price"]
-        + realized_gas * p["gas_energy_price"]
+        realized_grid * (p["grid_energy_price"] + carbon_price * p.get("grid_emission_factor", 0.0))
+        + realized_gas * (p["gas_energy_price"] + carbon_price * p.get("gas_emission_factor", 0.0))
         + p["unserved_penalty"] * (unserved_electricity + unserved_cooling + unserved_heating)
         + p.get("bess_throughput_cost", 0.0) * (p_charge + p_discharge)
     )
@@ -93,4 +140,18 @@ def settle_first_step(
         unserved_heating=unserved_heating,
         curtailment=curtailment,
         realized_cost=float(realized_cost),
+        electric_chiller_electricity=float(p_ec),
+        electric_chiller_cooling=float(q_ec),
+        gas_boiler_heat=float(q_gb),
+        absorption_chiller_cooling=float(q_ac),
+        chp_electricity=float(p_chp),
+        chp_heat=float(v["q_chp"][0]),
+        bess_charge=float(p_charge),
+        bess_discharge=float(p_discharge),
+        soc_after_execution=float(v["soc"][0]),
+        actual_electricity=float(actual["electricity"]),
+        actual_cooling=float(actual["cooling"]),
+        actual_heating=float(actual["heating"]),
+        actual_pv=float(actual["pv_available"]),
+        actual_wt=float(actual["wt_available"]),
     )

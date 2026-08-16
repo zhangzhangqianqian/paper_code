@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import time
 from dataclasses import asdict
@@ -275,6 +276,8 @@ def _run_one(
     run: Mapping[str, object], run_dir: Path,
     windows: Mapping[str, Mapping[str, np.ndarray]], stats: StandardizationStats,
     *, max_epochs: int = 100, patience: int = 12, threads: int = 8,
+    reuse_source: Path | None = None,
+    reuse_manifest: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     model_name = str(run["model"])
     candidate = str(run["candidate_id"])
@@ -295,18 +298,30 @@ def _run_one(
     train_loader = make_dataloader(windows["train"], 256, shuffle=True, seed=seed)
     validation_loader = make_dataloader(windows["validation"], 256, shuffle=False)
     test_loader = make_dataloader(windows["test"], 256, shuffle=False)
-    started = time.perf_counter()
-    history = fit_model(model, train_loader, validation_loader, trainer, run_dir / "best_model.pt", input_mode="loads_and_exog")
-    fit_seconds = time.perf_counter() - started
-    checkpoint = load_checkpoint(model, run_dir / "best_model.pt", "cpu")
+    if reuse_source is not None:
+        source = Path(reuse_source)
+        for name in ("best_model.pt", "normalization_stats.npz", "history.json"):
+            shutil.copy2(source / name, run_dir / name)
+        checkpoint = load_checkpoint(model, run_dir / "best_model.pt", "cpu")
+        source_history = json.loads((source / "history.json").read_text(encoding="utf-8"))
+        history = source_history.get("history", source_history)
+        fit_seconds = 0.0
+        execution_mode = "reused_phase_a_checkpoint"
+    else:
+        started = time.perf_counter()
+        history = fit_model(model, train_loader, validation_loader, trainer, run_dir / "best_model.pt", input_mode="loads_and_exog")
+        fit_seconds = time.perf_counter() - started
+        checkpoint = load_checkpoint(model, run_dir / "best_model.pt", "cpu")
+        execution_mode = "trained_after_phase_a"
     validation_loss, _, _ = evaluate_model(model, validation_loader, "cpu", input_mode="loads_and_exog")
     test_started = time.perf_counter()
     test_loss, prediction_std, target_std = evaluate_model(model, test_loader, "cpu", input_mode="loads_and_exog")
     test_seconds = time.perf_counter() - test_started
     prediction = stats.inverse_targets(prediction_std)
     target = stats.inverse_targets(target_std)
-    stats.save(run_dir / "normalization_stats.npz")
-    save_json({"history": history}, run_dir / "history.json")
+    if reuse_source is None:
+        stats.save(run_dir / "normalization_stats.npz")
+        save_json({"history": history}, run_dir / "history.json")
     np.savez_compressed(
         run_dir / "predictions_test.npz", prediction=prediction, target=target,
         prediction_standardized=prediction_std, target_standardized=target_std,
@@ -329,14 +344,77 @@ def _run_one(
         "sample_counts": {name: int(len(value["target"])) for name, value in windows.items()},
         "parameter_count": int(count_trainable_parameters(model)),
         "fit_seconds": float(fit_seconds), "test_seconds": float(test_seconds),
+        "execution_mode": execution_mode,
         "best_checkpoint_epoch": int(checkpoint["epoch"]),
         "best_validation_loss": float(checkpoint["best_validation_loss"]),
         "trainer_config": asdict(trainer), "files": files,
         "artifact_sha256": {name: _sha256(run_dir / name) for name in files},
         "git_revision": _git_revision(),
     }
+    if reuse_source is not None:
+        manifest["phase_a_source"] = {
+            "run_dir": str(Path(reuse_source)),
+            "manifest_sha256": _sha256(Path(reuse_source) / "run_manifest.json"),
+            "source_git_revision": (reuse_manifest or {}).get("git_revision"),
+        }
     save_json(manifest, run_dir / "run_manifest.json")
     return manifest
+
+
+def _phase_a_source_dir(phase_a_dir: str | Path, run: Mapping[str, object]) -> Path:
+    return (
+        Path(phase_a_dir)
+        / str(run["model"])
+        / str(run["candidate_id"])
+        / f"seed_{int(run['seed'])}"
+    )
+
+
+def _validate_phase_a_reuse_source(
+    source_dir: Path,
+    run: Mapping[str, object],
+    *,
+    expected_git_revision: str | None,
+    expected_stats: StandardizationStats | None = None,
+) -> tuple[dict[str, object], StandardizationStats]:
+    """Validate a Phase-A run before allowing its checkpoint to be reused."""
+
+    required = ("best_model.pt", "normalization_stats.npz", "history.json", "run_manifest.json")
+    if any(not (source_dir / name).is_file() for name in required):
+        raise FileNotFoundError(f"incomplete Phase-A reuse source: {source_dir}")
+    manifest = json.loads((source_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("status") != "passed" or manifest.get("stage") != "topology_protocol_pilot_phase_a":
+        raise ValueError(f"Phase-A reuse source is not a passed validation run: {source_dir}")
+    if str(manifest.get("model")) != str(run["model"]) or str(manifest.get("candidate_id")) != str(run["candidate_id"]):
+        raise ValueError(f"Phase-A reuse model/config mismatch: {source_dir}")
+    if int(manifest.get("seed", -1)) != int(run["seed"]):
+        raise ValueError(f"Phase-A reuse seed mismatch: {source_dir}")
+    if tuple(manifest.get("years_loaded", ())) != (2017, 2018, 2019, 2020):
+        raise ValueError(f"Phase-A reuse years mismatch: {source_dir}")
+    if manifest.get("test_set_accessed") is not False:
+        raise ValueError(f"Phase-A reuse source accessed the test set: {source_dir}")
+    if tuple(manifest.get("window", {}).get("output_shape", ())) != (8781, 4, 4):
+        raise ValueError(f"Phase-A reuse output shape mismatch: {source_dir}")
+    if expected_git_revision and manifest.get("git_revision") != expected_git_revision:
+        raise ValueError(f"Phase-A reuse revision mismatch: {source_dir}")
+    artifact_hashes = manifest.get("artifact_sha256", {})
+    for name, expected in artifact_hashes.items():
+        path = source_dir / str(name)
+        if not path.is_file() or _sha256(path) != str(expected):
+            raise ValueError(f"Phase-A reuse artifact hash mismatch: {path}")
+    stats = StandardizationStats.load(source_dir / "normalization_stats.npz")
+    if expected_stats is not None:
+        for left, right, label in (
+            (stats.load_mean, expected_stats.load_mean, "load_mean"),
+            (stats.load_scale, expected_stats.load_scale, "load_scale"),
+            (stats.exog_mean, expected_stats.exog_mean, "exog_mean"),
+            (stats.exog_scale, expected_stats.exog_scale, "exog_scale"),
+        ):
+            if not np.array_equal(left, right):
+                raise ValueError(f"Phase-A reuse standardization mismatch: {label}")
+        if stats.exog_columns != expected_stats.exog_columns or stats.task_columns != expected_stats.task_columns:
+            raise ValueError("Phase-A reuse standardization columns mismatch")
+    return manifest, stats
 
 
 def _strict_resume_manifest(run_dir: Path, run: Mapping[str, object]) -> dict[str, object]:
@@ -363,6 +441,7 @@ def run_phase_b(
     *, contract_path: str | Path | None = None, smoke: bool = False,
     resume: bool = False, expected_freeze_sha256: str | None = None,
     audit_dir: str | Path | None = None,
+    phase_a_dir: str | Path | None = None,
 ) -> dict[str, object]:
     freeze = load_branch_freeze(branch_freeze_path, expected_sha256=expected_freeze_sha256)
     if contract_path is not None:
@@ -375,14 +454,39 @@ def run_phase_b(
             audit_dir=audit_dir,
             current_git_revision=_git_revision(),
         )
+    plan = build_phase_b_run_plan(freeze)
+    if freeze["branch"] == "core_conclusion_stable" and phase_a_dir is None:
+        raise ValueError("core_conclusion_stable requires --phase-a-dir to reuse the six Phase-A checkpoints")
+    reuse_sources: dict[str, tuple[Path, dict[str, object]]] = {}
+    if phase_a_dir is not None:
+        expected_revision = str(freeze.get("git_revision"))
+        for run in plan:
+            source_dir = _phase_a_source_dir(phase_a_dir, run)
+            if source_dir.is_dir():
+                manifest, _ = _validate_phase_a_reuse_source(
+                    source_dir, run, expected_git_revision=expected_revision
+                )
+                reuse_sources[str(run["run_id"])] = (source_dir, manifest)
+                continue
+            if freeze["branch"] == "core_conclusion_stable":
+                raise FileNotFoundError(f"missing required stable-branch Phase-A checkpoint: {source_dir}")
     frame, metadata = _load_data_after_authorization(data_dir, freeze)
     windows, stats = build_phase_b_windows(frame)
+    if reuse_sources:
+        for run in plan:
+            source = reuse_sources.get(str(run["run_id"]))
+            if source is not None:
+                _validate_phase_a_reuse_source(
+                    source[0], run, expected_git_revision=str(freeze.get("git_revision")),
+                    expected_stats=stats,
+                )
     if smoke:
         windows = {name: {key: value[:32] for key, value in split.items()} for name, split in windows.items()}
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
-    plan = build_phase_b_run_plan(freeze)
     completed = []
+    reused_count = 0
+    trained_count = 0
     for run in plan:
         run_dir = root / str(run["model"]) / str(run["candidate_id"]) / f"seed_{run['seed']}"
         manifest_path = run_dir / "run_manifest.json"
@@ -392,7 +496,17 @@ def run_phase_b(
             continue
         if manifest_path.exists() and not resume:
             raise FileExistsError(f"run exists; use --resume: {run_dir}")
-        result = _run_one(run, run_dir, windows, stats, max_epochs=1 if smoke else 100, patience=1 if smoke else 12, threads=2 if smoke else 8)
+        source = reuse_sources.get(str(run["run_id"]))
+        result = _run_one(
+            run, run_dir, windows, stats, max_epochs=1 if smoke else 100,
+            patience=1 if smoke else 12, threads=2 if smoke else 8,
+            reuse_source=source[0] if source is not None else None,
+            reuse_manifest=source[1] if source is not None else None,
+        )
+        if source is not None:
+            reused_count += 1
+        else:
+            trained_count += 1
         completed.append(result)
     manifest = {
         "stage": "topology_protocol_pilot_phase_b", "status": "passed",
@@ -400,6 +514,12 @@ def run_phase_b(
         "branch_frozen_before_test": True, "test_set_accessed": True,
         "test_used_for_selection": False, "years_loaded": list(PHASE_B_YEARS),
         "run_count_expected": len(plan), "run_count_completed": len(completed),
+        "phase_a_reuse": {
+            "enabled": phase_a_dir is not None,
+            "source_dir": str(Path(phase_a_dir)) if phase_a_dir is not None else None,
+            "reused_count": reused_count,
+            "trained_count": trained_count,
+        },
         "runs": completed, "data_metadata": metadata,
     }
     save_json(manifest, root / "phase_b_manifest.json")

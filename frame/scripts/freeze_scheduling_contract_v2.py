@@ -9,14 +9,64 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.scheduling.data import build_scheduling_frame  # noqa: E402
+from src.scheduling.parameter_audit import read_parameter_ledger  # noqa: E402
+from src.scheduling.renewables import pv_available  # noqa: E402
+
 
 SEEDS = [2026, 2027, 2028, 2029, 2030]
+
+# Normalized evaluation coefficients.  They are not reported as local
+# electricity/gas tariffs; the contract hash freezes them for reproducibility.
+REAL_SETTLEMENT_PRICES = {
+    "grid_upward": 1.15,
+    "grid_downward": 0.85,
+    "gas_upward": 0.70,
+    "gas_downward": 0.50,
+}
+
+
+def _fit_real_pv_scale(
+    data_dir: Path,
+    ledger_path: Path,
+    source_years: tuple[int, ...],
+) -> float:
+    """Freeze the R-track PV scale using training years only.
+
+    The real station file contains measured PV output, whereas the transparent
+    weather profile has unit rated capacity.  The scale is therefore a derived
+    parameter, not a tunable test-year quantity, and must be recorded in the
+    frozen contract before any 2021 replay is read.
+    """
+
+    ledger = read_parameter_ledger(ledger_path)
+    values = {record.parameter_id: float(record.value) for record in ledger.records}
+    profile_parameters = {
+        "pv_rated_capacity": 1.0,
+        "pv_reference_irradiance": values["pv_reference_irradiance"],
+        "pv_conversion_efficiency": values["pv_conversion_efficiency"],
+        "pv_reference_temperature": values["pv_reference_temperature"],
+        "pv_temperature_coefficient": values["pv_temperature_coefficient"],
+    }
+    frame = build_scheduling_frame(data_dir, years=source_years)
+    timestamps = pd.to_datetime(frame.data["timestamp"]).dt.year
+    train = frame.data.loc[timestamps.isin(source_years)].copy()
+    profile = pv_available(train, profile_parameters)
+    actual = pd.to_numeric(train["actual_pv"], errors="raise").to_numpy(dtype=np.float64)
+    mask = profile > 1e-8
+    if not np.any(mask):
+        raise ValueError("training period has no positive normalized PV profile")
+    scale = float(np.median(actual[mask] / profile[mask]))
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError(f"invalid training-only real PV scale: {scale}")
+    return scale
 
 
 def _model_sources(repo_root: Path) -> dict[str, dict[str, object]]:
@@ -76,6 +126,9 @@ def main() -> int:
     recorded_hash = args.benchmark.with_suffix(args.benchmark.suffix + ".sha256").read_text(encoding="utf-8").strip()
     if benchmark_hash != recorded_hash:
         raise RuntimeError("Benchmark SHA-256 does not match its sidecar")
+    source_years = (2015, 2016, 2017, 2018, 2019)
+    data_dir = args.data_dir.resolve()
+    real_pv_scale = _fit_real_pv_scale(data_dir, args.ledger.resolve(), source_years)
     contract = {
         "schema_version": "scheduling-formal-contract-v2",
         "dataset": "kitakyushu_energy_station",
@@ -91,9 +144,16 @@ def main() -> int:
         "simulated_scenarios": ["core", "no_bess", "no_chp", "no_renewables", "single_hour", "carbon_price_sensitivity"],
         "gas_main_balance": False,
         "ordinary_future_actual_allowed": False,
-        "parameter_freeze": {"benchmark_path": str(args.benchmark), "benchmark_sha256": benchmark_hash, "ledger_path": str(args.ledger), "ledger_sha256": ledger_hash, "source_years": [2015, 2016, 2017, 2018, 2019]},
+        "parameter_freeze": {"benchmark_path": str(args.benchmark), "benchmark_sha256": benchmark_hash, "ledger_path": str(args.ledger), "ledger_sha256": ledger_hash, "source_years": list(source_years)},
+        "real_track": {
+            "pv_scale_train_only": real_pv_scale,
+            "pv_scale_source_years": list(source_years),
+            "pv_scale_method": "median(actual_pv / unit_rated_weather_profile) over positive training-profile hours",
+            "settlement_price_units": "normalized cost units per dataset-native energy unit",
+            "settlement_prices": REAL_SETTLEMENT_PRICES,
+        },
         "preflight": {"path": str(args.preflight), "formal_dispatch_allowed": True},
-        "data_directory": str(args.data_dir),
+        "data_directory": str(data_dir),
         "checked_prediction_artifacts": checked,
         "no_test_tuning_after_freeze": True,
     }

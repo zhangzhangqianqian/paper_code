@@ -1,0 +1,168 @@
+{
+  "schema_version": "scheduling-analysis-contract-v2",
+  "purpose": "Freeze the analysis, accounting, inference and figure rules after corrected formal scheduling runs.",
+  "dataset": "kitakyushu_energy_station",
+  "source_formal_dir": "D:/Paper/formal_corrected",
+  "legacy_formal_dir": "frame/reports/scheduling_v2/formal",
+  "formal_contract": "D:/Paper/scheduling_formal_contract_v2.json",
+  "benchmark": "D:/Paper/standard_ies_benchmark_v1.yaml",
+  "parameter_ledger": "frame/configs/scheduling_parameter_ledger_v2.csv",
+  "tracks": [
+    "real_replay",
+    "simulated_dispatch"
+  ],
+  "models": [
+    "scheme2r",
+    "dynamic_symmetric",
+    "hard_share",
+    "mmoe_lite",
+    "ple_lite"
+  ],
+  "seeds": [
+    2026,
+    2027,
+    2028,
+    2029,
+    2030
+  ],
+  "simulated_scenarios": [
+    "core",
+    "no_bess",
+    "no_chp",
+    "no_renewables",
+    "single_hour",
+    "carbon_price_sensitivity"
+  ],
+  "expected_runs": {
+    "real_replay_model_runs": 25,
+    "simulated_dispatch_model_runs": 150,
+    "total_model_runs": 175,
+    "oracle_scenario_runs": 6,
+    "origins_per_run": 8757
+  },
+  "accounting": {
+    "execution_interval_hours": 1,
+    "planning_horizon_hours": 4,
+    "executed_forecast_step": 0,
+    "r_energy_and_imbalance_settlement": "executed_first_step_only",
+    "s_planned_cost": "first_step_planned_cost",
+    "s_realized_cost": "first_step_actual_recourse_cost",
+    "s_planning_deviation_cost": "realized_cost_minus_first_step_planned_cost",
+    "s_regret": "realized_cost_minus_same_scenario_perfect_information_oracle_cost",
+    "s_planned_carbon": "first_step_planned_carbon",
+    "s_realized_carbon": "first_step_realized_carbon",
+    "s_planned_curtailment": "first_step_planned_curtailment",
+    "s_realized_curtailment": "first_step_realized_curtailment",
+    "horizon_objective_is_primary_cost": false,
+    "gas_main_balance": false,
+    "cost_units": "normalized_cost_index_per_dataset_native_energy_unit",
+    "real_currency_claim_allowed": false
+  },
+  "primary_endpoints": {
+    "real_replay": [
+      "total_imbalance_cost"
+    ],
+    "simulated_dispatch": [
+      "realized_cost",
+      "regret"
+    ],
+    "key_secondary": [
+      "realized_carbon",
+      "curtailment",
+      "grid_upward",
+      "grid_downward",
+      "gas_upward",
+      "gas_downward"
+    ],
+    "feasibility_gates": [
+      "unserved_electricity",
+      "unserved_cooling",
+      "unserved_heating",
+      "max_balance_residual",
+      "simultaneous_charge_discharge",
+      "solver_status",
+      "soc_boundary"
+    ]
+  },
+  "statistics": {
+    "descriptive_summary": "mean_and_sample_sd_across_five_seeds",
+    "inference_unit": "complete_calendar_day",
+    "complete_days_in_2021": 364,
+    "partial_final_day_hours": 21,
+    "partial_final_day_included_in_hourly_descriptive": true,
+    "partial_final_day_included_in_day_level_inference": false,
+    "daily_seed_aggregation": "mean_across_five_seeds_before_primary_paired_test",
+    "bootstrap": {
+      "method": "paired_calendar_day_block_bootstrap",
+      "replicates": 2000,
+      "seed": 2026,
+      "confidence_level": 0.95
+    },
+    "robustness_bootstrap": {
+      "method": "two_level_seed_and_seven_day_moving_block_bootstrap",
+      "replicates": 2000,
+      "seed": 2026
+    },
+    "p_value": "two_sided_calendar_day_paired_sign_flip",
+    "multiple_comparison": "benjamini_hochberg",
+    "alpha": 0.05,
+    "comparison_family": "four_scheme2r_vs_baseline_comparisons_per_track_scenario_endpoint"
+  },
+  "metric_direction": {
+    "lower_is_better": [
+      "grid_mae",
+      "gas_mae",
+      "total_imbalance_cost",
+      "realized_cost",
+      "regret",
+      "realized_carbon",
+      "curtailment",
+      "unserved_electricity",
+      "unserved_cooling",
+      "unserved_heating",
+      "grid_upward",
+      "grid_downward",
+      "gas_upward",
+      "gas_downward",
+      "solver_time_seconds",
+      "max_balance_residual"
+    ],
+    "higher_is_better": [
+      "renewable_utilization_rate"
+    ]
+  },
+  "typical_day": {
+    "candidate_pool": "complete_calendar_days_only",
+    "winter_rule": "actual_daily_heating_total_closest_to_median_of_top_decile",
+    "summer_rule": "actual_daily_cooling_total_closest_to_median_of_top_decile",
+    "tie_break": "earliest_timestamp",
+    "trajectory_model": "scheme2r",
+    "trajectory_seed": 2026,
+    "trajectory_scenario": "core",
+    "selection_may_use_model_results": false
+  },
+  "feasibility_screen": {
+    "max_balance_residual": 1e-7,
+    "unserved_hour_rate_review_threshold": 0.01,
+    "unserved_demand_fraction_review_threshold": 0.001,
+    "threshold_type": "predeclared_conservative_engineering_screen",
+    "failure_action": "capacity_feasibility_review_required_and_no_cost_ranking"
+  },
+  "outputs": {
+    "root": "frame/reports/scheduling_v2/analysis",
+    "source_data_dir": "source_data",
+    "tables_dir": "tables",
+    "figures_dir": "figures",
+    "manifest": "scheduling_analysis_manifest.json",
+    "release_audit": "release_audit.json"
+  },
+  "figure_exports": [
+    "svg",
+    "pdf",
+    "tiff",
+    "png_preview"
+  ],
+  "test_set_tuning_allowed": false,
+  "tracks_must_remain_separate": true,
+  "legacy_formal_results_may_be_overwritten": false
+}

@@ -16,14 +16,15 @@ class Stage76PlanTests(unittest.TestCase):
     def setUpClass(cls):
         cls.module = runpy.run_path(str(SCRIPT), run_name="stage7_6_test_module")
 
-    def test_source_plan_tracks_trained_runs_and_reused_a4(self):
-        plan = self.module["build_stage7_6_source_plan"]()
+    def test_source_plan_tracks_current_non_scheme2r_freeze(self):
+        freeze = {"primary_model": {"model": "stl_matched"}}
+        plan = self.module["build_stage7_6_source_plan"](freeze)
         self.assertEqual([item["stage"] for item in plan], ["7.3", "7.4", "7.5", "7R.STL"])
-        self.assertEqual(sum(item["expected_runs"] for item in plan), 114)
-        self.assertEqual(self.module["stage7_6_expected_counts"]()["reused_a4"], 10)
+        self.assertEqual(sum(item["expected_runs"] for item in plan), 124)
+        self.assertEqual(self.module["stage7_6_expected_counts"](freeze)["reused_a4"], 0)
         self.assertEqual(
             sum(item["expected_runs"] for item in plan)
-            + self.module["stage7_6_expected_counts"]()["reused_a4"],
+            + self.module["stage7_6_expected_counts"](freeze)["reused_a4"],
             124,
         )
 

@@ -85,6 +85,10 @@ def derive_benchmark_parameters(
         "bess_throughput_cost": _ledger_value(ledger, "bess_throughput_cost"),
         "grid_energy_price": _ledger_value(ledger, "grid_energy_price"),
         "gas_energy_price": _ledger_value(ledger, "gas_energy_price"),
+        "grid_emission_factor": _ledger_value(ledger, "grid_emission_factor"),
+        "gas_emission_factor": _ledger_value(ledger, "gas_emission_factor"),
+        "carbon_price_default": _ledger_value(ledger, "carbon_price_default"),
+        "carbon_price_sensitivity": _ledger_value(ledger, "carbon_price_sensitivity"),
         "unserved_penalty": _ledger_value(ledger, "unserved_penalty"),
         "chp_ramp_fraction": _ledger_value(ledger, "chp_ramp_fraction"),
     }

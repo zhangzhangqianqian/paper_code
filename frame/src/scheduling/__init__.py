@@ -22,11 +22,18 @@ from .data import (
 )
 from .renewable_forecasts import FrozenRenewableForecaster, fit_renewable_forecaster
 from .renewables import pv_available, wt_available
-from .real_replay import EnergyNomination, ReplayResult, build_energy_nomination, settle_real_replay
+from .real_replay import (
+    EnergyNomination,
+    ReplayResult,
+    build_energy_nomination,
+    settle_first_step_replay,
+    settle_real_replay,
+)
 from .imbalance_settlement import summarize_replay
 from .benchmark_parameters import SchedulingParameters, derive_benchmark_parameters
 from .dispatch_lp import DispatchInputs, DispatchResult, solve_dispatch_lp
-from .recourse import RealizedStep, settle_first_step
+from .recourse import RealizedStep, evaluate_planned_first_step, settle_first_step
+from .oracle import build_oracle_forecast_set, run_perfect_information_oracle
 from .rolling_horizon import ActualStream, RollingForecastSet, RollingResult, run_rolling_dispatch
 
 __all__ = [
@@ -49,6 +56,7 @@ __all__ = [
     "EnergyNomination",
     "ReplayResult",
     "build_energy_nomination",
+    "settle_first_step_replay",
     "settle_real_replay",
     "summarize_replay",
     "SchedulingParameters",
@@ -57,6 +65,9 @@ __all__ = [
     "DispatchResult",
     "solve_dispatch_lp",
     "RealizedStep",
+    "evaluate_planned_first_step",
+    "build_oracle_forecast_set",
+    "run_perfect_information_oracle",
     "settle_first_step",
     "ActualStream",
     "RollingForecastSet",

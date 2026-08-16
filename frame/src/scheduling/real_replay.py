@@ -92,3 +92,36 @@ def settle_real_replay(
         gas_imbalance_cost=float(gas_cost),
         total_imbalance_cost=float(grid_cost + gas_cost),
     )
+
+
+def settle_first_step_replay(
+    nomination: EnergyNomination,
+    actual: Mapping[str, np.ndarray],
+    prices: Mapping[str, float],
+) -> ReplayResult:
+    """Settle only the executed first step of each rolling forecast window.
+
+    The full four-step result remains available through :func:`settle_real_replay`
+    for window-level forecast diagnostics. This helper is the only settlement
+    interface used for executed-energy and imbalance-cost accounting, so
+    overlapping rolling windows cannot charge steps 2--4 repeatedly.
+    """
+
+    grid = np.asarray(nomination.grid, dtype=np.float64)
+    gas = np.asarray(nomination.gas, dtype=np.float64)
+    actual_grid = np.asarray(actual["actual_grid_import"], dtype=np.float64)
+    actual_gas = np.asarray(actual["gas"], dtype=np.float64)
+    if grid.ndim != 2 or gas.ndim != 2 or grid.shape[1] < 1 or gas.shape[1] < 1:
+        raise ValueError("rolling nominations must have at least one forecast step")
+    if actual_grid.ndim != 2 or actual_gas.ndim != 2:
+        raise ValueError("rolling actuals must have shape [N,H]")
+    if actual_grid.shape[1] < 1 or actual_gas.shape[1] < 1:
+        raise ValueError("rolling actuals must have at least one forecast step")
+    return settle_real_replay(
+        EnergyNomination(grid=grid[:, :1], gas=gas[:, :1], origin_times=nomination.origin_times),
+        {
+            "actual_grid_import": actual_grid[:, :1],
+            "gas": actual_gas[:, :1],
+        },
+        prices,
+    )

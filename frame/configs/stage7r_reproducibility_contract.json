@@ -1,6 +1,6 @@
 {
   "revision_version": "stage7R.1",
-  "revision_status": "ready_for_dry_run",
+  "revision_status": "validated_formal_results",
   "base_contract": "frame/configs/stage7_contract.json",
   "freeze_config": "resolved_at_runtime_from_stage6r_freeze",
   "dataset": "kitakyushu_energy_station",
@@ -31,23 +31,23 @@
   },
   "run_matrix": {
     "stage7_3_main_internal": 20,
-    "stage7_4_ablations": 40,
+    "stage7_4_ablations": 50,
     "stage7_5_external": 44,
     "stage7r_matched_stl": 10,
     "formal_run_count": 124,
-    "materialized_run_count": 114,
-    "trained_run_count": 110,
-    "reused_a4_run_count": 10,
+    "materialized_run_count": 124,
+    "trained_run_count": 120,
+    "reused_a4_run_count": 0,
     "deterministic_run_count": 4,
     "independently_trained_stl_task_models": 40
   },
-  "output_root": "frame/reports/stage7r_kitakyushu_reproducible",
+  "output_root": "frame/reports/stage7r_6_kitakyushu_acceptance",
   "output_groups": {
     "stage7_3": "stage7_3",
     "stage7_4": "stage7_4",
     "stage7_5": "stage7_5",
     "stl_reference": "stl_reference",
-    "acceptance": "acceptance"
+    "acceptance": "frame/reports/stage7r_6_kitakyushu_acceptance"
   },
   "legacy_results": {
     "status": "legacy_non_strict_seed_control",

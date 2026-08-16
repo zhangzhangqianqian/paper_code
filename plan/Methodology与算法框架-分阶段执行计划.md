@@ -17,7 +17,7 @@
 9. 中文 Methodology 撰写；
 10. 导师确认后的英文 Methodology 撰写。
 
-本计划已切换到 Kitakyushu Energy Station Data。2015—2021 年数据已经完成读取、字段映射、质量审计、四任务规范化和连续性报告生成；方案 2-R 的阶段 4.6—4.10 代码、回归测试和真实 Kitakyushu CPU 冒烟链路也已完成。旧版阶段 6.2—6.6 虽有结果，但因随机种子、结构匹配 STL、指标和冻结逻辑问题只能作为 legacy 工程记录，不能作为论文结论；旧版 H3 冻结不再有效。正式训练前统一执行 `change_plan/正式实验前全阶段审计与一次性修复计划.md`：先完成修复验收，再以新 Stage 6-R 重新选择和冻结，最后运行 Stage 7-R。
+本计划已切换到 Kitakyushu Energy Station Data。2015—2021 年数据已经完成读取、字段映射、质量审计、四任务规范化和连续性报告生成；方案 2-R 的阶段 4.6—4.10 代码、回归测试和真实 Kitakyushu CPU 冒烟链路也已完成。旧版阶段 6.2—6.6 仅作为 legacy 工程记录，不进入论文结论。修复后的 Stage 6-R 已完成重新选择和冻结；Stage 7-R 的 7.3（20/20）、7.4（50/50）、7.5（44/44）、结构匹配 STL（10/10）和 7.6（124 条汇总）均已完成。Stage 7.7 的 Hard-Share-H2、Dynamic-Symmetric-H1 与 PLE-lite 正式矩阵已 30/30 完成并通过验收。修订后的 Stage 8 联合模型比较、显著性检验和迁移诊断已经完成。当前进入阶段 9：按冻结的 Scheme2R-H4 实现撰写中文 Methodology；阶段 8 的结果只用于 Results，不用于倒推或改写方法结构。
 
 ## 2. 已经确定的研究边界
 
@@ -27,7 +27,7 @@
 - 使用过去 24 小时的数据预测未来 4 小时；
 - 采用直接多输出方式，一次输出未来第 1—4 个预测步；
 - 当前只研究点预测，不加入分位数回归、预测区间或共形预测；
-- 主要研究一般的短期多能源负荷预测，小样本实验作为补充协议。
+- 主要研究一般的短期多能源负荷预测；当前正式小样本实验采用与 Shao 等人场景对齐的 cooling-dominant summer 协议。由于该区间供热负荷接近零，小样本结果不得用于代表热负荷泛化能力；heating-active winter 压力测试仅作为后续补充实验，不写成已经完成的正式协议。
 
 ### 2.2 方法边界
 
@@ -105,7 +105,7 @@ Shao 等人的 Frequency-MMoE 仍是最相近的文献对照，但作者没有�
 采用一个数据集上的两套实验协议：
 
 1. 全年协议：验证总体精度、季节稳定性、预测步长稳定性和计算开销；
-2. Shao 夏季小样本协议：验证有限训练数据条件下的模型表现，并与 Shao 论文的实验场景形成可解释对照。
+2. Shao 夏季小样本协议：验证有限训练数据条件下的模型表现，并与 Shao 论文的实验场景形成可解释对照；该协议只用于夏季有限样本结论，不用于评价供热任务的跨季节泛化。
 
 ### 4.2 输入与输出接口
 
@@ -114,7 +114,7 @@ Shao 等人的 Frequency-MMoE 仍是最相近的文献对照，但作者没有�
 固定任务数量：
 
 $$
-M=4.
+T=4.
 $$
 
 历史输入长度：
@@ -276,9 +276,9 @@ z=\phi\left(
 \qquad r_t=\operatorname{MLP}(Z_t).
 $$
 
-状态编码器默认输出维度为 16。模型可将四个任务表示的汇总特征投影后加入状态向量，
-但该汇总只用于形成门控决策上下文，不直接进入任何任务的预测表示。第一版使用轻量均值汇总；
-STAR 只保留为阶段 6 失败处理中的可选门控上下文增强，不进入方案 2-R 的默认预测路径。
+冻结的 Scheme2R-H4 状态编码器输出维度为 16，其主路径只使用历史天气和日历变量，
+不再把四个任务表示的均值或其他汇总量加入外生状态向量。四个任务表示分别作为目标任务和来源任务特征进入后续两级有向路由；
+STAR 及任务表示汇总均不进入冻结的 Scheme2R-H4 默认预测路径。
 
 ### 5.4 预测步相关的两级有向任务路由
 
@@ -548,7 +548,7 @@ $$
 
 ### 8.3 置信区间
 
-阶段 8 的全年测试集采用以 24 小时为一个块的 block bootstrap：
+阶段 8 的全年测试集采用以 24 小时为一个块的 block bootstrap。热负荷接近零时，MAPE 只对非零实际值计算并记录有效样本数，headline 指标使用 MAE、RMSE 和 WAPE：
 
 - 重采样次数：1000；
 - 置信水平：95%；
@@ -650,7 +650,7 @@ $$
 
 ### 阶段 3：单任务和硬共享模型
 
-当前状态：模型训练、验证、最佳检查点保存和测试预测导出接口已完成；独立单任务 DS-TCN 与 Hard-Share MTL 均已通过 CPU 冒烟训练。阶段6—7仍需在固定协议下完成正式多次运行、消融和迁移收益统计。
+当前状态：模型训练、验证、最佳检查点保存和测试预测导出接口已完成；独立单任务 DS-TCN 与 Hard-Share MTL 均已通过 CPU 冒烟训练。Stage 6-R、Stage 7-R、Stage 7.7 与修订后的 Stage 8 均已完成。
 
 #### 工作内容
 
@@ -672,7 +672,7 @@ $$
 
 ### 阶段 4：静态和动态任务共享
 
-当前状态：原始第 4.1—4.5 以及方案 2-R 对应的第 4.6—4.10 均已完成模型实现、约束测试和 Kitakyushu 四任务 CPU 冒烟训练。原始模型和方案 2-R 的正式对比实验均未开始。
+当前状态：原始第 4.1—4.5 以及方案 2-R 对应的第 4.6—4.10 均已完成模型实现、约束测试和 Kitakyushu 四任务 CPU 冒烟训练。正式对比实验由 Stage 6-R、Stage 7-R 和 Stage 7.7 执行，修订后的 Stage 8 后验统计分析已经完成。最终方法写作以 Scheme2R-H4 的冻结实现为准。
 
 #### 阶段 4.1：静态有向门控
 
@@ -772,7 +772,7 @@ $$
 检查点、测试预测和指标导出流程，并在 `metrics_test.json` 中记录模型接口、参数量、
 训练/测试评估耗时和门控导出元数据。六种模型均已完成统一接口检查，方案 2-R 已在 Kitakyushu 四任务数据上完成真实 CPU 冒烟训练。
 
-原始阶段 4.2—4.5 和方案 2-R 阶段 4.6—4.10 已完成。由于修复后的正式 Stage 6-R 尚未运行，阶段 6.1 契约已在不读取测试集的前提下完成扩展，下一步先完成 smoke 和准入检查，再进入 Stage 6-R.1—6-R.6。
+原始阶段 4.2—4.5 和方案 2-R 阶段 4.6—4.10 已完成。修复后的 Stage 6-R.1—6-R.6 已完成并生成冻结文件；冻结结果为结构匹配 `stl_matched`-H3 主参照和 `scheme2r`-H4 比较模型。后续 Stage 7-R 只能读取该冻结文件，不得重新进行验证集选模。
 
 #### 阶段 4.6：全窗口 DS-TCN
 
@@ -793,8 +793,8 @@ $$
 - 将状态汇总由“最后时刻 + 均值”扩展为“最后时刻 + 均值 + 标准差 + 首尾变化趋势”；
 - 加入 4 个可学习预测步嵌入，每个嵌入默认 4 维；
 - 目标角色和来源角色使用独立的任务嵌入表，默认均为 8 维；
-- 状态表示、任务表示和预测步嵌入只使用预测起点及以前可获得的信息；
-- 暂不加入 STAR，保留当前均值任务汇总作为轻量门控上下文。
+- 外生状态表示、任务表示和预测步嵌入只使用预测起点及以前可获得的信息；
+- 冻结的 Scheme2R-H4 由历史天气与日历形成外生状态，任务表示直接进入目标—来源配对路由；不加入 STAR，也不把任务均值汇总加入外生状态向量。
 
 验收条件：状态输出为 `[batch, 16]`，预测步嵌入为 `[4, 4]`；时间顺序、梯度、批次广播和无未来信息测试通过。
 
@@ -835,7 +835,7 @@ $$
 
 验收条件：全量单元测试通过；旧模型接口保持可用；方案 2-R 能完成训练、验证、最佳检查点保存和验证集门控导出；阶段 4.6—4.10 的冒烟结果只用于工程验证。
 
-阶段 4.6—4.10 已全部验收，阶段 6.1 契约已同步扩展。旧阶段 6.2—6.6 结果不再用于选择或论文结论；阶段 6-R 的通用选择、冻结和诊断代码已经修复，真实 Stage 6-R 仍需在准入门全部通过后重新运行。
+阶段 4.6—4.10 已全部验收，阶段 6.1 契约已同步扩展。旧阶段 6.2—6.6 结果不再用于选择或论文结论；修复后的 Stage 6-R.1—6-R.6 已完成，结果位于独立的 `stage6r_*` 目录。
 
 ### 阶段 5：外部轻量基线
 
@@ -973,11 +973,10 @@ Directed Gate，`scheme2r` 为新增方案 2-R。契约同时记录全窗口 DS-
 
 验收输出：全年验证集逐模型、逐任务、逐预测步指标和参数/CPU开销表。
 
-当前状态：`frame/src/validation_selection.py` 与 `frame/scripts/run_stage6_selection.py`
-已经支持六个内部模型和 Kitakyushu 四任务，并完成 6.2 契约冒烟：六个模型 × 四组配置，
-共 24 个运行，保存 $\rho$、$\pi$、$g$、逐模型/逐任务/逐预测步指标以及参数量和 CPU
-时间，且清楚标记 `test_set_accessed=false`。该冒烟只验证工程链路；正式阶段 6.2
-仍需去掉样本和轮数限制后运行。
+当前状态：已完成 24/24 个正式验证运行。`frame/src/validation_selection.py` 与
+`frame/scripts/run_stage6_selection.py` 支持六个内部模型和 Kitakyushu 四任务，保存
+$\rho$、$\pi$、$g$、逐模型/逐任务/逐预测步指标以及参数量和 CPU 时间，并标记
+`test_set_accessed=false`。结果位于 `frame/reports/stage6r_2_kitakyushu_full/`。
 
 #### 阶段 6.3：小样本验证集鲁棒性检查
 
@@ -993,11 +992,9 @@ Directed Gate，`scheme2r` 为新增方案 2-R。契约同时记录全窗口 DS-
 
 验收输出：小样本验证集对照表和稳定性说明，不读取小样本测试集。
 
-当前状态：`frame/scripts/run_stage6_robustness.py` 已接入新的六模型契约和 H1—H4，
-并完成 Kitakyushu CPU 冒烟。正式运行时仍需根据阶段 6.2 的全年验证排名，只保留前两名
-内部模型和方案 2-R 的已选配置，避免在小样本验证集上重复扩大超参数搜索。结果继续包括
-逐模型、逐任务、逐预测步指标，以及与全年验证结果的 WAPE/排名对照和稳定性摘要；正式
-负迁移率统计保留到阶段 6.5。
+当前状态：已完成 2/2 个正式小样本鲁棒性运行，选择了 `stl_matched`-H3 和
+`scheme2r`-H4；结果位于 `frame/reports/stage6r_3_kitakyushu_small/`。结果包括逐任务、
+逐预测步指标以及与全年验证结果的排名稳定性摘要；小样本测试集未读取，正式负迁移率统计保留在阶段 6.5。
 
 #### 阶段 6.4：门控行为诊断
 
@@ -1007,18 +1004,18 @@ Directed Gate，`scheme2r` 为新增方案 2-R。契约同时记录全窗口 DS-
 - 来源分配 $\pi$ 的归一化熵、最大来源占比和近似均匀比例；
 - 最终门控 $g=\rho\pi$ 的均值、标准差和近似恒定比例；
 - 有向门控的 $g_{i\rightarrow j}$ 与 $g_{j\rightarrow i}$ 差异；
-- $\rho$、$\pi$ 和 $g$ 随季节、温度区间、工作日/周末和预测步长的变化；
+- $\rho$、$\pi$ 和 $g$ 随季节、训练集温度 Q1—Q4、weekday/weekend 和预测步长的变化；
 - 门控变化与逐任务误差变化是否同步。
 
 本阶段只描述统计关联，不能把门控权重解释为物理因果关系。
 
 验收输出：按预测步分层的 $\rho$ 诊断表、$\pi/g$ 热力图、来源选择表、预测步差异和非对称性统计。
 
-当前状态：`frame/src/gate_diagnostics.py` 与 `frame/scripts/run_stage6_gate_diagnostics.py`
-已经支持原静态、动态对称、动态有向门控以及方案 2-R 的
-`share_intensity`、`source_allocation` 和 `[batch, horizon, target, source]` 门控读取。
-方案 2-R 诊断按预测步拆分并输出 SVG、PDF 和 300 dpi PNG；Kitakyushu 正式全年验证集诊断已经
-生成并完成 28 个运行的完整性检查。阶段 6.4 不读取测试集，所有阈值均已在新契约中预先记录。
+当前状态：已完成验证集门控诊断。`frame/src/gate_diagnostics.py` 与
+`frame/scripts/run_stage6_gate_diagnostics.py` 支持原静态、动态对称、动态有向门控以及方案 2-R
+的 `share_intensity`、`source_allocation` 和 `[batch, horizon, target, source]` 门控读取。
+当前正式目录分析了 Scheme2R 的 4 个预测步，未具备门控文件的 15 个候选运行已在清单中明确记录为缺失；
+结果位于 `frame/reports/stage6r_4_kitakyushu/`，未读取测试集。
 
 #### 阶段 6.5：验证集负迁移决策
 
@@ -1045,11 +1042,13 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 从验证集预测文件计算任务级、预测步长级和季节×预测步长级迁移收益，输出原始负迁移率；
 默认对 WAPE 的任务级收益进行 500 次成对 bootstrap，并以 95% 置信区间上界小于 0 判定显著
 负迁移。阶段 6.5 只读取 predictions_validation.npz，不读取测试结果。
-旧版全年验证集负迁移分析仅保留为 legacy 记录；修复后的 Stage 6-R.5 必须以结构匹配 `stl_matched` 为参照重新生成。阶段 6.5 代码只读取验证预测，不读取测试结果。
+旧版全年验证集负迁移分析仅保留为 legacy 记录；修复后的 Stage 6-R.5 已以结构匹配
+`stl_matched` 为参照重新生成 240 条汇总记录。结果位于 `frame/reports/stage6r_5_kitakyushu_full/`，
+阶段 6.5 只读取验证预测，不读取测试结果。
 
 #### 阶段 6.6：最终方案冻结与阶段 7 交接
 
-当前状态：旧版 H3 冻结已作废。通用冻结代码已完成，待新 Stage 6-R.1—6-R.5 只依据全年验证集排名自动生成最终主模型、比较模型和有效配置；不得预设 Scheme2R 或 H3。
+当前状态：已完成。旧版 H3 冻结已作废；新 Stage 6-R.1—6-R.5 依据验证集结果自动冻结了 `stl_matched`-H3 主参照和 `scheme2r`-H4 比较模型。该冻结文件为 `frame/reports/stage6r_6_kitakyushu/stage6_selected_config.json`，测试集未参与选模。
 
 根据全年验证集主要指标、小样本稳定性、负迁移结果和计算开销，冻结：
 
@@ -1079,7 +1078,7 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 ### 阶段 7：正式全年、小样本与消融实验
 
-当前状态：旧版阶段 7.0—7.6 的 104 次结果已封存为 `legacy_non_strict_seed_control`，不能进入最终论文主结果表。由于旧版 Stage 6.6 冻结也已作废，必须先完成新 Stage 6-R，再由新冻结文件生成 Stage 7.0 契约；不能继续假定 Scheme2R-H3。
+当前状态：旧版阶段 7.0—7.6 的结果已封存为 `legacy_non_strict_seed_control`，不能进入最终论文主结果表。新 Stage 6-R 已冻结 `stl_matched`-H3 主参照和 `scheme2r`-H4 比较模型；Stage 7-R 的全部正式运行和 124 条汇总已完成。
 
 阶段 7 不再把所有训练任务视为一个不可拆分的长命令，而是按以下顺序执行。每个子阶段必须保存独立的运行清单、原始预测、指标和异常记录；前一子阶段未通过验收时，不得进入后一子阶段。
 
@@ -1113,7 +1112,7 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 #### 阶段 7.2：阶段 7 CPU 冒烟验收
 
-当前状态：历史 CPU 冒烟已完成但不用于论文性能结论；修复后的阶段 7.2 只在新 Stage 6-R 冻结后重新执行必要的工程验收。
+当前状态：修复后的阶段 7.2 CPU 冒烟和工程验收已经完成，结果只用于验证训练、验证、测试、检查点和输出链路，不用于论文性能结论。后续 Stage 7-R、Stage 7.7 及修订后的 Stage 8 正式分析均已完成。
 
 使用一个随机种子、极少量窗口和 1—2 个 epoch，检查：
 
@@ -1128,7 +1127,7 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 #### 阶段 7.3：主模型与主要内部对照正式实验
 
-当前状态：旧版 20 个运行已封存；阶段 7-R 将在独立目录按新冻结文件和严格种子协议重新运行，不覆盖旧文件。测试集仅在新冻结后用于最终评估。
+当前状态：已完成，20/20 个运行通过。结果位于 `frame/reports/stage7r_3_kitakyushu_formal/`，使用新冻结文件和严格种子协议；测试集只在 Stage 6.6 冻结后用于最终评估。
 
 对新冻结的主模型和主要内部对照分别使用五个随机种子（2026—2030），完成：
 
@@ -1141,22 +1140,22 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 #### 阶段 7.4：A0—A4 正式消融实验
 
-当前状态：旧版 50 个运行已封存；修复后 A0—A3 重新训练，A4 复用主模型同协议同种子的结果，不再重复训练。测试集只在新 Stage 6-R 冻结之后读取。
+当前状态：已完成，50/50 个运行通过。由于冻结主模型为 `stl_matched`，A0—A4 均独立训练；A4 没有复用 Stage 7.3 输出。结果位于 `frame/reports/stage7r_4_kitakyushu_formal/`。测试集只在新 Stage 6-R 冻结之后读取。
 
-在新冻结的有效配置和五个随机种子下运行 A0—A3，A4 作为主模型结果的复用记录，重点比较：
+在新冻结的有效配置和五个随机种子下运行 A0—A4，当前冻结主模型不是 Scheme2R，因此 A4 独立训练，重点比较：
 
 - 全窗口 DS-TCN 的作用；
 - 预测步相关门控的作用；
 - `rho×pi` 两级路由的作用；
 - 低秩投影、消息归一化、残差缩放和任务—预测步专属头的作用。
 
-实际训练规模为 `4 个消融模型 × 2 套协议 × 5 个种子 = 40 个运行`；另增加 10 条 A4 复用记录，不设置样本上限或冒烟 epoch。每个训练运行保存最佳检查点、验证/测试预测、逐任务/逐步长/逐季节指标、参数量和 CPU 计时。
+实际记录规模为 `5 个消融模型 × 2 套协议 × 5 个种子 = 50 个独立训练运行`；不设置样本上限或冒烟 epoch。每个训练运行保存最佳检查点、验证/测试预测、逐任务/逐步长/逐季节指标、参数量和 CPU 计时。
 
 不对所有消融模块做笛卡尔积组合；静态门控、动态对称门控、移除状态、普通 TCN、MLP 和完整投影作为独立结构控制。
 
 #### 阶段 7.5：外部基线正式实验
 
-当前状态：旧版 34 个运行已封存；修复后按严格种子协议重新生成全部 34 次外部基线结果，其中 4 次为确定性计算、30 次为学习型训练。
+当前状态：已完成，44/44 个运行通过，包含确定性基线、学习型外部基线和 `Scheme2R-loads-only` 控制。
 
 在完全相同的数据切分和测试窗口上运行：
 
@@ -1170,7 +1169,7 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 #### 阶段 7.6：统一汇总与阶段 7 验收
 
-当前状态：旧版汇总只用于追溯。阶段 7-R 使用独立汇总器，合计 114 条有效记录（104 条物化运行 + 10 条 A4 复用），不修改或覆盖旧版 7.6 文件。
+当前状态：已完成，汇总 124 条有效记录：Stage 7.3 的 20 条、Stage 7.4 的 50 条、Stage 7.5 的 44 条，以及结构匹配 STL 参考实验的 10 条。124 条后验 CPU 资源记录和候选配置字段均已补齐，并已通过阶段 7.6 验收。
 
 汇总所有正式结果并生成：
 
@@ -1214,7 +1213,7 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 ### 阶段 7-R：可复现实验修订与结构匹配 STL
 
-当前状态：代码实施、结构匹配 STL 端到端冒烟测试、全量回归测试与统一 `dry-run` 均已完成；正式 114 次运行尚未开始。修订设计和机器可读契约分别位于：
+当前状态：代码实施、结构匹配 STL 端到端冒烟测试、全量回归测试与统一 `dry-run` 均已完成。正式 Stage 7-R 的 7.3、7.4、7.5、结构匹配 STL 和 7.6 汇总均已通过；资源测量接口和修订后的 Stage 8 输入映射、指标计算、显著性检验、迁移诊断及输出验收均已完成。修订设计和机器可读契约分别位于：
 
 - `docs/superpowers/specs/2026-08-05-stage7r-reproducible-revision-design.md`；
 - `frame/configs/stage7r_reproducibility_contract.json`。
@@ -1228,11 +1227,14 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 #### 阶段 7-R.2：旧实验的隔离式可复现重跑
 
-在 `frame/reports/stage7r_kitakyushu_reproducible/` 下重新执行：
+修订后的结果分别写入 `stage7r_3_kitakyushu_formal/`、
+`stage7r_4_kitakyushu_formal/`、`stage7r_5_kitakyushu_formal/` 和
+`stage7r_stl_reference_kitakyushu_formal/`；汇总写入
+`stage7r_6_kitakyushu_acceptance/`：
 
 - 主模型与主要内部对照：20 次；
-- A0—A3 消融：40 次；A4 复用主模型结果 10 条；
-- 外部基线：34 次。
+- A0—A4 消融：50 次独立训练；当前冻结主模型不是 Scheme2R，因此 A4 不复用；
+- 外部基线及 `Scheme2R-loads-only` 控制：44 次（4 次确定性基线、30 次学习型外部基线、10 次 loads-only 控制）。
 
 旧版结果目录保持只读，不删除、不覆盖。修订实验先完成新的 Stage 6-R 验证集选择；Stage 7-R 不根据测试指标修改模型，也不预设 H3。
 
@@ -1242,39 +1244,85 @@ frame/scripts/run_stage6_transfer_analysis.py。脚本以结构匹配的 STL 为
 
 STL 与最终冻结主模型必须使用相同数据切分、24→4 窗口、训练集专属标准化、冻结编码器参数、损失函数、优化器、最大 epoch 和 early stopping。STL 不允许读取其他任务的历史负荷，也不使用未来外生变量。
 
-#### 阶段 7-R.4：114 次结果汇总与验收
+#### 阶段 7-R.4：124 次结果汇总与验收
 
 最终运行矩阵为：
 
 | 结果组 | 运行数 |
 |---|---:|
 | 冻结主模型与比较模型 | 20 |
-| A0—A3 训练 + A4 复用 | 50 |
-| 外部基线 | 34 |
+| A0—A4 独立训练 | 50 |
+| 外部基线及 loads-only 控制 | 44 |
 | 结构匹配 STL | 10 |
-| 合计 | 114 |
+| 合计 | 124 |
 
-其中 100 次需要训练，4 次为确定性计算，10 条为 A4 复用。物化运行数为 104，最终有效记录数为 114。只有 `stage7r_acceptance_manifest.json` 显示 114/114 成功、严格种子控制为真、旧版结果已排除且 `test_used_for_selection=false` 后，才允许进入阶段 8。
+当前冻结下正式矩阵为 124 条，全部为物化记录；Stage 7.4 的 A4 为独立训练，A4 复用数为 0。只有根清单显示 124/124 成功、种子组合唯一、旧版结果已排除且 `test_used_for_selection=false` 后，才允许进入阶段 8。
+
+#### 阶段 7.7：同赛道联合模型补充实验
+
+当前状态：代码、不可变契约、30 次正式矩阵 dry-run、PLE-lite 梯度/形状测试和 CPU smoke 均已通过；Hard-Share-H2、Dynamic-Symmetric-H1 与 PLE-lite 的 30 次正式实验已经全部完成，失败数为 0，且 `test_used_for_selection=false`。该阶段没有改变 Stage 6.6 冻结结果，也没有覆盖既有 Stage 7-R 目录。
+
+补充三种联合多任务模型：
+
+- `hard_share`-H2：Stage 6 全年验证集中该模型家族的最佳固定配置；
+- `dynamic_symmetric`-H1：Stage 6 全年验证集中该模型家族的最佳固定配置；
+- `ple-lite`-`ple_lite_fixed_v1`：两层 CGC、共享专家与任务私有专家组成的预注册轻量 PLE 配置。
+
+正式矩阵为三模型 × 两协议 × 五随机种子，共 30 次。全年协议固定使用 batch size 256、最多 100 epoch、patience 12；小样本协议固定使用 batch size 32、最多 200 epoch、patience 20。两套协议均使用 CPU、AdamW、SmoothL1Loss、训练集专属标准化和 24→4 窗口，不使用未来外生变量，不根据测试结果改变模型或超参数。
+
+正式命令：
+
+```powershell
+& $py frame\scripts\run_stage7_7.py `
+  --kitakyushu-data-dir "D:\Paper\Kitakyushu dataset" `
+  --contract "frame\configs\stage7_7_joint_baselines_contract.json" `
+  --freeze-config "frame\reports\stage6r_6_kitakyushu\stage6_selected_config.json" `
+  --output-dir "frame\reports\stage7r_7_joint_baselines_formal"
+```
+
+中断后只能使用相同命令并增加 `--resume`。正式目录验收条件为 30/30 通过、没有失败运行、每个预测文件形状为 `[N,4,4]`，且 `test_used_for_selection=false`。
 
 ### 阶段 8：负迁移和门控解释
 
-当前状态：尚未开始，等待新 Stage 6-R 冻结和阶段 7-R 的 114 条有效结果通过验收。该阶段只使用阶段 7-R 产生的测试集预测，不能与阶段 6.4—6.5 的验证集诊断混写，也不能使用旧版非严格种子控制结果计算最终迁移收益。
+当前状态：已完成。分析代码、角色契约、统计函数、图表源代码和回归测试均已通过；Stage 7.7 的 30 条正式结果已生成，修订后的 Stage 8 已完成五个联合模型的主比较、显著性检验、任务级迁移与负迁移率汇总。Stage 8 不训练模型、不重新选模，也不改变 Stage 6-R 冻结结果。
+
+证据角色固定为三层：
+
+1. 联合模型主排行榜：Hard-Share-H2、Dynamic-Symmetric-H1、MMoE-lite、PLE-lite 和 Scheme2R-H4；
+2. 一般基线补充表：DLinear、SOFTS adapter、Persistence 和 Seasonal Naive；
+3. STL 参照：STL-H3 只记录 Stage 6 验证集选择历史，不进入联合模型主排行榜；结构匹配 STL-H4 只用于 Scheme2R-H4 的逐任务负迁移诊断。
+
+不得生成或使用 `best_stl_reference_comparison.csv` 作为论文主表，也不得因测试结果重新选择五个联合模型或其配置。
 
 #### 工作内容
 
 - 计算 $G_i$ 和 $G_{i,s,h}$；
 - 计算原始与显著负迁移率；
-- 按季节、温度区间、工作日/周末和预测步统计 $\rho$、$\pi$ 与 $g$；
+- 按季节、训练集温度 Q1—Q4、weekday/weekend 和预测步统计 $\rho$、$\pi$ 与 $g$；
 - 比较 $g_{i\rightarrow j}$ 与 $g_{j\rightarrow i}$；
 - 将门控变化与误差变化放在同一分析中。
+- 对任务总体和任务—预测步 MAE 迁移假设分别按协议划分检验族执行 Benjamini–Hochberg 校正；负迁移检验使用五随机种子与 24 小时循环块的分层配对 bootstrap；MAPE 只在非零真实值上计算，WAPE 分母为零时保留为空值，不强行替换为数值。
 
 #### 输出
 
+- 五个联合模型的总体主表和逐任务表；
+- Scheme2R 与其余四个联合模型的配对块 bootstrap 与 FDR 校正表；
+- 一般预测基线补充表；
 - 任务迁移收益图；
 - 季节和预测步长热力图；
 - 共享强度曲线、来源分配热力图和最终有向门控热力图；
 - 门控非对称性统计；
+- 门控—误差 Spearman 关联表（只作关联解释，不作因果解释）；
 - 负迁移分析文字草稿。
+
+机器可读输出固定包括 `joint_model_comparison.csv`、
+`joint_model_per_task.csv`、`joint_model_significance.csv`、
+`general_baseline_comparison.csv`、`transfer_task_overall.csv`、
+`transfer_task_horizon.csv`、`transfer_context.csv`、
+`negative_transfer_rates.csv`、`temperature_bin_thresholds.csv`、
+`gate_summary.csv`、`gate_asymmetry.csv`、`gate_error_association.csv`、
+`resource_comparison.csv`、`stage8_input_index.csv`、门控 NPZ 数组和
+`stage8_manifest.json`。图件导出 SVG、PDF、300 dpi PNG 和 600 dpi TIFF。
 
 #### 验收条件
 
@@ -1284,7 +1332,7 @@ STL 与最终冻结主模型必须使用相同数据切分、24→4 窗口、训
 
 ### 阶段 9：中文 Methodology 写作
 
-当前状态：尚未开始。必须等待新的 Stage 6-R 冻结最终结构后再定稿。
+当前状态：中文 Methodology 3.1—3.10 技术初稿已完成，并已完成一轮代码—公式—维度一致性审查；仍需完成基础引文接入、最终图像导出、语言润色和投稿级文档 QA。Stage 7.7 与修订后的 Stage 8 已通过验收；Scheme2R-H4 的结构与实现已冻结。阶段 9 只描述已经实现并验证的方法，不在 Methodology 中写模型优越性或显著性结论。具体执行以 `D:\Paper\plan\Methodology各模块技术细节_分阶段写作计划.md` 为准。
 
 中文方法部分固定为以下结构：
 
@@ -1303,7 +1351,7 @@ Methodology 中只能写已经实现并验证的最终结构。预实验中被�
 
 ### 阶段 10：框架图和英文 Methodology
 
-当前状态：尚未开始。中文 Methodology 经导师确认后再编写英文版本。
+当前状态：部分完成。总体网络结构图和 DS-TCN v10 细节图已经形成可编辑版本；中文 Methodology 3.1—3.10 技术初稿已完成，但图 2 仍需导出论文图片格式并嵌入正文，且全文引文和投稿级 QA 尚未关闭。英文 Methodology 仍须等待中文版经导师确认后再编写。
 
 #### 框架图要求
 
@@ -1393,4 +1441,4 @@ Methodology 中只能写已经实现并验证的最终结构。预实验中被�
 
 ## 13. 当前下一步
 
-Kitakyushu 数据审计、模型接口和 Scheme2R 算法框架已完成。旧版阶段 6/7 结果已标记为 `legacy_non_strict_seed_control` 并保留追溯，不进入最终论文主表。正式实验前全阶段审计的代码修复、结构匹配 STL、运行矩阵和验收脚本已完成，当前已通过 156 项回归测试与 dry-run，但真实数据 smoke、clean commit 和六道准入门尚未完成。下一步不是直接启动 Stage 7，而是先按 `change_plan/正式实验前全阶段审计与一次性修复计划.md` 完成 Stage 6-R 重新选择与冻结；冻结后再生成 114 条有效的 Stage 7-R 矩阵。Scheme2R 的主体结构保持不变，不直接加入 Transformer、STAR 或完整 Shao Frequency-STIM-MMoE。
+Kitakyushu 数据审计、模型接口、Scheme2R 算法框架、Stage 6-R 验证集选模、Stage 7-R、Stage 7.7 和修订后的 Stage 8 均已完成。中文 Methodology 3.1—3.10 技术初稿和一轮代码—公式—维度核对也已完成。当前下一步是完成基础引文编号接入、图 2 论文格式导出、Gate 1—4 投稿级 QA，并在导师确认中文版后编写英文版本。论文主性能结论继续只在 Hard-Share-H2、Dynamic-Symmetric-H1、MMoE-lite、PLE-lite 和 Scheme2R-H4 五个联合模型之间比较；STL-H3 只保留为选择审计，STL-H4 只用于逐任务迁移收益。Methodology 不因测试集结果修改 Scheme2R-H4，也不加入 Transformer、STAR 或完整 Shao Frequency-STIM-MMoE。

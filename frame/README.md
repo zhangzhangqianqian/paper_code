@@ -505,3 +505,49 @@ frame/reports/stage7r_6_kitakyushu_acceptance/
 只有 `audit_manifest.json` 同时报告 `parameter_evidence=pass`、
 `decision_space=pass` 且 `test_year_used_for_scaling=false`，才进入阶段 10.2 的
 SciPy/HiGHS 最小求解器验证；这两阶段不运行正式调度，也不改变已冻结的预测模型。
+
+### 阶段 10.2—10.12：调度数据、LP、滚动结算与正式冻结（已实现）
+
+阶段 10.2 固定 SciPy 1.13.x/HiGHS；10.3 将负荷、设备侧 gas、气象、购电和 PV
+按时间戳严格合并，并把未来真实字段隔离到结算阶段；10.4—10.5 生成透明 PV/WT
+预测并适配五个已冻结的联合预测模型。10.6 的 `real_replay` 只评价真实站点的
+购电/购气申报偏差，10.7—10.9 的 `simulated_dispatch` 使用训练期统计冻结的
+标准 IES 参数、四小时滚动 LP 和首小时再平衡。10.10—10.11 提供指标、按日
+bootstrap、BH 校正、smoke 和正式预检。
+
+正式调度协议由 `freeze_scheduling_contract_v2.py` 生成，不能直接把仓库中的模板
+当作冻结证据。示例：
+
+```powershell
+& $py frame\scripts\freeze_scheduling_contract_v2.py `
+  --repo-root (Get-Location) `
+  --benchmark "D:\Paper\standard_ies_benchmark_v1.yaml" `
+  --ledger frame\configs\scheduling_parameter_ledger_v2.csv `
+  --preflight "D:\Paper\scheduling_preflight_current3\scheduling_preflight_manifest.json" `
+  --data-dir "D:\Paper\Kitakyushu dataset" `
+  --output "D:\Paper\scheduling_formal_contract_v2.json"
+```
+
+### 阶段 10.13：2021 双轨正式执行器（已实现，尚未启动正式运行）
+
+`frame/scripts/run_scheduling_formal_v2.py` 的 `--dry-run` 已固定 25 个 R 轨运行和
+150 个 S 轨情景运行，共 175 个。每个运行独立保存 `rows.csv`、`summary.json` 和
+带 SHA-256 的 `run_manifest.json`；`--resume` 只跳过哈希完整的运行。R 轨先运行，
+随后才运行 S 轨；任何失败都会写入根目录清单并停止，不覆盖另一轨结果。正式执行
+命令如下，运行前应确认磁盘空间和 CPU 占用：
+
+```powershell
+& $py frame\scripts\run_scheduling_formal_v2.py --dry-run `
+  --contract "D:\Paper\scheduling_formal_contract_v2.json"
+
+& $py frame\scripts\run_scheduling_formal_v2.py `
+  --contract "D:\Paper\scheduling_formal_contract_v2.json" `
+  --data-dir "D:\Paper\Kitakyushu dataset" `
+  --benchmark "D:\Paper\standard_ies_benchmark_v1.yaml" `
+  --ledger frame\configs\scheduling_parameter_ledger_v2.csv `
+  --renewable-file "D:\Paper\renewable_forecasts_test\renewable_predictions_test.npz" `
+  --output-dir frame\reports\scheduling_v2\formal
+```
+
+该命令才会读取 2021 测试窗口；它不重训预测模型，也不根据 2021 结果调参。
+阶段 10.14 的汇总、统计检验、图表和论文同步必须等待 10.13 正式结果完成后再做。

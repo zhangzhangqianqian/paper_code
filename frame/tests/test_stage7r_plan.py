@@ -22,14 +22,17 @@ class Stage7RPlanTests(unittest.TestCase):
             str(ACCEPTANCE), run_name="stage7r_acceptance_test"
         )
 
-    def test_revision_plan_contains_114_materialized_runs(self):
-        plan = self.orchestrator["build_revision_plan"]()
-        self.assertEqual([item["run_count"] for item in plan], [20, 40, 44, 10])
-        self.assertEqual(sum(item["run_count"] for item in plan), 114)
+    def test_revision_plan_matches_current_non_scheme2r_freeze(self):
+        freeze = {"primary_model": {"model": "stl_matched"}}
+        plan = self.orchestrator["build_revision_plan"](freeze)
+        self.assertEqual([item["run_count"] for item in plan], [20, 50, 44, 10])
+        self.assertEqual(sum(item["run_count"] for item in plan), 124)
 
     def test_acceptance_sources_match_revision_plan(self):
-        sources = self.acceptance["build_acceptance_sources"](Path("results"))
-        self.assertEqual(sum(item["expected_runs"] for item in sources), 114)
+        sources = self.acceptance["build_acceptance_sources"](
+            Path("results"), stage7_4_runs=50
+        )
+        self.assertEqual(sum(item["expected_runs"] for item in sources), 124)
         self.assertEqual(sources[-1]["source_group"], "matched_stl_reference")
 
 

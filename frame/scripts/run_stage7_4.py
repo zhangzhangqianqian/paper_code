@@ -368,6 +368,16 @@ def main() -> None:
         include_a4=include_a4,
         candidate_id=scheme2r_candidate,
     )
+    trained_ablations = [
+        name for name in ABLATION_NAMES if include_a4 or name != "A4"
+    ]
+    reused_ablations = (
+        {}
+        if include_a4
+        else {
+            "A4": "stage7.3 primary model outputs with identical protocol, candidate, and seed"
+        }
+    )
     if args.dry_run:
         print(
             json.dumps(
@@ -376,7 +386,8 @@ def main() -> None:
                     "status": "dry_run",
                     "run_count": len(plan),
                     "ablations": list(ABLATION_NAMES),
-                    "reused_ablations": [] if include_a4 else ["A4"],
+                    "trained_ablations": trained_ablations,
+                    "reused_ablations": list(reused_ablations),
                     "protocols": list(FORMAL_PROTOCOLS),
                     "seeds": list(EXPECTED_SEEDS),
                     "sample_limits": None,
@@ -413,7 +424,12 @@ def main() -> None:
         windows, stats = _standardize_protocol(frame, split_spec)
         protocol_windows[protocol] = windows
         protocol_stats[protocol] = stats
-        stats.save(output_dir / protocol / "normalization_stats.npz")
+        normalization_path = output_dir / protocol / "normalization_stats.npz"
+        # A resume must not overwrite an existing normalization artifact.  The
+        # formal run may still be reading it from another process, and the
+        # protocol is already frozen by the existing run manifests.
+        if not (args.resume and normalization_path.exists()):
+            stats.save(normalization_path)
 
     hyperparameters = scheme2r_reference["hyperparameters"]
     protocol_policies = contract.get("protocol_training_policies") or {
@@ -513,9 +529,15 @@ def main() -> None:
         "cleaning_report": cleaning_report,
         "read_seconds": read_seconds,
         "ablations": list(ABLATION_NAMES),
-        "trained_ablations": [name for name in ABLATION_NAMES if name != "A4"],
-        "reused_ablations": {
-            "A4": "stage7.3 primary model outputs with identical protocol, candidate, and seed"
+        "trained_ablations": trained_ablations,
+        "reused_ablations": reused_ablations,
+        "a4_execution": {
+            "mode": "trained" if include_a4 else "reused",
+            "reason": (
+                "frozen primary is not Scheme2R; A4 was trained explicitly"
+                if include_a4
+                else "frozen primary is Scheme2R and A4 is identical to the primary"
+            ),
         },
         "protocols": list(FORMAL_PROTOCOLS),
         "seeds": list(EXPECTED_SEEDS),
