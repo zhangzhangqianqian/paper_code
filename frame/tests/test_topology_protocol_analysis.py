@@ -10,6 +10,8 @@ import numpy as np
 
 from frame.src.topology_protocol_analysis import (
     align_validation_origins,
+    decide_topology_branch,
+    freeze_topology_branch,
     load_validation_artifact,
 )
 
@@ -94,6 +96,21 @@ class TopologyProtocolAnalysisTests(unittest.TestCase):
             self.assertEqual(left_aligned.prediction.shape[1:], (4, 4))
             self.assertEqual(left_aligned.sample_count, 6)
             self.assertTrue(np.array_equal(left_aligned.target_times, right_aligned.target_times))
+
+    def test_branch_rules_cover_core_gas_stable_and_invalid(self) -> None:
+        did = [{"scope": "overall", "metric": "MAE", "ci_low": -2.0, "ci_high": -0.5}]
+        self.assertEqual(decide_topology_branch([], did), "core_prediction_changed")
+        gas = [{"scope": "task", "task": "gas", "metric": "MAE", "estimate_post_minus_cross": -1.0, "p_value_bh": 0.01, "model": "scheme2r"}]
+        self.assertEqual(decide_topology_branch(gas, [{"scope": "overall", "metric": "MAE", "ci_low": -0.1, "ci_high": 0.1}]), "gas_only_changed")
+        self.assertEqual(decide_topology_branch([], [{"scope": "overall", "metric": "MAE", "ci_low": -0.1, "ci_high": 0.1}]), "core_conclusion_stable")
+        self.assertEqual(decide_topology_branch([], [], reliability_ok=False), "pilot_invalid")
+
+    def test_branch_freeze_is_immutable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            freeze_topology_branch("core_conclusion_stable", {"hash": "a"}, root, git_revision="abc")
+            with self.assertRaises(FileExistsError):
+                freeze_topology_branch("gas_only_changed", {"hash": "b"}, root, git_revision="def")
 
 
 if __name__ == "__main__":

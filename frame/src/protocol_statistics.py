@@ -100,7 +100,18 @@ def _metric_value(prediction: np.ndarray, target: np.ndarray, metric: str) -> fl
     if metric not in SUPPORTED_METRICS:
         raise ValueError(f"unsupported metric: {metric}; choose from {SUPPORTED_METRICS}")
     error = prediction - target
-    axes = tuple(range(1, error.ndim))
+
+    # Keep the task axis explicit.  Multi-energy loads have different physical
+    # units and magnitudes, so an overall statistic is an equal-task mean,
+    # matching ``regression_metrics``; the time/origin axis is still the first
+    # axis used by the bootstrap sampler.
+    if error.ndim >= 3:
+        return float(
+            np.mean([
+                _metric_value(error[..., index] + target[..., index], target[..., index], metric)
+                for index in range(error.shape[-1])
+            ])
+        )
     if metric == "MAE":
         return float(np.mean(np.abs(error)))
     if metric == "RMSE":
@@ -110,9 +121,8 @@ def _metric_value(prediction: np.ndarray, target: np.ndarray, metric: str) -> fl
         if denominator <= 1e-12:
             return float("nan")
         return float(np.sum(np.abs(error)) / denominator * 100.0)
-    # The project-wide MAPE convention uses a finite epsilon for zero targets.
     denominator = np.maximum(np.abs(target), 1e-6)
-    return float(np.mean(np.abs(error) / denominator, axis=axes).mean() * 100.0)
+    return float(np.mean(np.abs(error) / denominator) * 100.0)
 
 
 def _contrast_p_value(samples: np.ndarray) -> float:
