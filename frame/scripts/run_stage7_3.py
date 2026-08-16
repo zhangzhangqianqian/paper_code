@@ -43,8 +43,8 @@ from src.kitakyushu_pipeline import (  # noqa: E402
     clean_kitakyushu_dataframe,
     read_kitakyushu_canonical,
 )
-from src.models import build_forecasting_model, count_trainable_parameters  # noqa: E402
-from src.external_models import PLELiteBaseline  # noqa: E402
+from src.models import count_trainable_parameters  # noqa: E402
+from src.formal_model_factory import build_formal_forecasting_model  # noqa: E402
 from src.stage7_contract import EXPECTED_SEEDS  # noqa: E402
 from src.training import (  # noqa: E402
     StandardizationStats,
@@ -125,61 +125,14 @@ def _build_model(
     hyperparameters: Mapping[str, object],
     exog_dim: int,
 ):
-    if model_name == "ple-lite":
-        return PLELiteBaseline(
-            lookback=LOOKBACK,
-            horizon=HORIZON,
-            task_count=len(KITAKYUSHU_TASKS),
-            exog_dim=exog_dim,
-            shared_expert_count=int(hyperparameters["shared_expert_count"]),
-            task_expert_count=int(hyperparameters["task_expert_count"]),
-            expert_hidden_dim=int(hyperparameters["expert_hidden_dim"]),
-            representation_dim=int(hyperparameters["representation_dim"]),
-            head_hidden_dim=int(
-                hyperparameters["prediction_head_hidden_dim"]
-            ),
-            dropout=float(hyperparameters["dropout"]),
-        )
-    common = {
-        "exog_dim": exog_dim,
-        "task_count": len(KITAKYUSHU_TASKS),
-        "hidden_dim": int(hyperparameters["hidden_dim"]),
-        "dropout": float(hyperparameters["dropout"]),
-        "horizon": HORIZON,
-        "head_hidden_dim": int(hyperparameters["prediction_head_hidden_dim"]),
-    }
-    if model_name == "scheme2r":
-        common.update(
-            {
-                "lookback": LOOKBACK,
-                "kernel_size": int(hyperparameters["scheme2r_kernel_size"]),
-                "dilations": tuple(hyperparameters["scheme2r_dilations"]),
-                "rank": int(hyperparameters["scheme2r_rank"]),
-                "gate_hidden_dim": int(
-                    hyperparameters["scheme2r_gate_hidden_dim"]
-                ),
-                "step_embedding_dim": int(
-                    hyperparameters["scheme2r_step_embedding_dim"]
-                ),
-            }
-        )
-    elif model_name in {
-        "stl_matched",
-        "hard_share",
-        "static_gate",
-        "dynamic_symmetric",
-        "dynamic_directed",
-    }:
-        common.update(
-            {
-                "lookback": LOOKBACK,
-                "kernel_size": int(hyperparameters["kernel_size"]),
-                "dilations": tuple(hyperparameters["dilations"]),
-            }
-        )
-    else:
-        raise ValueError(f"unsupported formal model: {model_name}")
-    return build_forecasting_model(model_name, **common)
+    return build_formal_forecasting_model(
+        model_name,
+        hyperparameters,
+        exog_dim=exog_dim,
+        lookback=LOOKBACK,
+        horizon=HORIZON,
+        task_count=len(KITAKYUSHU_TASKS),
+    )
 
 
 def build_run_plan(
