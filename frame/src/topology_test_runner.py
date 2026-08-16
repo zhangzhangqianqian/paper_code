@@ -322,6 +322,7 @@ def _run_one(
         "branch": run["branch"], "model": model_name, "candidate_id": candidate,
         "seed": seed, "dataset": "kitakyushu_energy_station",
         "years_loaded": list(PHASE_B_YEARS), "test_set_accessed": True,
+        "branch_frozen_before_test": True,
         "test_used_for_selection": False, "future_exogenous_used": False,
         "tasks": list(KITAKYUSHU_TASKS),
         "window": {"lookback": LOOKBACK, "horizon": HORIZON, "output_shape": list(prediction.shape)},

@@ -554,6 +554,71 @@ def freeze_topology_branch(
     return payload
 
 
+def validate_phase_b_result_artifacts(
+    branch_freeze_path: str | Path,
+    prediction_root: str | Path,
+    *,
+    scheduling_manifest_path: str | Path | None = None,
+) -> dict[str, object]:
+    """Validate the completed, branch-locked 2021 prediction/scheduling set."""
+
+    from .topology_scheduling_runner import build_scheduling_run_plan, validate_prediction_artifact
+    from .topology_test_runner import build_phase_b_run_plan, load_branch_freeze
+
+    freeze = load_branch_freeze(branch_freeze_path)
+    forecast_plan = build_phase_b_run_plan(freeze)
+    unique_forecasts = {(row["model"], row["candidate_id"], row["seed"]) for row in forecast_plan}
+    root = Path(prediction_root)
+    prediction_records = []
+    for model, candidate, seed in sorted(unique_forecasts):
+        run_dir = root / str(model) / str(candidate) / f"seed_{seed}"
+        prediction_path = run_dir / "predictions_test.npz"
+        artifact = validate_prediction_artifact(prediction_path)
+        manifest_path = run_dir / "run_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(manifest_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("branch_frozen_before_test") is not True:
+            raise ValueError(f"branch freeze does not precede test: {manifest_path}")
+        if manifest.get("test_used_for_selection") is not False:
+            raise ValueError(f"test artifact was used for selection: {manifest_path}")
+        prediction_records.append({
+            "model": model, "candidate_id": candidate, "seed": int(seed),
+            "path": str(prediction_path), "sha256": artifact["sha256"],
+            "sample_count": int(len(artifact["prediction"])),
+        })
+    expected_schedule_count = len(build_scheduling_run_plan(freeze))
+    schedule_count = None
+    if scheduling_manifest_path is not None:
+        schedule_path = Path(scheduling_manifest_path)
+        if not schedule_path.is_file():
+            raise FileNotFoundError(schedule_path)
+        schedule = json.loads(schedule_path.read_text(encoding="utf-8"))
+        if schedule.get("branch_frozen_before_scheduling") is not True:
+            raise ValueError("scheduling manifest does not reference a prior branch freeze")
+        if schedule.get("lp_equations_modified") is not False:
+            raise ValueError("topology routing changed the frozen LP equations")
+        schedule_count = len(schedule.get("runs", []))
+        if schedule_count != expected_schedule_count:
+            raise ValueError(
+                f"scheduling run count mismatch: expected {expected_schedule_count}, got {schedule_count}"
+            )
+    return {
+        "stage": "topology_protocol_pilot_task11",
+        "status": "passed",
+        "branch": freeze["branch"],
+        "branch_freeze_precedes_test": True,
+        "test_tuning_detected": False,
+        "test_year": 2021,
+        "forecast_run_count": len(prediction_records),
+        "expected_forecast_run_count": len(unique_forecasts),
+        "scheduling_run_count": schedule_count,
+        "expected_scheduling_run_count": expected_schedule_count,
+        "prediction_artifacts": prediction_records,
+        "test_set_accessed": True,
+    }
+
+
 __all__ = [
     "EXPECTED_MODELS",
     "EXPECTED_ORIGINS",
@@ -568,4 +633,5 @@ __all__ = [
     "load_post_protocol_artifacts",
     "load_registry_artifacts",
     "register_cross_topology_artifacts",
+    "validate_phase_b_result_artifacts",
 ]
