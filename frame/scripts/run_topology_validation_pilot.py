@@ -23,6 +23,7 @@ from src.topology_validation_runner import (  # noqa: E402
     build_phase_a_run_plan,
     run_validation_pilot,
 )
+from src.topology_protocol_contract import assert_phase_access, load_topology_contract  # noqa: E402
 
 
 def _resolve(value: str) -> Path:
@@ -34,10 +35,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--contract")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
+    if args.contract:
+        contract = load_topology_contract(_resolve(args.contract))
+        assert_phase_access(
+            contract,
+            phase="A",
+            requested_years=(2017, 2018, 2019, 2020),
+            requested_splits=("train", "validation"),
+        )
+        phase_a = contract["phase_a"]
+        frozen_models = tuple((item["model"], item["candidate_id"]) for item in phase_a["models"])
+        if frozen_models != PHASE_A_MODELS or tuple(phase_a["seeds"]) != PHASE_A_SEEDS:
+            raise ValueError("contract Phase A matrix does not match the runner's frozen six-run matrix")
     runs = build_phase_a_run_plan()
     if args.dry_run:
         print(json.dumps({

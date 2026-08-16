@@ -44,8 +44,11 @@ def _git_revision() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cross-registry", required=True)
-    parser.add_argument("--post-output-dir", required=True)
+    parser.add_argument("--cross-registry")
+    parser.add_argument("--post-output-dir")
+    parser.add_argument("--contract")
+    parser.add_argument("--audit-dir")
+    parser.add_argument("--pilot-dir")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--repo-root", default=str(REPOSITORY_ROOT))
     parser.add_argument("--bootstrap-replicates", type=int, default=2000)
@@ -53,6 +56,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if args.contract:
+        from src.topology_protocol_contract import load_topology_contract
+        load_topology_contract(_resolve(args.contract))
+    if args.pilot_dir and not args.post_output_dir:
+        args.post_output_dir = args.pilot_dir
+    if args.audit_dir and not args.cross_registry:
+        args.cross_registry = str(Path(args.audit_dir).parent / "cross_topology_artifact_registry.json")
+    if not args.cross_registry or not args.post_output_dir:
+        parser.error("--cross-registry and --post-output-dir (or --pilot-dir/--audit-dir aliases) are required")
     if args.dry_run:
         print(json.dumps({
             "stage": "topology_protocol_pilot_task7",
