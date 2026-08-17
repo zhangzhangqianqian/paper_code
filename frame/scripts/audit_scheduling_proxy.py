@@ -16,8 +16,10 @@ if str(FRAME_ROOT) not in sys.path:
 
 from src.scheduling.proxy_contract import contract_sha256, file_sha256, load_contract  # noqa: E402
 from src.scheduling.proxy_dataset import load_proxy_split, validate_dataset_manifest  # noqa: E402
+from src.scheduling.proxy_diagnostics import diagnose_dispatch, diagnostics_npz_payload  # noqa: E402
 from src.scheduling.proxy_evaluation import load_prediction_artifact  # noqa: E402
 from src.scheduling.proxy_training import load_trained_proxy  # noqa: E402
+from src.scheduling.synthetic_scenarios import load_benchmark  # noqa: E402
 
 
 FORMAL_ARTIFACTS = (
@@ -126,6 +128,23 @@ def audit_proxy_artifact(
         raise ValueError("raw prediction shape does not match the proxy contract")
     if tuple(predictions["safe_prediction"].shape) != tuple(predictions["raw_prediction"].shape):
         raise ValueError("safe prediction shape does not match raw prediction shape")
+    parameters = load_benchmark(benchmark)["values"]
+    diagnostics = diagnose_dispatch(
+        predictions["raw_prediction"],
+        predictions["features"],
+        parameters,
+        tolerance=float(contract.safety["feasibility_tolerance"]),
+        scenario_ids=predictions["scenario_ids"],
+    )
+    diagnostic_raw_mask = np.asarray(diagnostics["per_sample"]["raw_feasible_mask"], dtype=bool)
+    stored_raw_mask = np.asarray(predictions["raw_feasible_mask"], dtype=bool)
+    if not np.array_equal(diagnostic_raw_mask, stored_raw_mask):
+        raise ValueError("constraint diagnostic raw-feasible mask does not match prediction artifact")
+    _close(
+        diagnostics["aggregate"]["raw_feasible_rate"],
+        raw_feasible_rate,
+        label="diagnostic raw_feasible_rate",
+    )
     artifact_hashes = {relative: file_sha256(output / relative) for relative in FORMAL_ARTIFACTS}
     report = {
         "schema_version": "scheduling-proxy-baseline-audit-v1",
@@ -146,6 +165,12 @@ def audit_proxy_artifact(
         "best_epoch": int(checkpoint.get("epoch", -1)),
         "best_validation_loss": float(checkpoint.get("validation_loss", float("nan"))),
         "normalization_fit_split": stats.fit_split,
+        "constraint_diagnostics": {
+            "schema_version": diagnostics["schema_version"],
+            "value_space": diagnostics["value_space"],
+            "family_order": diagnostics["family_order"],
+            "aggregate": diagnostics["aggregate"],
+        },
         "artifact_sha256": artifact_hashes,
     }
     if not np.isfinite(report["best_validation_loss"]):
@@ -167,6 +192,58 @@ def main(argv: list[str] | None = None) -> int:
     report = audit_proxy_artifact(args.output_dir, args.benchmark, args.contract)
     report_dir = Path(args.report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
+    output = Path(args.output_dir)
+    benchmark = Path(args.benchmark)
+    contract_file = Path(args.contract)
+    contract = load_contract(contract_file, benchmark)
+    manifest = validate_dataset_manifest(output / "dataset" / "manifest.json", contract, benchmark, smoke=None)
+    smoke = bool(manifest["smoke"])
+    test_spec = contract.split("test", smoke=smoke)
+    test_split = load_proxy_split(
+        output / "dataset" / "test.npz",
+        expected_split="test",
+        expected_seed=test_spec.seed,
+        expected_count=test_spec.size,
+        expected_contract=contract,
+        expected_benchmark_sha256=file_sha256(benchmark),
+        expected_smoke=smoke,
+    )
+    prediction = load_prediction_artifact(
+        output / "predictions_test.npz",
+        expected_split="test",
+        expected_count=test_spec.size,
+        expected_seed=test_spec.seed,
+        expected_scenario_ids=test_split.scenario_ids,
+        expected_scenario_id_digest=str(manifest["splits"]["test"]["scenario_id_digest"]),
+        expected_benchmark_sha256=file_sha256(benchmark),
+        expected_contract_sha256=contract_sha256(contract),
+        expected_source_type=contract.source_type,
+        expected_generator_version=contract.generator_version,
+    )
+    diagnostics = diagnose_dispatch(
+        prediction["raw_prediction"],
+        prediction["features"],
+        load_benchmark(benchmark)["values"],
+        tolerance=float(contract.safety["feasibility_tolerance"]),
+        scenario_ids=prediction["scenario_ids"],
+    )
+    diagnostic_npz = report_dir / "proxy_constraint_diagnostics.npz"
+    np.savez_compressed(diagnostic_npz, **diagnostics_npz_payload(diagnostics))
+    diagnostic_json = report_dir / "proxy_constraint_diagnostics.json"
+    diagnostic_summary = {
+        "schema_version": diagnostics["schema_version"],
+        "value_space": diagnostics["value_space"],
+        "sample_count": diagnostics["sample_count"],
+        "horizon": diagnostics["horizon"],
+        "family_order": diagnostics["family_order"],
+        "aggregate": diagnostics["aggregate"],
+        "npz": str(diagnostic_npz.resolve()),
+        "npz_sha256": file_sha256(diagnostic_npz),
+    }
+    diagnostic_json.write_text(json.dumps(diagnostic_summary, indent=2, sort_keys=True), encoding="utf-8")
+    report["constraint_diagnostics"]["npz"] = str(diagnostic_npz.resolve())
+    report["constraint_diagnostics"]["npz_sha256"] = file_sha256(diagnostic_npz)
+    report["constraint_diagnostics"]["summary_json"] = str(diagnostic_json.resolve())
     report_path = report_dir / "proxy_baseline_audit.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps({"status": report["status"], "report": str(report_path.resolve())}, indent=2))

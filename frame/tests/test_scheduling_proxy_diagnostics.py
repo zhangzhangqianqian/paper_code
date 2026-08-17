@@ -70,3 +70,50 @@ def test_audit_does_not_modify_input_artifacts(tmp_path):
     before = file_sha256(output / "predictions_test.npz")
     audit_proxy_artifact(output, BENCHMARK, CONTRACT)
     assert file_sha256(output / "predictions_test.npz") == before
+
+
+def test_exact_teacher_label_has_zero_constraint_violation(tmp_path):
+    from src.scheduling.proxy_diagnostics import diagnose_dispatch
+    from src.scheduling.synthetic_scenarios import load_benchmark
+
+    output = _make_smoke_artifact(tmp_path)
+    import numpy as np
+
+    with np.load(output / "predictions_test.npz", allow_pickle=False) as payload:
+        target = payload["target"]
+        features = payload["features"]
+        scenario_ids = payload["scenario_ids"]
+    report = diagnose_dispatch(
+        target,
+        features,
+        load_benchmark(BENCHMARK)["values"],
+        tolerance=1.0e-3,
+        scenario_ids=scenario_ids,
+    )
+    assert report["aggregate"]["raw_feasible_rate"] == 1.0
+    assert all(report["aggregate"][name]["violation_count"] == 0 for name in report["family_order"])
+
+
+def test_perturbation_is_attributed_to_balance_constraint_family(tmp_path):
+    from src.scheduling.proxy_diagnostics import diagnose_dispatch
+    from src.scheduling.synthetic_scenarios import load_benchmark
+
+    output = _make_smoke_artifact(tmp_path)
+    import numpy as np
+
+    with np.load(output / "predictions_test.npz", allow_pickle=False) as payload:
+        perturbed = payload["target"].copy()
+        features = payload["features"]
+        scenario_ids = payload["scenario_ids"]
+    # Increasing grid import without changing demand violates electricity
+    # balance while preserving finite tensor shapes and task ordering.
+    perturbed[:, 0, 0] += 10.0
+    report = diagnose_dispatch(
+        perturbed,
+        features,
+        load_benchmark(BENCHMARK)["values"],
+        tolerance=1.0e-3,
+        scenario_ids=scenario_ids,
+    )
+    assert report["aggregate"]["balance"]["violation_count"] > 0
+    assert report["aggregate"]["balance"]["max"] >= 10.0
