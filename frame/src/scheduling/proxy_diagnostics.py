@@ -85,10 +85,6 @@ def _summary(values: np.ndarray, scenario_ids: np.ndarray, tolerance: float) -> 
 def _upper_bounds(parameters: Mapping[str, Any]) -> dict[str, float]:
     return {
         "grid": _parameter(parameters, "grid_import_capacity"),
-        "pv_use": _parameter(parameters, "pv_capacity"),
-        "pv_curt": _parameter(parameters, "pv_capacity"),
-        "wt_use": _parameter(parameters, "wt_capacity"),
-        "wt_curt": _parameter(parameters, "wt_capacity"),
         "g_chp": _parameter(parameters, "chp_electric_capacity") / max(_parameter(parameters, "chp_electric_efficiency"), 1e-12),
         "g_gb": _parameter(parameters, "gas_boiler_capacity") / max(_parameter(parameters, "gas_boiler_efficiency"), 1e-12),
         "p_chp": _parameter(parameters, "chp_electric_capacity"),
