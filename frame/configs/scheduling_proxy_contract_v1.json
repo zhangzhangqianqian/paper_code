@@ -1,0 +1,108 @@
+{
+  "schema_version": "scheduling-proxy-contract-v1",
+  "generator_version": "synthetic-scheduling-v1",
+  "source_type": "pure_simulation",
+  "horizon": 4,
+  "feature_order": [
+    "electricity",
+    "cooling",
+    "heating",
+    "gas_prior",
+    "pv_available",
+    "wt_available",
+    "grid_price",
+    "gas_price",
+    "carbon_price",
+    "initial_soc"
+  ],
+  "label_order": [
+    "grid",
+    "pv_use",
+    "pv_curt",
+    "wt_use",
+    "wt_curt",
+    "g_chp",
+    "g_gb",
+    "p_chp",
+    "q_chp",
+    "q_gb",
+    "p_ec",
+    "q_ec",
+    "q_ac_in",
+    "q_ac",
+    "p_charge",
+    "p_discharge",
+    "soc",
+    "slack_e",
+    "slack_c",
+    "slack_h",
+    "q_dump"
+  ],
+  "benchmark_sha256": "64aa5fc777c7b154a8f535e643c77a50773bb5bc56cdd1f4481a00c11df9ae59",
+  "splits": {
+    "train": {"seed": 2026, "size": 8192},
+    "validation": {"seed": 2027, "size": 2048},
+    "test": {"seed": 2028, "size": 2048}
+  },
+  "smoke_splits": {
+    "train": {"seed": 2026, "size": 64},
+    "validation": {"seed": 2027, "size": 16},
+    "test": {"seed": 2028, "size": 16}
+  },
+  "gas_prior": {
+    "role": "auxiliary_station_side_gas_consumption",
+    "teacher_source": "g_chp_plus_g_gb",
+    "is_balance_equation": false,
+    "noise_fraction": 0.08,
+    "additive_noise_scale": 0.02,
+    "mask_fraction": 0.15,
+    "rng_stream": "independent_gas_prior"
+  },
+  "model": {
+    "hidden_width": 128,
+    "residual_blocks": 2,
+    "dropout": 0.1,
+    "device": "cpu",
+    "activation": "gelu",
+    "output_parameterization": "sigmoid_normalized_label_space"
+  },
+  "loss_weights": {
+    "dispatch": 1.0,
+    "balance": 0.2,
+    "conversion": 0.1,
+    "soc": 0.1,
+    "cost": 0.05,
+    "carbon": 0.05,
+    "gas_prior": 0.05
+  },
+  "normalization": {
+    "epsilon": 1.0e-6,
+    "scale_floor": 1.0e-3
+  },
+  "training": {
+    "batch_size": 32,
+    "max_epochs": 30,
+    "patience": 5,
+    "learning_rate": 0.001,
+    "weight_decay": 1.0e-5,
+    "gradient_clip_norm": 1.0,
+    "num_workers": 0,
+    "seed": 2026
+  },
+  "safety": {
+    "feasibility_tolerance": 1.0e-3,
+    "allow_exact_fallback": true
+  },
+  "required_artifacts": [
+    "dataset/train.npz",
+    "dataset/validation.npz",
+    "dataset/test.npz",
+    "dataset/manifest.json",
+    "normalization_stats.npz",
+    "best_model.pt",
+    "history.json",
+    "metrics_test.json",
+    "predictions_test.npz",
+    "smoke_manifest.json"
+  ]
+}

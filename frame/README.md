@@ -551,3 +551,16 @@ bootstrap、BH 校正、smoke 和正式预检。
 
 该命令才会读取 2021 测试窗口；它不重训预测模型，也不根据 2021 结果调参。
 阶段 10.14 的汇总、统计检验、图表和论文同步必须等待 10.13 正式结果完成后再做。
+
+## Pure-simulation scheduling proxy
+
+The scheduling proxy is a separate CPU-trained model.  Scheme2R remains the
+frozen forecasting model; the existing SciPy/HiGHS LP remains the exact teacher
+and oracle.  Proxy training uses only deterministic synthetic standard-IES
+scenarios, never Kitakyushu windows.  Raw proxy dispatch and its feasibility
+metrics are reported separately from the optional exact-LP fallback output.
+The smoke command validates the pipeline and artifacts only; it is not a formal
+paper result or evidence that the raw neural dispatch is feasible.
+Balance, conversion, and SOC penalty terms are dimensionless during training
+using demand/capacity scales; raw physical residual tensors remain available
+for evaluation.
