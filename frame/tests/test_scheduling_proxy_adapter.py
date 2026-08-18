@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -15,16 +17,23 @@ from src.scheduling.proxy_adapter import Scheme2RProxyAdapter, adapt_scheme2r_in
 from src.scheduling.proxy_contract import load_contract
 from src.scheduling.proxy_dataset import ProxyNormalizationStats, build_labeled_proxy_split
 from src.scheduling.proxy_evaluation import dispatch_metrics, measure_exact_lp_latency, measure_proxy_latency
-from src.scheduling.proxy_model import SchedulingProxy
+from src.scheduling.proxy_model import FeasibleSchedulingProxy, SchedulingProxy, build_proxy_model
 from src.scheduling.synthetic_scenarios import generate_synthetic_scenarios, load_benchmark
 
 
 BENCHMARK = Path("D:/Paper/standard_ies_benchmark_v1.yaml")
 CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v1.json"
+V2_CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v2.json"
 
 
 def _stats():
     c = load_contract(CONTRACT, BENCHMARK)
+    split = build_labeled_proxy_split(generate_synthetic_scenarios(BENCHMARK, "train", 2026, 2), BENCHMARK, c)
+    return ProxyNormalizationStats.fit(split, benchmark=BENCHMARK)
+
+
+def _stats_v2():
+    c = load_contract(V2_CONTRACT, BENCHMARK)
     split = build_labeled_proxy_split(generate_synthetic_scenarios(BENCHMARK, "train", 2026, 2), BENCHMARK, c)
     return ProxyNormalizationStats.fit(split, benchmark=BENCHMARK)
 
@@ -130,3 +139,93 @@ def test_objective_gap_and_latency_metrics_are_explicit_and_nonnegative():
     for key in ("exact_lp_per_scenario_median_ms", "exact_lp_per_scenario_p95_ms"):
         assert key in exact_latency
         assert exact_latency[key] >= 0
+
+
+def test_v2_adapter_uses_decoder_without_exact_fallback(monkeypatch):
+    contract = load_contract(V2_CONTRACT, BENCHMARK)
+    split = build_labeled_proxy_split(generate_synthetic_scenarios(BENCHMARK, "train", 2026, 2), BENCHMARK, contract)
+    stats = _stats_v2()
+    model = build_proxy_model(contract)
+    assert isinstance(model, FeasibleSchedulingProxy)
+    adapter = Scheme2RProxyAdapter(stats, BENCHMARK, contract)
+    monkeypatch.setattr("src.scheduling.proxy_adapter.solve_dispatch_lp", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LP called")))
+    loads = np.concatenate([split.demand, split.inputs[:, :, 3:4]], axis=-1)
+    renewables = np.stack([split.pv_available, split.wt_available], axis=-1)
+    result = adapter.infer(
+        model, loads, renewables, prices=split.prices, initial_soc=split.initial_soc,
+        allow_exact_fallback=False,
+    )
+    assert np.array_equal(result.raw_dispatch, result.safe_dispatch)
+    assert not result.fallback_mask.any()
+    assert result.inference_exact_lp_calls == 0
+    assert np.all(result.raw_feasible_mask)
+    with pytest.raises(ValueError, match="does not permit"):
+        adapter.infer(model, loads, renewables, prices=split.prices, initial_soc=split.initial_soc, allow_exact_fallback=True)
+
+
+def test_v1_overlap_remains_diagnostic_without_triggering_fallback(monkeypatch):
+    contract = load_contract(CONTRACT, BENCHMARK)
+    split = build_labeled_proxy_split(generate_synthetic_scenarios(BENCHMARK, "train", 2026, 1), BENCHMARK, contract)
+    stats = _stats()
+    model = build_proxy_model(contract)
+    adapter = Scheme2RProxyAdapter(stats, BENCHMARK, contract)
+    loads = np.concatenate([split.demand, split.inputs[:, :, 3:4]], axis=-1)
+    renewables = np.stack([split.pv_available, split.wt_available], axis=-1)
+    overlap = split.dispatch.copy()
+    overlap[..., 14] += 1.0e-5
+    overlap[..., 15] += 1.0e-5
+    monkeypatch.setattr(adapter, "predict", lambda _model, _prepared: overlap)
+    result = adapter.infer(
+        model, loads, renewables, prices=split.prices, initial_soc=split.initial_soc,
+        allow_exact_fallback=True,
+    )
+    assert result.raw_feasible_mask[0]
+    assert not bool(result.fallback_mask[0])
+    assert result.inference_exact_lp_calls == 0
+    assert result.raw_residual[0] <= 1.0e-3
+    diagnostic = evaluate_raw_feasibility(overlap, split.inputs, load_benchmark(BENCHMARK)["values"])
+    assert diagnostic["charge_discharge_overlap"][0] > 0.0
+    assert diagnostic["feasible_mask"][0]
+
+
+def test_v2_import_and_inference_are_isolated_from_scipy_and_dispatch_lp():
+    code = textwrap.dedent(
+        """
+        import importlib.abc
+        import sys
+
+        class BlockedSolverImports(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "scipy" or fullname.startswith("scipy.") or fullname == "src.scheduling.dispatch_lp":
+                    raise ImportError("solver import blocked for V2 isolation test")
+                return None
+
+        sys.meta_path.insert(0, BlockedSolverImports())
+        import numpy as np
+        import torch
+        from src.scheduling.proxy_adapter import Scheme2RProxyAdapter
+        from src.scheduling.proxy_dataset import ProxyNormalizationStats
+        from src.scheduling.proxy_decoder import CONTROL_DIM
+        from src.scheduling.proxy_model import FeasibleSchedulingProxy
+        from src.scheduling.synthetic_scenarios import load_benchmark
+
+        stats = ProxyNormalizationStats(
+            np.zeros(10), np.ones(10), np.ones(21),
+            benchmark_sha256="0" * 64, contract_sha256="0" * 64, train_seed=1,
+        )
+        adapter = Scheme2RProxyAdapter(stats, load_benchmark("D:/Paper/standard_ies_benchmark_v1.yaml"))
+        model = FeasibleSchedulingProxy()
+        assert model.forward_logits(torch.zeros(1, 4, 10)).shape == (1, CONTROL_DIM)
+        result = adapter.infer(
+            model, np.ones((1, 4, 4)), np.ones((1, 4, 2)),
+            use_gas_prior=False, allow_exact_fallback=False,
+        )
+        assert result.raw_dispatch.shape == (1, 4, 21)
+        assert result.inference_exact_lp_calls == 0
+        assert not result.fallback_mask.any()
+        assert "src.scheduling.dispatch_lp" not in sys.modules
+        assert not any(name == "scipy.optimize" or name.startswith("scipy.optimize.") for name in sys.modules)
+        """
+    )
+    completed = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+    assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr

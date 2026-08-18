@@ -8,6 +8,8 @@ from typing import Mapping
 import numpy as np
 from scipy.optimize import linprog
 
+from .dispatch_schema import VARIABLES
+
 
 @dataclass(frozen=True)
 class DispatchInputs:
@@ -32,31 +34,6 @@ class DispatchResult:
     @property
     def success(self) -> bool:
         return self.status == "optimal"
-
-
-VARIABLES = (
-    "grid",
-    "pv_use",
-    "pv_curt",
-    "wt_use",
-    "wt_curt",
-    "g_chp",
-    "g_gb",
-    "p_chp",
-    "q_chp",
-    "q_gb",
-    "p_ec",
-    "q_ec",
-    "q_ac_in",
-    "q_ac",
-    "p_charge",
-    "p_discharge",
-    "soc",
-    "slack_e",
-    "slack_c",
-    "slack_h",
-    "q_dump",
-)
 
 
 def _validate_inputs(inputs: DispatchInputs) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:

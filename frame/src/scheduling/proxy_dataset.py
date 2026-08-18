@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .dispatch_lp import DispatchInputs, VARIABLES, solve_dispatch_lp
+from .dispatch_schema import VARIABLES
 from .proxy_contract import FEATURE_ORDER, LABEL_ORDER, HORIZON, ProxyContract, contract_sha256, file_sha256
 from .synthetic_scenarios import GENERATOR_VERSION, SyntheticScenarioBatch, load_benchmark
 
@@ -215,6 +215,9 @@ def build_labeled_proxy_split(
     with zero labels.  The gas prior RNG is separate from the scenario RNG and
     runs only after all accepted exact labels have been assembled.
     """
+    # LP labels are offline-only.  Keep the solver import out of the V2
+    # inference import graph; this function is the explicit teacher boundary.
+    from .dispatch_lp import DispatchInputs, solve_dispatch_lp
 
     if isinstance(benchmark, (str, Path)):
         benchmark_data = load_benchmark(benchmark)

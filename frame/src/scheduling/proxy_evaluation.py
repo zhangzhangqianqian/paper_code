@@ -10,11 +10,10 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import torch
 
-from .dispatch_lp import DispatchInputs, solve_dispatch_lp
 from .proxy_adapter import ProxyInferenceResult, Scheme2RProxyAdapter, evaluate_raw_feasibility
 from .proxy_contract import FEATURE_ORDER, LABEL_ORDER
 from .proxy_dataset import LabeledProxySplit, ProxyNormalizationStats, scenario_id_digest
-from .proxy_model import SchedulingProxy
+from .proxy_model import FeasibleSchedulingProxy, SchedulingProxy
 from .proxy_physics import carbon_emissions, operating_cost
 
 
@@ -48,6 +47,7 @@ def dispatch_metrics(
     stats: ProxyNormalizationStats | None = None,
     feasibility_tolerance: float = 1e-3,
     teacher_objective: np.ndarray | None = None,
+    include_charge_discharge_overlap: bool = False,
 ) -> dict[str, Any]:
     """Compute imitation, economic, carbon and raw feasibility metrics."""
 
@@ -98,7 +98,13 @@ def dispatch_metrics(
             "objective_gap_abs_mean": float(np.mean(np.abs(objective_gap))),
             "objective_gap_relative_abs_mean": float(np.mean(np.abs(objective_gap) / objective_denom)),
         })
-    feasible = evaluate_raw_feasibility(pred, x, parameters, feasibility_tolerance)
+    feasible = evaluate_raw_feasibility(
+        pred,
+        x,
+        parameters,
+        feasibility_tolerance,
+        include_charge_discharge_overlap=include_charge_discharge_overlap,
+    )
     metrics.update({
         "balance_residual_max": float(np.max(np.asarray(feasible["balance_residual"]))),
         "conversion_residual_max": float(np.max(np.asarray(feasible["conversion_residual"]))),
@@ -106,8 +112,13 @@ def dispatch_metrics(
         "renewable_residual_max": float(np.max(np.asarray(feasible["renewable_residual"]))),
         "bound_residual_max": float(np.max(np.asarray(feasible["bound_residual"]))),
         "ramp_residual_max": float(np.max(np.asarray(feasible["ramp_residual"]))),
+        "capacity_residual_max": float(np.max(np.asarray(feasible["capacity_residual"]))),
+        "charge_discharge_overlap_max": float(np.max(np.asarray(feasible["charge_discharge_overlap"]))),
         "raw_feasible_rate": float(np.mean(np.asarray(feasible["feasible_mask"]))),
         "raw_residual_mean": float(np.mean(np.asarray(feasible["residual"]))),
+        "slack_e_mean": float(np.mean(pred[:, :, LABEL_ORDER.index("slack_e")])),
+        "slack_c_mean": float(np.mean(pred[:, :, LABEL_ORDER.index("slack_c")])),
+        "slack_h_mean": float(np.mean(pred[:, :, LABEL_ORDER.index("slack_h")])),
     })
     return metrics
 
@@ -120,31 +131,53 @@ def _latency_summary(values_ms: Sequence[float]) -> dict[str, float]:
 
 
 def measure_proxy_latency(
-    model: SchedulingProxy,
+    model: SchedulingProxy | FeasibleSchedulingProxy,
     normalized_features: np.ndarray,
     repeats: int = 5,
     warmup: int = 2,
+    physical_features: np.ndarray | None = None,
+    parameters: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     x = torch.from_numpy(np.asarray(normalized_features, dtype=np.float32))
-    if x.ndim != 3:
+    if x.ndim != 3 or tuple(x.shape[1:]) != (4, len(FEATURE_ORDER)):
         raise ValueError("normalized_features must have shape [N,4,10]")
     repeats = max(1, int(repeats))
     warmup = max(0, int(warmup))
     model.eval()
+    v2 = isinstance(model, FeasibleSchedulingProxy)
+    if v2:
+        if physical_features is None or parameters is None:
+            raise ValueError("v2 latency measurement requires physical_features and parameters")
+        physical = torch.from_numpy(np.asarray(physical_features, dtype=np.float64))
+        if tuple(physical.shape) != (x.shape[0], 4, len(FEATURE_ORDER)):
+            raise ValueError("physical_features must have shape [N,4,10]")
+
+    def forward_batch() -> None:
+        if v2:
+            model.predict_dispatch(x, physical, parameters)  # type: ignore[arg-type]
+        else:
+            model(x)
+
     with torch.no_grad():
         for _ in range(warmup):
-            model(x)
+            forward_batch()
         for index in range(min(warmup, x.shape[0])):
-            model(x[index:index + 1])
+            if v2:
+                model.predict_dispatch(x[index:index + 1], physical[index:index + 1], parameters)  # type: ignore[arg-type]
+            else:
+                model(x[index:index + 1])
         batch_values: list[float] = []
         scenario_values: list[float] = []
         for _ in range(repeats):
             start = time.perf_counter()
-            model(x)
+            forward_batch()
             batch_values.append((time.perf_counter() - start) * 1000.0)
             for index in range(x.shape[0]):
                 start = time.perf_counter()
-                model(x[index:index + 1])
+                if v2:
+                    model.predict_dispatch(x[index:index + 1], physical[index:index + 1], parameters)  # type: ignore[arg-type]
+                else:
+                    model(x[index:index + 1])
                 scenario_values.append((time.perf_counter() - start) * 1000.0)
     batch_summary = _latency_summary(batch_values)
     scenario_summary = _latency_summary(scenario_values)
@@ -159,6 +192,7 @@ def measure_proxy_latency(
         "proxy_per_scenario_p95_ms": scenario_summary["p95_ms"],
         "median_ms": batch_summary["median_ms"],
         "p95_ms": batch_summary["p95_ms"],
+        "includes_decoder": bool(v2),
     }
 
 
@@ -168,6 +202,9 @@ def measure_exact_lp_latency(
     repeats: int = 1,
     warmup: int = 1,
 ) -> dict[str, Any]:
+    # Exact LP timing is an offline benchmark only; import it at the call site
+    # so model/decoder/adapter imports remain solver-independent.
+    from .dispatch_lp import DispatchInputs, solve_dispatch_lp
     x = np.asarray(features, dtype=np.float64)
     if x.ndim != 3 or x.shape[1:] != (4, 10):
         raise ValueError("features must have shape [N,4,10]")
@@ -218,10 +255,12 @@ def evaluate_inference_result(
     raw = dispatch_metrics(
         result.raw_dispatch, target, result.features, teacher_cost, teacher_carbon, parameters,
         stats=stats, feasibility_tolerance=feasibility_tolerance, teacher_objective=teacher_objective,
+        include_charge_discharge_overlap=(result.decoder_schema_version == "horizon-reachable-feasible-v2"),
     )
     safe = dispatch_metrics(
         result.safe_dispatch, target, result.features, teacher_cost, teacher_carbon, parameters,
         stats=stats, feasibility_tolerance=feasibility_tolerance, teacher_objective=teacher_objective,
+        include_charge_discharge_overlap=(result.decoder_schema_version == "horizon-reachable-feasible-v2"),
     )
     fallback = np.asarray(result.fallback_mask, dtype=bool)
     return {
@@ -232,6 +271,8 @@ def evaluate_inference_result(
         "safe_success_rate": float(np.mean(np.asarray(safe["raw_feasible_rate"]) if isinstance(safe["raw_feasible_rate"], np.ndarray) else np.asarray([safe["raw_feasible_rate"]]))),
         "clipped_negative_count": int(result.clipped_negative_count),
         "fallback_reasons": dict((reason, int(result.fallback_reasons.count(reason))) for reason in set(result.fallback_reasons)),
+        "inference_exact_lp_calls": int(result.inference_exact_lp_calls),
+        "decoder_schema_version": result.decoder_schema_version,
     }
 
 
@@ -257,12 +298,12 @@ def evaluate_gas_prior_ablation(
 
 
 def evaluate_model_on_split(
-    model: SchedulingProxy,
+    model: SchedulingProxy | FeasibleSchedulingProxy,
     split: LabeledProxySplit,
     stats: ProxyNormalizationStats,
     parameters: Mapping[str, Any],
     adapter: Scheme2RProxyAdapter | None = None,
-    allow_exact_fallback: bool = True,
+    allow_exact_fallback: bool | None = True,
     feasibility_tolerance: float = 1e-3,
 ) -> dict[str, Any]:
     """Evaluate a labelled split and both gas-prior modes on identical samples."""
@@ -271,9 +312,12 @@ def evaluate_model_on_split(
         adapter = Scheme2RProxyAdapter(stats, benchmark={"values": parameters})
     loads = np.concatenate([split.demand, split.inputs[:, :, 3:4]], axis=-1)
     renewable = np.stack([split.pv_available, split.wt_available], axis=-1)
+    is_v2 = isinstance(model, FeasibleSchedulingProxy) or (adapter.contract is not None and adapter.contract.is_v2)
+    if is_v2:
+        allow_exact_fallback = False
     result = adapter.infer(
         model, loads, renewable, prices=split.prices, initial_soc=split.initial_soc,
-        use_gas_prior=True, allow_exact_fallback=allow_exact_fallback,
+        use_gas_prior=not is_v2, allow_exact_fallback=allow_exact_fallback,
         feasibility_tolerance=feasibility_tolerance,
     )
     metrics = evaluate_inference_result(
@@ -291,7 +335,12 @@ def evaluate_model_on_split(
         no_prior, split.dispatch, split.teacher_cost, split.teacher_carbon, parameters, stats, feasibility_tolerance,
         teacher_objective=split.teacher_objective,
     )
-    metrics["proxy_latency"] = measure_proxy_latency(model, result.normalized_features)
+    metrics["proxy_latency"] = measure_proxy_latency(
+        model,
+        result.normalized_features,
+        physical_features=result.features if is_v2 else None,
+        parameters=parameters if is_v2 else None,
+    )
     metrics["exact_lp_latency"] = measure_exact_lp_latency(result.features, parameters)
     metrics["provenance"] = {
         "split": split.split,
@@ -304,7 +353,28 @@ def evaluate_model_on_split(
         "label_order": list(LABEL_ORDER),
         "selection_split": "validation",
         "test_split_used_for_selection": False,
+        "model_family": "feasible_scheduling_proxy_v2" if is_v2 else "scheduling_proxy_v1",
+        "decoder_schema_version": "horizon-reachable-feasible-v2" if is_v2 else None,
+        "inference_exact_lp_calls": int(result.inference_exact_lp_calls),
     }
+    if is_v2:
+        metrics["provenance"].update({
+            "decoder_dtype": "float64",
+            "control_temperature": 0.25,
+            "decision_dim": 15,
+            "decision_groups": {
+                "cooling": [0, 4],
+                "chp": [4, 8],
+                "soc": [8, 11],
+                "renewable_pv": [11, 15],
+            },
+            "train_split": stats.train_split,
+            "train_seed": int(stats.train_seed),
+            "train_scenario_id_digest": stats.train_scenario_id_digest,
+            "validation_split": stats.validation_split,
+            "validation_seed": int(stats.validation_seed),
+            "validation_scenario_id_digest": stats.validation_scenario_id_digest,
+        })
     return metrics
 
 
@@ -336,6 +406,14 @@ def load_prediction_artifact(
     expected_contract_sha256: str | None = None,
     expected_source_type: str = "pure_simulation",
     expected_generator_version: str = "synthetic-scheduling-v1",
+    expected_model_family: str | None = None,
+    expected_decoder_schema_version: str | None = None,
+    expected_inference_exact_lp_calls: int | None = None,
+    expected_checkpoint_sha256: str | None = None,
+    expected_train_seed: int | None = None,
+    expected_validation_seed: int | None = None,
+    expected_train_scenario_id_digest: str | None = None,
+    expected_validation_scenario_id_digest: str | None = None,
 ) -> dict[str, np.ndarray]:
     """Fail-closed prediction artifact loader for evaluation/reload paths."""
 
@@ -351,7 +429,50 @@ def load_prediction_artifact(
         "source_type", "generator_version", "split", "seed", "sample_count", "scenario_id_digest",
         "feature_order", "label_order",
     }
+    v2_expected = expected_model_family == "feasible_scheduling_proxy_v2"
+    expected_decoder_schema_version = (
+        "horizon-reachable-feasible-v2" if v2_expected and expected_decoder_schema_version is None
+        else expected_decoder_schema_version
+    )
+    expected_inference_exact_lp_calls = (
+        0 if v2_expected and expected_inference_exact_lp_calls is None
+        else expected_inference_exact_lp_calls
+    )
+    if expected_model_family is not None or expected_decoder_schema_version is not None or expected_inference_exact_lp_calls is not None:
+        required.update({"model_family", "decoder_schema_version", "inference_exact_lp_calls"})
+    if expected_checkpoint_sha256 is not None:
+        required.add("checkpoint_sha256")
+    if v2_expected or any(value is not None for value in (
+        expected_train_seed, expected_validation_seed,
+        expected_train_scenario_id_digest, expected_validation_scenario_id_digest,
+    )):
+        required.update({
+            "model_family", "decoder_schema_version", "inference_exact_lp_calls",
+            "checkpoint_sha256",
+            "decoder_dtype", "control_temperature", "decision_dim", "decision_groups",
+            "selection_split", "test_split_used_for_selection",
+            "train_split", "train_seed", "train_scenario_id_digest",
+            "validation_split", "validation_seed", "validation_scenario_id_digest",
+        })
     with np.load(path, allow_pickle=False) as payload:
+        stored_model_family = None
+        if "model_family" in payload.files:
+            stored_model_family = str(np.asarray(payload["model_family"]).item())
+        if stored_model_family == "feasible_scheduling_proxy_v2" and not v2_expected:
+            # V2 artifacts are self-describing: callers that do not provide an
+            # explicit expectation still receive the strict decoder/provenance
+            # validation.  Legacy v1 artifacts may omit these fields.
+            v2_expected = True
+            expected_decoder_schema_version = "horizon-reachable-feasible-v2"
+            expected_inference_exact_lp_calls = 0
+            required.update({
+                "model_family", "decoder_schema_version", "inference_exact_lp_calls",
+                "checkpoint_sha256",
+                "decoder_dtype", "control_temperature", "decision_dim", "decision_groups",
+                "selection_split", "test_split_used_for_selection",
+                "train_split", "train_seed", "train_scenario_id_digest",
+                "validation_split", "validation_seed", "validation_scenario_id_digest",
+            })
         missing = sorted(required - set(payload.files))
         if missing:
             raise ValueError(f"prediction artifact is missing required fields: {missing}")
@@ -386,13 +507,90 @@ def load_prediction_artifact(
         label_order = tuple(str(value) for value in np.asarray(payload["label_order"]).tolist())
         if feature_order != FEATURE_ORDER or label_order != LABEL_ORDER:
             raise ValueError("prediction artifact feature/label order mismatch")
+        if expected_model_family is not None or v2_expected:
+            model_family = str(np.asarray(payload["model_family"]).item())
+            expected_family = expected_model_family or "feasible_scheduling_proxy_v2"
+            if model_family != str(expected_family):
+                raise ValueError("prediction artifact model family mismatch")
+        if expected_decoder_schema_version is not None:
+            decoder_schema = str(np.asarray(payload["decoder_schema_version"]).item())
+            if decoder_schema != str(expected_decoder_schema_version):
+                raise ValueError("prediction artifact decoder schema mismatch")
+        if expected_inference_exact_lp_calls is not None:
+            lp_calls = np.asarray(payload["inference_exact_lp_calls"])
+            if lp_calls.ndim != 0 or not np.issubdtype(lp_calls.dtype, np.integer):
+                raise ValueError("prediction artifact inference_exact_lp_calls must be a scalar integer")
+            if int(lp_calls.item()) != int(expected_inference_exact_lp_calls):
+                raise ValueError("prediction artifact inference_exact_lp_calls mismatch")
+        if v2_expected or expected_checkpoint_sha256 is not None:
+            checkpoint_hash = str(np.asarray(payload["checkpoint_sha256"]).item()).lower()
+            if len(checkpoint_hash) != 64 or any(char not in "0123456789abcdef" for char in checkpoint_hash):
+                raise ValueError("prediction artifact checkpoint SHA-256 is invalid")
+            if expected_checkpoint_sha256 is not None and checkpoint_hash != str(expected_checkpoint_sha256).lower():
+                raise ValueError("prediction artifact checkpoint SHA-256 mismatch")
+        if v2_expected:
+            if str(np.asarray(payload["decoder_dtype"]).item()) != "float64":
+                raise ValueError("prediction artifact decoder dtype mismatch")
+            try:
+                control_temperature = float(np.asarray(payload["control_temperature"]).item())
+                decision_dim = int(np.asarray(payload["decision_dim"]).item())
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("prediction artifact decoder control metadata is invalid") from exc
+            if control_temperature != 0.25 or decision_dim != 15:
+                raise ValueError("prediction artifact decoder control metadata mismatch")
+            try:
+                decision_groups = json.loads(str(np.asarray(payload["decision_groups"]).item()))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("prediction artifact decision groups are invalid") from exc
+            expected_groups = {"cooling": [0, 4], "chp": [4, 8], "soc": [8, 11], "renewable_pv": [11, 15]}
+            if decision_groups != expected_groups:
+                raise ValueError("prediction artifact decision groups mismatch")
+            if str(np.asarray(payload["selection_split"]).item()) != "validation" or bool(int(np.asarray(payload["test_split_used_for_selection"]).item())):
+                raise ValueError("prediction artifact selection provenance mismatch")
+            for field, expected in (
+                ("train_split", "train"), ("validation_split", "validation"),
+            ):
+                if str(np.asarray(payload[field]).item()) != expected:
+                    raise ValueError("prediction artifact split provenance mismatch")
+            for field, expected in (("train_seed", expected_train_seed), ("validation_seed", expected_validation_seed)):
+                value = np.asarray(payload[field])
+                if value.ndim != 0 or not np.issubdtype(value.dtype, np.integer) or int(value.item()) <= 0:
+                    raise ValueError(f"prediction artifact {field} is invalid")
+                if expected is not None and int(value.item()) != int(expected):
+                    raise ValueError(f"prediction artifact {field} mismatch")
+            for field, expected in (
+                ("train_scenario_id_digest", expected_train_scenario_id_digest),
+                ("validation_scenario_id_digest", expected_validation_scenario_id_digest),
+            ):
+                value = str(np.asarray(payload[field]).item()).lower()
+                if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+                    raise ValueError(f"prediction artifact {field} is invalid")
+                if expected is not None and value != str(expected).lower():
+                    raise ValueError(f"prediction artifact {field} mismatch")
         digest_value = np.asarray(payload["scenario_id_digest"])
         if digest_value.ndim != 0:
             raise ValueError("prediction artifact scenario_id_digest must be scalar")
         stored_digest = str(digest_value.item()).lower()
         if len(stored_digest) != 64 or any(char not in "0123456789abcdef" for char in stored_digest):
             raise ValueError("prediction artifact scenario_id_digest is invalid")
-        arrays = {name: np.asarray(payload[name]) for name in required if name not in {"benchmark_sha256", "contract_sha256", "source_type", "generator_version", "split", "feature_order", "label_order"}}
+        arrays = {
+            name: np.asarray(payload[name])
+            for name in required
+            if name not in {
+                "benchmark_sha256", "contract_sha256", "source_type", "generator_version",
+                "split", "feature_order", "label_order",
+            }
+        }
+        for optional_name in (
+            "model_family", "decoder_schema_version", "inference_exact_lp_calls",
+            "checkpoint_sha256",
+            "decoder_dtype", "control_temperature", "decision_dim", "decision_groups",
+            "selection_split", "test_split_used_for_selection", "train_split", "train_seed",
+            "train_scenario_id_digest", "validation_split", "validation_seed",
+            "validation_scenario_id_digest",
+        ):
+            if optional_name in payload.files:
+                arrays[optional_name] = np.asarray(payload[optional_name])
     raw = np.asarray(arrays["raw_prediction"], dtype=np.float64)
     safe = np.asarray(arrays["safe_prediction"], dtype=np.float64)
     target = np.asarray(arrays["target"], dtype=np.float64)

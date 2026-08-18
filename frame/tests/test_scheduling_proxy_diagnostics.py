@@ -10,6 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK = Path("D:/Paper/standard_ies_benchmark_v1.yaml")
 CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v1.json"
+V2_CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v2.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -19,6 +20,14 @@ def _make_smoke_artifact(tmp_path: Path) -> Path:
 
     output = tmp_path / "proxy_smoke"
     result = run_pipeline("smoke", BENCHMARK, CONTRACT, output)
+    assert result["status"] == "passed"
+    return output
+
+
+def _make_v2_smoke_artifact(tmp_path: Path) -> Path:
+    from scripts.run_scheduling_proxy_pipeline import run_pipeline
+    output = tmp_path / "proxy_v2_smoke"
+    result = run_pipeline("smoke", BENCHMARK, V2_CONTRACT, output)
     assert result["status"] == "passed"
     return output
 
@@ -117,3 +126,57 @@ def test_perturbation_is_attributed_to_balance_constraint_family(tmp_path):
     )
     assert report["aggregate"]["balance"]["violation_count"] > 0
     assert report["aggregate"]["balance"]["max"] >= 10.0
+
+
+def test_v2_audit_requires_zero_fallback_and_tight_residuals(tmp_path):
+    from scripts.audit_scheduling_proxy import audit_proxy_artifact
+    output = _make_v2_smoke_artifact(tmp_path)
+    report = audit_proxy_artifact(output, BENCHMARK, V2_CONTRACT)
+    assert report["status"] == "passed"
+    assert report["model_family"] == "feasible_scheduling_proxy_v2"
+    assert report["raw_feasible_rate"] == 1.0
+    assert report["fallback_rate"] == 0.0
+    assert report["inference_exact_lp_calls"] == 0
+    assert report["evaluation_output_shape"] == [16, 4, 21]
+    assert "test_output_shape" not in report
+
+
+def test_v2_audit_rejects_checkpoint_digest_tampering(tmp_path):
+    from scripts.audit_scheduling_proxy import audit_proxy_artifact
+    import numpy as np
+
+    output = _make_v2_smoke_artifact(tmp_path)
+    prediction_path = output / "predictions_validation.npz"
+    with np.load(prediction_path, allow_pickle=False) as payload:
+        values = {name: payload[name] for name in payload.files}
+    values["checkpoint_sha256"] = np.asarray("0" * 64)
+    np.savez_compressed(prediction_path, **values)
+    with pytest.raises(ValueError, match="checkpoint SHA-256"):
+        audit_proxy_artifact(output, BENCHMARK, V2_CONTRACT)
+
+
+def test_v2_audit_rejects_metric_prediction_inconsistency(tmp_path):
+    from scripts.audit_scheduling_proxy import audit_proxy_artifact
+
+    output = _make_v2_smoke_artifact(tmp_path)
+    metrics_path = output / "metrics_validation.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics["raw_proxy"]["dispatch_mae"] += 1.0
+    metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+    with pytest.raises(ValueError, match="metrics_validation.json raw_proxy.dispatch_mae"):
+        audit_proxy_artifact(output, BENCHMARK, V2_CONTRACT)
+
+
+def test_v2_audit_rejects_label_derived_gas_prior_in_predictions(tmp_path):
+    from scripts.audit_scheduling_proxy import audit_proxy_artifact
+    import numpy as np
+
+    output = _make_v2_smoke_artifact(tmp_path)
+    prediction_path = output / "predictions_validation.npz"
+    with np.load(prediction_path, allow_pickle=False) as payload:
+        values = {name: payload[name] for name in payload.files}
+    values["features"] = values["features"].copy()
+    values["features"][..., 3] = 1.0
+    np.savez_compressed(prediction_path, **values)
+    with pytest.raises(ValueError, match="primary physical input contract"):
+        audit_proxy_artifact(output, BENCHMARK, V2_CONTRACT)

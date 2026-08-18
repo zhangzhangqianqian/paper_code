@@ -11,7 +11,7 @@ from typing import Any, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .dispatch_lp import VARIABLES
+from .dispatch_schema import VARIABLES
 
 
 FEATURE_ORDER: Tuple[str, ...] = (
@@ -82,6 +82,36 @@ class ProxyContract:
         return len(self.label_order)
 
     @property
+    def is_v2(self) -> bool:
+        """Whether this contract selects the feasible decoder v2 path."""
+
+        return self.schema_version == "scheduling-proxy-contract-v2"
+
+    @property
+    def decision_dim(self) -> int:
+        return int(self.model.get("decision_dim", self.output_dim))
+
+    @property
+    def decision_groups(self) -> Mapping[str, Any]:
+        groups = self.model.get("decision_groups", {})
+        return groups if isinstance(groups, Mapping) else {}
+
+    @property
+    def decoder_schema_version(self) -> str | None:
+        value = self.model.get("decoder_schema_version")
+        return None if value is None else str(value)
+
+    @property
+    def decoder_dtype(self) -> str | None:
+        value = self.model.get("decoder_dtype")
+        return None if value is None else str(value)
+
+    @property
+    def control_temperature(self) -> float | None:
+        value = self.model.get("control_temperature")
+        return None if value is None else float(value)
+
+    @property
     def benchmark_hash(self) -> str:
         return self.benchmark_sha256
 
@@ -104,6 +134,13 @@ class ProxyContract:
         return source[name]
 
     def to_dict(self) -> dict[str, Any]:
+        def thaw(value: Any) -> Any:
+            if isinstance(value, Mapping):
+                return {str(key): thaw(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [thaw(item) for item in value]
+            return value
+
         return {
             "schema_version": self.schema_version,
             "generator_version": self.generator_version,
@@ -114,12 +151,12 @@ class ProxyContract:
             "benchmark_sha256": self.benchmark_sha256,
             "splits": {name: spec.to_dict() for name, spec in self.splits.items()},
             "smoke_splits": {name: spec.to_dict() for name, spec in self.smoke_splits.items()},
-            "gas_prior": dict(self.gas_prior),
-            "model": dict(self.model),
-            "loss_weights": dict(self.loss_weights),
-            "normalization": dict(self.normalization),
-            "training": dict(self.training),
-            "safety": dict(self.safety),
+            "gas_prior": thaw(self.gas_prior),
+            "model": thaw(self.model),
+            "loss_weights": thaw(self.loss_weights),
+            "normalization": thaw(self.normalization),
+            "training": thaw(self.training),
+            "safety": thaw(self.safety),
             "required_artifacts": list(self.required_artifacts),
         }
 
@@ -211,8 +248,9 @@ def validate_contract(data: Mapping[str, Any], benchmark_path: str | Path | None
     missing = sorted(required - set(data))
     if missing:
         raise ValueError(f"proxy contract missing fields: {missing}")
-    if data["schema_version"] != "scheduling-proxy-contract-v1":
-        raise ValueError("schema_version must be scheduling-proxy-contract-v1")
+    schema_version = str(data["schema_version"])
+    if schema_version not in {"scheduling-proxy-contract-v1", "scheduling-proxy-contract-v2"}:
+        raise ValueError("schema_version must be scheduling-proxy-contract-v1 or scheduling-proxy-contract-v2")
     if data["source_type"] != "pure_simulation":
         raise ValueError("source_type must be pure_simulation")
     if _positive_int(data["horizon"], "horizon") != HORIZON:
@@ -222,7 +260,7 @@ def validate_contract(data: Mapping[str, Any], benchmark_path: str | Path | None
     if features != FEATURE_ORDER:
         raise ValueError(f"feature_order must be exactly {FEATURE_ORDER}")
     if labels != LABEL_ORDER:
-        raise ValueError(f"label_order must be dispatch_lp.VARIABLES: {LABEL_ORDER}")
+        raise ValueError(f"label_order must be dispatch_schema.VARIABLES: {LABEL_ORDER}")
     if len(set(features)) != len(features) or len(set(labels)) != len(labels):
         raise ValueError("feature_order and label_order must not contain duplicates")
     benchmark_hash = str(data["benchmark_sha256"]).lower()
@@ -275,7 +313,10 @@ def validate_contract(data: Mapping[str, Any], benchmark_path: str | Path | None
         raise ValueError("model.device must be cpu")
 
     weights = _mapping(data["loss_weights"], "loss_weights")
-    expected_weights = {"dispatch", "balance", "conversion", "soc", "cost", "carbon", "gas_prior"}
+    if schema_version == "scheduling-proxy-contract-v2":
+        expected_weights = {"coordinate", "renewable_split", "objective", "carbon", "slack"}
+    else:
+        expected_weights = {"dispatch", "balance", "conversion", "soc", "cost", "carbon", "gas_prior"}
     if set(weights) != expected_weights:
         raise ValueError(f"loss_weights must contain exactly {sorted(expected_weights)}")
     for name, value in weights.items():
@@ -294,6 +335,43 @@ def validate_contract(data: Mapping[str, Any], benchmark_path: str | Path | None
     _positive_float(safety.get("feasibility_tolerance", 0.0), "safety.feasibility_tolerance")
     if not isinstance(safety.get("allow_exact_fallback"), bool):
         raise ValueError("safety.allow_exact_fallback must be boolean")
+    if schema_version == "scheduling-proxy-contract-v2":
+        if _positive_int(model.get("decision_dim"), "model.decision_dim") != 15:
+            raise ValueError("v2 model.decision_dim must be 15")
+        if model.get("output_parameterization") != "horizon_reachable_feasible_v2":
+            raise ValueError("v2 model.output_parameterization must be horizon_reachable_feasible_v2")
+        if model.get("decoder_schema_version") != "horizon-reachable-feasible-v2":
+            raise ValueError("v2 model.decoder_schema_version is invalid")
+        if model.get("decoder_dtype") != "float64":
+            raise ValueError("v2 model.decoder_dtype must be float64")
+        temperature = _positive_float(model.get("control_temperature"), "model.control_temperature")
+        if temperature != 0.25:
+            raise ValueError("v2 model.control_temperature must be 0.25")
+        expected_order = ("cooling", "chp", "soc_0", "soc_1", "soc_2", "renewable_pv")
+        if tuple(model.get("decision_order", ())) != expected_order:
+            raise ValueError("v2 model.decision_order is invalid")
+        groups = _mapping(model.get("decision_groups"), "model.decision_groups")
+        expected_groups = {"cooling": (0, 4), "chp": (4, 8), "soc": (8, 11), "renewable_pv": (11, 15)}
+        if set(groups) != set(expected_groups):
+            raise ValueError("v2 model.decision_groups must cover all decision controls")
+        ranges: list[tuple[int, int]] = []
+        for name, expected in expected_groups.items():
+            raw = groups[name]
+            if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or len(raw) != 2:
+                raise ValueError(f"v2 model.decision_groups.{name} must be a [start,end] range")
+            start = _nonnegative_int(raw[0], f"model.decision_groups.{name}.start")
+            end = _positive_int(raw[1], f"model.decision_groups.{name}.end")
+            if (start, end) != expected:
+                raise ValueError(f"v2 model.decision_groups.{name} has invalid decision range")
+            if end <= start:
+                raise ValueError(f"v2 model.decision_groups.{name} must have positive width")
+            ranges.append((start, end))
+        if sorted(ranges) != [(0, 4), (4, 8), (8, 11), (11, 15)]:
+            raise ValueError("v2 model.decision_groups must be contiguous")
+        if safety.get("allow_exact_fallback") is not False:
+            raise ValueError("v2 safety.allow_exact_fallback must be false")
+        if _nonnegative_int(safety.get("inference_exact_lp_calls"), "safety.inference_exact_lp_calls") != 0:
+            raise ValueError("v2 safety.inference_exact_lp_calls must be zero")
     artifacts = data["required_artifacts"]
     if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)) or not artifacts:
         raise ValueError("required_artifacts must be a non-empty list")

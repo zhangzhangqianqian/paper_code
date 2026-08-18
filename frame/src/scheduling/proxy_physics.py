@@ -8,11 +8,12 @@ import torch
 from torch import Tensor
 import torch.nn.functional as F
 
-from .dispatch_lp import VARIABLES
+from .dispatch_schema import VARIABLES
 from .proxy_contract import FEATURE_ORDER, LABEL_ORDER
 
 
 _INDEX = {name: idx for idx, name in enumerate(LABEL_ORDER)}
+_FEATURE_INDEX = {name: idx for idx, name in enumerate(FEATURE_ORDER)}
 
 
 def _parameter(parameters: Mapping[str, Any], name: str, default: float = 0.0) -> float:
@@ -288,6 +289,100 @@ def physics_aware_loss(
     return total, components
 
 
+def feasible_proxy_loss(
+    predicted_dispatch: Tensor,
+    teacher_dispatch: Tensor,
+    features: Tensor,
+    parameters: Mapping[str, Any],
+    teacher_objective: Tensor | None = None,
+    teacher_carbon: Tensor | None = None,
+    weights: Mapping[str, float] | None = None,
+) -> tuple[Tensor, dict[str, Tensor]]:
+    """V2 loss evaluated entirely in decoded physical dispatch space.
+
+    The decoder already enforces balances, conversions, SOC recursion, bounds,
+    and ramps exactly.  Consequently the optimization objective contains only
+    supervised coordinates, economic/carbon alignment, and explicit physical
+    capacity slack; equality residuals remain evaluation diagnostics.
+    """
+
+    predicted = _check_dispatch(predicted_dispatch)
+    teacher = _check_dispatch(teacher_dispatch)
+    if predicted.shape != teacher.shape:
+        raise ValueError("predicted_dispatch and teacher_dispatch shapes must match")
+    teacher = teacher.to(dtype=predicted.dtype, device=predicted.device)
+    features = _check_inputs(features, predicted.shape[0], predicted.shape[1]).to(predicted.device, predicted.dtype)
+    if not torch.isfinite(teacher).all():
+        raise ValueError("teacher_dispatch must be finite")
+    g = lambda name: predicted[..., _INDEX[name]]
+    t = lambda name: teacher[..., _INDEX[name]]
+    q_ec_scale = max(_parameter(parameters, "electric_chiller_capacity"), 1.0)
+    p_chp_scale = max(_parameter(parameters, "chp_electric_capacity"), 1.0)
+    soc_scale = max(_parameter(parameters, "bess_energy_capacity"), 1.0)
+    coordinate = (
+        F.smooth_l1_loss(g("q_ec") / q_ec_scale, t("q_ec") / q_ec_scale)
+        + F.smooth_l1_loss(g("p_chp") / p_chp_scale, t("p_chp") / p_chp_scale)
+        + F.smooth_l1_loss(g("soc") / soc_scale, t("soc") / soc_scale)
+    )
+    pv_denominator = features[..., _FEATURE_INDEX["pv_available"]].clamp_min(1.0)
+    renewable_split = F.smooth_l1_loss(
+        g("pv_use") / pv_denominator,
+        t("pv_use") / pv_denominator,
+    )
+    predicted_cost = operating_cost(predicted, features, parameters)
+    predicted_carbon = carbon_emissions(predicted, features, parameters)
+    carbon_price = features[..., _FEATURE_INDEX["carbon_price"]].mean(dim=1)
+    predicted_objective = predicted_cost + carbon_price * predicted_carbon
+    if teacher_objective is None:
+        target_objective = operating_cost(teacher, features, parameters) + carbon_price * carbon_emissions(teacher, features, parameters)
+    else:
+        target_objective = torch.as_tensor(teacher_objective, dtype=predicted.dtype, device=predicted.device).reshape(-1)
+    if target_objective.shape != (predicted.shape[0],) or not torch.isfinite(target_objective).all():
+        raise ValueError("teacher_objective must have shape [B] and be finite")
+    objective_denominator = target_objective.abs().clamp_min(1.0)
+    objective = F.smooth_l1_loss(
+        predicted_objective / objective_denominator,
+        target_objective / objective_denominator,
+    )
+    if teacher_carbon is None:
+        target_carbon = carbon_emissions(teacher, features, parameters)
+    else:
+        target_carbon = torch.as_tensor(teacher_carbon, dtype=predicted.dtype, device=predicted.device).reshape(-1)
+    if target_carbon.shape != (predicted.shape[0],) or not torch.isfinite(target_carbon).all():
+        raise ValueError("teacher_carbon must have shape [B] and be finite")
+    carbon_denominator = target_carbon.abs().clamp_min(1.0)
+    carbon = F.smooth_l1_loss(
+        predicted_carbon / carbon_denominator,
+        target_carbon / carbon_denominator,
+    )
+    slack_sum = (
+        g("slack_e") + g("slack_c") + g("slack_h")
+    ).sum(dim=1)
+    demand_sum = features[..., :3].sum(dim=(1, 2)).clamp_min(1.0)
+    slack = (slack_sum / demand_sum).mean()
+    effective_weights = {
+        "coordinate": 1.0,
+        "renewable_split": 0.1,
+        "objective": 0.2,
+        "carbon": 0.05,
+        "slack": 1.0,
+    }
+    if weights is not None:
+        effective_weights.update({name: float(value) for name, value in weights.items()})
+    components: dict[str, Tensor] = {
+        "coordinate": coordinate,
+        "renewable_split": renewable_split,
+        "objective": objective,
+        "carbon": carbon,
+        "slack": slack,
+    }
+    total = predicted.new_zeros(())
+    for name, value in components.items():
+        total = total + float(effective_weights.get(name, 0.0)) * value
+    components["total"] = total
+    return total, components
+
+
 # Discoverable aliases.
 compute_physics_loss = physics_aware_loss
 weighted_proxy_loss = physics_aware_loss
@@ -301,7 +396,7 @@ compute_carbon_emissions = carbon_emissions
 
 __all__ = [
     "balance_residuals", "conversion_residuals", "soc_residuals", "operating_cost", "carbon_emissions",
-    "physics_terms", "physics_aware_loss", "compute_physics_loss", "weighted_proxy_loss",
+    "physics_terms", "physics_aware_loss", "feasible_proxy_loss", "compute_physics_loss", "weighted_proxy_loss",
     "balance_residual", "conversion_residual", "soc_residual", "compute_operating_cost", "compute_carbon_emissions",
     "proxy_loss",
 ]

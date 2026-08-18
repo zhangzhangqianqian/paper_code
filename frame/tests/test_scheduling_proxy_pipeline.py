@@ -11,6 +11,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK = Path("D:/Paper/standard_ies_benchmark_v1.yaml")
 CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v1.json"
+V2_CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v2.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -111,6 +112,45 @@ def test_default_output_path_is_ignored_smoke_location():
 
     args = build_parser().parse_args(["--mode", "smoke", "--benchmark", str(BENCHMARK)])
     assert args.output_dir.endswith("frame\\reports\\scheduling_proxy_v1\\smoke") or args.output_dir.endswith("frame/reports/scheduling_proxy_v1/smoke")
+
+
+def test_v2_smoke_pipeline_emits_feasible_no_fallback_bundle(tmp_path):
+    output = tmp_path / "scheduling_proxy_v2_smoke"
+    command = [
+        sys.executable, str(ROOT / "scripts" / "run_scheduling_proxy_pipeline.py"),
+        "--mode", "smoke", "--benchmark", str(BENCHMARK), "--contract", str(V2_CONTRACT), "--output-dir", str(output),
+    ]
+    completed = subprocess.run(command, cwd=str(ROOT.parent), capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+    manifest = json.loads((output / "smoke_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model_family"] == "feasible_scheduling_proxy_v2"
+    assert manifest["decoder_schema_version"] == "horizon-reachable-feasible-v2"
+    assert manifest["inference_exact_lp_calls"] == 0
+    assert manifest["evaluation_split"] == "validation"
+    from src.scheduling.proxy_contract import file_sha256
+    assert manifest["checkpoint_sha256"] == file_sha256(output / "best_model.pt")
+    assert not (output / "metrics_test.json").exists()
+    assert not (output / "predictions_test.npz").exists()
+    assert (output / "metrics_validation.json").exists()
+    assert (output / "predictions_validation.npz").exists()
+    with np.load(output / "predictions_validation.npz", allow_pickle=False) as payload:
+        assert payload["raw_prediction"].shape == (16, 4, 21)
+        assert payload["safe_prediction"].dtype == np.float64
+        assert np.array_equal(payload["raw_prediction"], payload["safe_prediction"])
+        assert not payload["fallback_mask"].any()
+        assert np.all(payload["features"][..., 3] == 0.0)
+        assert str(payload["split"].item()) == "validation"
+        assert str(payload["model_family"].item()) == "feasible_scheduling_proxy_v2"
+        assert str(payload["decoder_schema_version"].item()) == "horizon-reachable-feasible-v2"
+        assert str(payload["checkpoint_sha256"].item()) == manifest["checkpoint_sha256"]
+        assert int(payload["inference_exact_lp_calls"].item()) == 0
+        assert str(payload["selection_split"].item()) == "validation"
+        assert int(payload["test_split_used_for_selection"].item()) == 0
+    metrics = json.loads((output / "metrics_validation.json").read_text(encoding="utf-8"))
+    assert metrics["provenance"]["split"] == "validation"
+    assert metrics["provenance"]["checkpoint_sha256"] == manifest["checkpoint_sha256"]
+    assert metrics["provenance"]["train_scenario_id_digest"]
+    assert metrics["provenance"]["validation_scenario_id_digest"]
 
 
 def test_prediction_artifact_loader_rejects_missing_provenance(tmp_path):

@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import torch
 
-from .dispatch_lp import VARIABLES
+from .dispatch_schema import VARIABLES
 from .proxy_contract import FEATURE_ORDER, HORIZON, LABEL_ORDER
 from .proxy_physics import _parameter, balance_residuals, conversion_residuals, soc_residuals
 

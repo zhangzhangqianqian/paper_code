@@ -9,16 +9,26 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
-from .dispatch_lp import DispatchInputs, solve_dispatch_lp
 from .proxy_contract import FEATURE_ORDER, HORIZON, LABEL_ORDER, ProxyContract, contract_sha256, file_sha256
 from .proxy_dataset import ProxyNormalizationStats
-from .proxy_model import SchedulingProxy
+from .proxy_model import FeasibleSchedulingProxy, SchedulingProxy
 from .proxy_physics import _parameter, balance_residuals, conversion_residuals, soc_residuals
 from .synthetic_scenarios import load_benchmark
 
 
 TASK_ORDER: Tuple[str, ...] = ("electricity", "cooling", "heating", "gas")
 RENEWABLE_ORDER: Tuple[str, ...] = ("pv", "wt")
+
+
+def solve_dispatch_lp(inputs: Any) -> Any:
+    """Lazy v1-only exact fallback hook.
+
+    Keeping this indirection preserves the historical monkeypatch surface while
+    ensuring v2 inference never imports the LP module or enters this function.
+    """
+
+    from .dispatch_lp import solve_dispatch_lp as _solve_dispatch_lp
+    return _solve_dispatch_lp(inputs)
 
 
 def _is_sha256(value: Any) -> bool:
@@ -124,6 +134,8 @@ class ProxyInferenceResult:
     normalized_features: np.ndarray
     clipped_negative_count: int
     raw_residual: np.ndarray
+    inference_exact_lp_calls: int = 0
+    decoder_schema_version: str | None = None
 
     @property
     def output(self) -> np.ndarray:
@@ -270,8 +282,15 @@ def evaluate_raw_feasibility(
     features: np.ndarray,
     parameters: Mapping[str, Any],
     tolerance: float = 1.0e-3,
+    include_charge_discharge_overlap: bool = False,
 ) -> dict[str, np.ndarray | float]:
-    """Evaluate raw proxy outputs before any safety fallback."""
+    """Evaluate raw proxy outputs before any safety fallback.
+
+    The overlap value is always returned as a diagnostic.  It is part of the
+    hard feasibility gate only for v2, whose decoder explicitly guarantees
+    mutually-exclusive storage power.  Keeping it out of the default gate
+    preserves the historical v1 fallback semantics.
+    """
 
     y = np.asarray(dispatch, dtype=np.float64)
     x = np.asarray(features, dtype=np.float64)
@@ -319,7 +338,8 @@ def evaluate_raw_feasibility(
     p_chp = safe_y[:, :, idx["p_chp"]]
     p_change = np.concatenate([p_chp[:, :1], np.diff(p_chp, axis=1)], axis=1)
     ramp_residual = np.maximum(np.max(np.abs(p_change) - ramp, axis=1), 0.0)
-    residual = np.maximum.reduce([
+    overlap_residual = np.max(np.minimum(safe_y[:, :, idx["p_charge"]], safe_y[:, :, idx["p_discharge"]]), axis=1)
+    residual_terms = [
         np.max(np.abs(balance), axis=(1, 2)),
         np.max(np.abs(conversion), axis=(1, 2)),
         np.max(np.abs(soc_state), axis=1),
@@ -327,7 +347,10 @@ def evaluate_raw_feasibility(
         renewable_residual,
         bound_residual,
         ramp_residual,
-    ])
+    ]
+    if include_charge_discharge_overlap:
+        residual_terms.append(overlap_residual)
+    residual = np.maximum.reduce(residual_terms)
     nonnegative = np.all(np.nan_to_num(y, nan=-np.inf, posinf=np.inf, neginf=-np.inf) >= -float(tolerance), axis=(1, 2))
     feasible = finite & nonnegative & (residual <= float(tolerance))
     return {
@@ -342,6 +365,8 @@ def evaluate_raw_feasibility(
         "capacity_residual": bound_residual,
         "ramp_residual": ramp_residual,
         "ramp_constraint_residual": ramp_residual,
+        "charge_discharge_overlap": overlap_residual,
+        "simultaneous_charge_discharge_residual": overlap_residual,
         "feasible_rate": np.asarray(float(np.mean(feasible))),
     }
 
@@ -365,16 +390,24 @@ class Scheme2RProxyAdapter:
         kwargs.setdefault("benchmark", self.benchmark)
         return adapt_scheme2r_inputs(*args, stats=self.stats, **kwargs)
 
-    def predict(self, model: SchedulingProxy, prepared: ProxyAdapterOutput) -> np.ndarray:
+    def predict(self, model: SchedulingProxy | FeasibleSchedulingProxy, prepared: ProxyAdapterOutput) -> np.ndarray:
         model.eval()
         with torch.no_grad():
-            normalized = model(torch.from_numpy(prepared.normalized_features.astype(np.float32))).cpu().numpy()
+            normalized_tensor = torch.from_numpy(prepared.normalized_features.astype(np.float32))
+            if isinstance(model, FeasibleSchedulingProxy) or (self.contract is not None and self.contract.is_v2):
+                physical = model.predict_dispatch(
+                    normalized_tensor,
+                    torch.from_numpy(prepared.features.astype(np.float64)),
+                    self.parameters,
+                ).cpu().numpy()
+                return np.asarray(physical, dtype=np.float64)
+            normalized = model(normalized_tensor).cpu().numpy()
         physical = self.stats.inverse_dispatch(normalized)
         return np.asarray(physical, dtype=np.float64)
 
     def infer(
         self,
-        model: SchedulingProxy,
+        model: SchedulingProxy | FeasibleSchedulingProxy,
         load_predictions: np.ndarray,
         renewable_predictions: np.ndarray,
         prices: Any = None,
@@ -387,21 +420,39 @@ class Scheme2RProxyAdapter:
             load_predictions, renewable_predictions, prices=prices, initial_soc=initial_soc,
             use_gas_prior=use_gas_prior,
         )
+        is_v2 = isinstance(model, FeasibleSchedulingProxy) or (self.contract is not None and self.contract.is_v2)
+        if is_v2 and not isinstance(model, FeasibleSchedulingProxy):
+            raise ValueError("v2 contract requires FeasibleSchedulingProxy model")
+        if is_v2 and bool(allow_exact_fallback):
+            raise ValueError("v2 inference does not permit allow_exact_fallback=True")
         raw = self.predict(model, prepared)
         tolerance = float(feasibility_tolerance if feasibility_tolerance is not None else self.contract.safety["feasibility_tolerance"] if self.contract is not None else 1e-3)
-        report = evaluate_raw_feasibility(raw, prepared.features, self.parameters, tolerance=tolerance)
+        report = evaluate_raw_feasibility(
+            raw,
+            prepared.features,
+            self.parameters,
+            tolerance=tolerance,
+            include_charge_discharge_overlap=is_v2,
+        )
         raw_mask = np.asarray(report["feasible_mask"], dtype=bool)
         allow = bool(allow_exact_fallback if allow_exact_fallback is not None else self.contract.safety["allow_exact_fallback"] if self.contract is not None else True)
         safe = raw.copy()
         fallback = np.zeros(raw.shape[0], dtype=bool)
         reasons: list[str] = ["none"] * raw.shape[0]
-        if allow:
+        if is_v2:
+            # Feasibility is a decoder invariant.  Fail closed if a future
+            # implementation or malformed parameter map violates it; never
+            # repair a v2 output with an optimizer.
+            if not np.all(raw_mask) or not np.array_equal(raw, safe):
+                raise ValueError("v2 feasible decoder produced an infeasible dispatch")
+        elif allow:
             for index in np.flatnonzero(~raw_mask):
                 try:
                     params = dict(self.parameters)
                     params["grid_energy_price"] = float(np.mean(prepared.features[index, :, 6]))
                     params["gas_energy_price"] = float(np.mean(prepared.features[index, :, 7]))
                     params["carbon_price"] = float(np.mean(prepared.features[index, :, 8]))
+                    from .dispatch_lp import DispatchInputs
                     result = solve_dispatch_lp(DispatchInputs(
                         demand=prepared.features[index, :, :3],
                         pv_available=prepared.features[index, :, 4],
@@ -427,6 +478,8 @@ class Scheme2RProxyAdapter:
             normalized_features=prepared.normalized_features,
             clipped_negative_count=prepared.clipped_negative_count,
             raw_residual=np.asarray(report["residual"], dtype=np.float64),
+            inference_exact_lp_calls=0 if is_v2 else int(fallback.sum()),
+            decoder_schema_version="horizon-reachable-feasible-v2" if is_v2 else None,
         )
 
 

@@ -19,10 +19,16 @@ from src.scheduling.synthetic_scenarios import generate_synthetic_scenarios
 
 BENCHMARK = Path("D:/Paper/standard_ies_benchmark_v1.yaml")
 CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v1.json"
+V2_CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v2.json"
 
 
 def _split(name: str, seed: int, n: int):
     c = load_contract(CONTRACT, BENCHMARK)
+    return build_labeled_proxy_split(generate_synthetic_scenarios(BENCHMARK, name, seed, n), BENCHMARK, c)
+
+
+def _split_v2(name: str, seed: int, n: int):
+    c = load_contract(V2_CONTRACT, BENCHMARK)
     return build_labeled_proxy_split(generate_synthetic_scenarios(BENCHMARK, name, seed, n), BENCHMARK, c)
 
 
@@ -151,6 +157,31 @@ def test_load_trained_proxy_cross_checks_all_artifact_provenance(tmp_path):
                 load_trained_proxy(tmp_path)
         finally:
             stats_path.write_bytes(original_stats_bytes)
-
     assert_stats_tampered("selection_split", "test")
     assert_stats_tampered("validation_scenario_id_digest", "0" * 64)
+
+
+def test_v2_training_decodes_dispatch_and_persists_no_lp_provenance(tmp_path):
+    contract = load_contract(V2_CONTRACT, BENCHMARK)
+    result = train_proxy(
+        _split_v2("train", 2026, 4),
+        _split_v2("validation", 2027, 2),
+        tmp_path,
+        contract=contract,
+        benchmark=BENCHMARK,
+        max_epochs=1,
+        patience=1,
+        batch_size=2,
+    )
+    assert result.metadata["model_family"] == "feasible_scheduling_proxy_v2"
+    assert result.metadata["decoder_schema_version"] == "horizon-reachable-feasible-v2"
+    assert result.metadata["decision_dim"] == 15
+    assert result.metadata["inference_exact_lp_calls"] == 0
+    restored, _, checkpoint = load_trained_proxy(
+        tmp_path, contract=contract, benchmark_path=BENCHMARK, expected_train_seed=2026,
+    )
+    assert restored(torch.zeros(2, 4, 10)).shape == (2, 15)
+    assert checkpoint["metadata"]["selection_split"] == "validation"
+    history = json.loads((tmp_path / "history.json").read_text(encoding="utf-8"))
+    assert history["test_split_used_for_selection"] is False
+    assert history["inference_exact_lp_calls"] == 0

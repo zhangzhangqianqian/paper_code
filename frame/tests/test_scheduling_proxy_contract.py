@@ -17,6 +17,7 @@ from src.scheduling.proxy_contract import FEATURE_ORDER, load_contract, validate
 
 BENCHMARK = Path("D:/Paper/standard_ies_benchmark_v1.yaml")
 CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v1.json"
+V2_CONTRACT = ROOT / "configs" / "scheduling_proxy_contract_v2.json"
 
 
 def test_contract_freezes_orders_splits_and_gas_semantics():
@@ -63,3 +64,24 @@ def test_contract_rejects_nonfinite_nested_numeric_settings(field_path, bad_valu
     data[section][name] = bad_value
     with pytest.raises(ValueError):
         validate_contract(data, BENCHMARK)
+
+
+def test_v2_contract_freezes_feasible_decoder_and_no_fallback():
+    contract = load_contract(V2_CONTRACT, BENCHMARK)
+    assert contract.is_v2
+    assert contract.schema_version == "scheduling-proxy-contract-v2"
+    assert contract.model["decision_dim"] == 15
+    assert contract.model["decision_groups"] == {
+        "cooling": [0, 4], "chp": [4, 8], "soc": [8, 11], "renewable_pv": [11, 15],
+    }
+    assert contract.safety["allow_exact_fallback"] is False
+    assert contract.safety["inference_exact_lp_calls"] == 0
+
+
+def test_contract_rejects_wrong_v2_group_coverage(tmp_path):
+    payload = json.loads(V2_CONTRACT.read_text(encoding="utf-8"))
+    payload["model"]["decision_groups"]["renewable_pv"] = [11, 14]
+    invalid = tmp_path / "invalid-v2.json"
+    invalid.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="decision"):
+        load_contract(invalid, BENCHMARK)

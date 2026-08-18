@@ -15,8 +15,16 @@ from torch.utils.data import DataLoader
 
 from .proxy_contract import FEATURE_ORDER, LABEL_ORDER, ProxyContract, contract_sha256, file_sha256
 from .proxy_dataset import LabeledProxySplit, ProxyDataset, ProxyNormalizationStats, scenario_id_digest
-from .proxy_model import ProxyModelConfig, SchedulingProxy, build_proxy_model, load_model_checkpoint, save_model_checkpoint
-from .proxy_physics import physics_aware_loss
+from .proxy_model import (
+    FeasibleSchedulingProxy,
+    ProxyModelConfig,
+    SchedulingProxy,
+    build_proxy_model,
+    load_model_checkpoint,
+    save_model_checkpoint,
+)
+from .proxy_physics import feasible_proxy_loss, physics_aware_loss
+from .proxy_decoder import decode_feasible_dispatch
 
 
 _PROVENANCE_METADATA_FIELDS = (
@@ -56,6 +64,27 @@ def _validate_provenance_metadata(metadata: Mapping[str, Any], artifact_name: st
             raise ValueError(f"{artifact_name} {name} must be a positive integer")
 
 
+def _validate_v2_metadata(metadata: Mapping[str, Any], artifact_name: str) -> None:
+    required = {
+        "model_family", "decoder_schema_version", "decoder_dtype", "control_temperature",
+        "decision_dim", "decision_groups", "inference_exact_lp_calls",
+    }
+    missing = sorted(required - set(metadata))
+    if missing:
+        raise ValueError(f"{artifact_name} v2 provenance is incomplete: missing {missing}")
+    if metadata["model_family"] != "feasible_scheduling_proxy_v2":
+        raise ValueError(f"{artifact_name} model family is not v2")
+    if metadata["decoder_schema_version"] != "horizon-reachable-feasible-v2" or metadata["decoder_dtype"] != "float64":
+        raise ValueError(f"{artifact_name} decoder provenance mismatch")
+    if float(metadata["control_temperature"]) != 0.25 or int(metadata["decision_dim"]) != 15:
+        raise ValueError(f"{artifact_name} decoder control metadata mismatch")
+    expected_groups = {"cooling": [0, 4], "chp": [4, 8], "soc": [8, 11], "renewable_pv": [11, 15]}
+    if metadata["decision_groups"] != expected_groups:
+        raise ValueError(f"{artifact_name} decoder decision groups mismatch")
+    if int(metadata["inference_exact_lp_calls"]) != 0:
+        raise ValueError(f"{artifact_name} inference_exact_lp_calls must be zero")
+
+
 def _cross_check_provenance_metadata(left: Mapping[str, Any], right: Mapping[str, Any], left_name: str, right_name: str) -> None:
     for field in _PROVENANCE_METADATA_FIELDS:
         if field in {"feature_order", "label_order"}:
@@ -63,6 +92,15 @@ def _cross_check_provenance_metadata(left: Mapping[str, Any], right: Mapping[str
                 raise ValueError(f"{left_name}/{right_name} provenance {field} mismatch")
         elif left[field] != right[field]:
             raise ValueError(f"{left_name}/{right_name} provenance {field} mismatch")
+
+
+def _cross_check_v2_metadata(left: Mapping[str, Any], right: Mapping[str, Any], left_name: str, right_name: str) -> None:
+    for field in (
+        "model_family", "decoder_schema_version", "decoder_dtype", "control_temperature",
+        "decision_dim", "decision_groups", "inference_exact_lp_calls",
+    ):
+        if left.get(field) != right.get(field):
+            raise ValueError(f"{left_name}/{right_name} v2 decoder provenance {field} mismatch")
 
 
 def _strict_epoch(value: Any, field: str, allow_integral_float: bool = False) -> int:
@@ -223,7 +261,7 @@ def _loader(split: LabeledProxySplit, stats: ProxyNormalizationStats, batch_size
 
 
 def _run_epoch(
-    model: SchedulingProxy,
+    model: SchedulingProxy | FeasibleSchedulingProxy,
     loader: DataLoader,
     parameters: Mapping[str, Any],
     stats: ProxyNormalizationStats,
@@ -233,31 +271,57 @@ def _run_epoch(
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(training)
-    totals: dict[str, float] = {name: 0.0 for name in ("total", "dispatch", "balance", "conversion", "soc", "cost", "carbon", "gas_prior")}
+    v2 = isinstance(model, FeasibleSchedulingProxy)
+    component_names = ("total", "coordinate", "renewable_split", "objective", "carbon", "slack") if v2 else ("total", "dispatch", "balance", "conversion", "soc", "cost", "carbon", "gas_prior")
+    totals: dict[str, float] = {name: 0.0 for name in component_names}
     count = 0
     scale = torch.from_numpy(stats.label_scale.astype(np.float32))
+    input_mean = torch.from_numpy(stats.input_mean.astype(np.float32))
+    input_scale = torch.from_numpy(stats.input_scale.astype(np.float32))
     for batch in loader:
         inputs = batch["inputs"].to("cpu")
         raw_inputs = batch["raw_inputs"].to("cpu")
         target = batch["target"].to("cpu")
+        raw_target = batch["raw_target"].to("cpu")
         teacher_cost = batch["teacher_cost"].to("cpu")
         teacher_carbon = batch["teacher_carbon"].to("cpu")
         gas_mask = batch["gas_prior_mask"].to("cpu")
         if training:
             optimizer.zero_grad(set_to_none=True)
         with torch.set_grad_enabled(training):
-            prediction = model(inputs)
-            total, components = physics_aware_loss(
-                prediction,
-                target,
-                raw_inputs,
-                parameters,
-                teacher_cost=teacher_cost,
-                teacher_carbon=teacher_carbon,
-                gas_prior_mask=gas_mask,
-                label_scale=scale,
-                loss_weights=weights,
-            )
+            if v2:
+                # The primary v2 scheduler path masks the synthetic gas prior
+                # before both normalization and decoding.  It remains context
+                # only and never enters a physical equation.
+                physical_inputs = raw_inputs.clone()
+                physical_inputs[..., 3] = 0.0
+                normalized_inputs = (physical_inputs - input_mean) / input_scale
+                logits = model.forward_logits(normalized_inputs)
+                prediction = decode_feasible_dispatch(logits, physical_inputs, parameters)
+                carbon_price = physical_inputs[..., 8].mean(dim=1)
+                teacher_objective = teacher_cost + carbon_price * teacher_carbon
+                total, components = feasible_proxy_loss(
+                    prediction,
+                    raw_target,
+                    physical_inputs,
+                    parameters,
+                    teacher_objective=teacher_objective,
+                    teacher_carbon=teacher_carbon,
+                    weights=weights,
+                )
+            else:
+                prediction = model(inputs)
+                total, components = physics_aware_loss(
+                    prediction,
+                    target,
+                    raw_inputs,
+                    parameters,
+                    teacher_cost=teacher_cost,
+                    teacher_carbon=teacher_carbon,
+                    gas_prior_mask=gas_mask,
+                    label_scale=scale,
+                    loss_weights=weights,
+                )
             if training:
                 total.backward()
                 clip_grad_norm_(model.parameters(), max_norm=float(gradient_clip_norm))
@@ -380,6 +444,16 @@ def train_proxy(
                 "train_scenario_id_digest": scenario_id_digest(train_raw.scenario_ids),
                 "validation_scenario_id_digest": scenario_id_digest(validation_raw.scenario_ids),
             }
+            if isinstance(model, FeasibleSchedulingProxy):
+                metadata.update({
+                    "model_family": "feasible_scheduling_proxy_v2",
+                    "decoder_schema_version": "horizon-reachable-feasible-v2",
+                    "decoder_dtype": "float64",
+                    "control_temperature": 0.25,
+                    "decision_dim": 15,
+                    "decision_groups": {"cooling": [0, 4], "chp": [4, 8], "soc": [8, 11], "renewable_pv": [11, 15]},
+                    "inference_exact_lp_calls": 0,
+                })
             save_model_checkpoint(checkpoint_path, model, optimizer=None, epoch=epoch, validation_loss=best_loss, metadata=metadata)
         else:
             wait += 1
@@ -407,6 +481,16 @@ def train_proxy(
         "train_scenario_id_digest": scenario_id_digest(train_raw.scenario_ids),
         "validation_scenario_id_digest": scenario_id_digest(validation_raw.scenario_ids),
     }
+    if isinstance(model, FeasibleSchedulingProxy):
+        history_payload.update({
+            "model_family": "feasible_scheduling_proxy_v2",
+            "decoder_schema_version": "horizon-reachable-feasible-v2",
+            "decoder_dtype": "float64",
+            "control_temperature": 0.25,
+            "decision_dim": 15,
+            "decision_groups": {"cooling": [0, 4], "chp": [4, 8], "soc": [8, 11], "renewable_pv": [11, 15]},
+            "inference_exact_lp_calls": 0,
+        })
     history_path.write_text(json.dumps(history_payload, indent=2, sort_keys=True), encoding="utf-8")
     model, checkpoint = load_model_checkpoint(checkpoint_path, expected_contract=contract)
     return TrainingResult(
@@ -455,6 +539,8 @@ def load_trained_proxy(
     if not isinstance(metadata, Mapping):
         raise ValueError("checkpoint metadata is missing")
     _validate_provenance_metadata(metadata, "checkpoint")
+    if metadata.get("model_family") == "feasible_scheduling_proxy_v2":
+        _validate_v2_metadata(metadata, "checkpoint")
     try:
         history_payload = json.loads(history_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -465,8 +551,12 @@ def load_trained_proxy(
     if not history_required.issubset(history_payload):
         raise ValueError("training history provenance is incomplete")
     _validate_provenance_metadata(history_payload, "history")
+    if history_payload.get("model_family") == "feasible_scheduling_proxy_v2":
+        _validate_v2_metadata(history_payload, "history")
     _validate_checkpoint_history_consistency(payload, history_payload)
     _cross_check_provenance_metadata(metadata, history_payload, "checkpoint", "history")
+    if metadata.get("model_family") == "feasible_scheduling_proxy_v2" or history_payload.get("model_family") == "feasible_scheduling_proxy_v2":
+        _cross_check_v2_metadata(metadata, history_payload, "checkpoint", "history")
 
     normalization_metadata = {
         "contract_sha256": stats.contract_sha256,
