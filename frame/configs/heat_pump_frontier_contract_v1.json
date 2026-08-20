@@ -1,0 +1,19 @@
+{
+  "schema_version": "heat-pump-frontier-contract-v1",
+  "source_type": "pure_simulation_heat_pump",
+  "split": "validation",
+  "cop_values": [2.5, 3.0, 3.5],
+  "capacity_multipliers": [0.5, 1.0, 1.5],
+  "gas_price_multipliers": [0.8, 1.0, 1.2],
+  "epsilon_cost_tolerances": [0.0, 0.01, 0.03, 0.05],
+  "legacy_carbon_weights": [0.0, 0.2, 1.0],
+  "acceptance": {
+    "lp_success_rate": 1.0,
+    "physical_feasible_rate": 1.0,
+    "balance_residual_tolerance": 1e-6,
+    "distinct_dispatch_rate": 0.25,
+    "emission_reduction_sample_rate": 0.5,
+    "median_emission_reduction": 0.01
+  },
+  "test_set_accessed": false
+}
