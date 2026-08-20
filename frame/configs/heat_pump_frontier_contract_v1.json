@@ -7,6 +7,22 @@
   "gas_price_multipliers": [0.8, 1.0, 1.2],
   "epsilon_cost_tolerances": [0.0, 0.01, 0.03, 0.05],
   "legacy_carbon_weights": [0.0, 0.2, 1.0],
+  "scenario_generation": {
+    "schema_version": "synthetic-scheduling-domain-v2",
+    "regime_probabilities": {
+      "normal": 0.45,
+      "zero_demand": 0.15,
+      "zero_renewable": 0.10,
+      "near_capacity": 0.15,
+      "overload_stress": 0.15
+    },
+    "pressure_multiplier": 3.25,
+    "carbon_price_default_probability": 0.40,
+    "carbon_price_sensitivity_probability": 0.60,
+    "initial_soc_bounds": [0.2, 0.8],
+    "zero_state_exact": true,
+    "test_calibration": false
+  },
   "acceptance": {
     "lp_success_rate": 1.0,
     "physical_feasible_rate": 1.0,
