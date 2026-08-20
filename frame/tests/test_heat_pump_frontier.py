@@ -22,6 +22,8 @@ def test_frontier_contract_is_validation_only():
     assert contract.split == "validation"
     assert contract.test_set_accessed is False
     assert contract.epsilon_cost_tolerances == (0.0, 0.01, 0.03, 0.05)
+    assert contract.variable_om_cost_values == (0.3, 0.4, 0.5)
+    assert contract.nominal_variable_om_cost == pytest.approx(0.4)
     assert contract.scenario_generation["test_calibration"] is False
 
 

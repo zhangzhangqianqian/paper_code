@@ -189,7 +189,13 @@ def solve_heat_pump_dispatch_lp(inputs: HeatPumpDispatchInputs, options: HeatPum
         c[idx("grid", t)] = grid_cost[t]
         c[idx("g_chp", t)] = gas_cost[t]
         c[idx("g_gb", t)] = gas_cost[t]
-        c[idx("p_hp", t)] = inputs.heat_pump.variable_om_cost * inputs.heat_pump.cop
+        # Variable O&M is an economic operating-cost term.  It must not
+        # contaminate the physical-carbon objective, which is intentionally
+        # defined only by grid and gas emissions.
+        c[idx("p_hp", t)] = (
+            inputs.heat_pump.variable_om_cost * inputs.heat_pump.cop
+            if options.objective_mode != "physical_carbon" else 0.0
+        )
         for name in ("slack_e", "slack_c", "slack_h"):
             c[idx(name, t)] = slack_cost
         for name in ("p_charge", "p_discharge"):

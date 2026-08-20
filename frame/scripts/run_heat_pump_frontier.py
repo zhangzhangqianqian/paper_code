@@ -69,7 +69,7 @@ def main() -> int:
         return 0 if verified else 2
     if args.dry_run:
         sample_count = 16
-        print(json.dumps({"status": "dry_run", "sample_count": sample_count, "configurations": len(contract.cop_values) * len(contract.capacity_multipliers) * len(contract.gas_price_multipliers), "epsilon_levels": list(contract.epsilon_cost_tolerances), "test_set_accessed": False}, ensure_ascii=False, indent=2))
+        print(json.dumps({"status": "dry_run", "sample_count": sample_count, "configurations": len(contract.cop_values) * len(contract.capacity_multipliers) * len(contract.gas_price_multipliers) * len(contract.variable_om_cost_values), "variable_om_cost_values": list(contract.variable_om_cost_values), "nominal_variable_om_cost": contract.nominal_variable_om_cost, "epsilon_levels": list(contract.epsilon_cost_tolerances), "test_set_accessed": False}, ensure_ascii=False, indent=2))
         return 0
     sample_count = 16 if args.smoke else 2048
     batch = generate_synthetic_scenarios(values, "validation", 2027, sample_count, generator_version="synthetic-scheduling-domain-v2", scenario_generation=contract.scenario_generation)
@@ -79,11 +79,16 @@ def main() -> int:
     for cop in contract.cop_values:
         for capacity_multiplier in contract.capacity_multipliers:
             for gas_multiplier in contract.gas_price_multipliers:
-                hp = HeatPumpParameters(cop=float(cop), heat_capacity=base_capacity * float(capacity_multiplier))
-                for index in range(batch.n_samples):
-                    rows = solve_scenario_frontier(batch, index, values["values"], hp, float(gas_multiplier), contract.epsilon_cost_tolerances)
-                    for row in rows:
-                        all_records.append({"cop": cop, "capacity_multiplier": capacity_multiplier, "gas_price_multiplier": gas_multiplier, **row})
+                for variable_om_cost in contract.variable_om_cost_values:
+                    hp = HeatPumpParameters(
+                        cop=float(cop),
+                        heat_capacity=base_capacity * float(capacity_multiplier),
+                        variable_om_cost=float(variable_om_cost),
+                    )
+                    for index in range(batch.n_samples):
+                        rows = solve_scenario_frontier(batch, index, values["values"], hp, float(gas_multiplier), contract.epsilon_cost_tolerances)
+                        for row in rows:
+                            all_records.append({"cop": cop, "capacity_multiplier": capacity_multiplier, "gas_price_multiplier": gas_multiplier, "variable_om_cost": variable_om_cost, **row})
     fieldnames = sorted({key for row in all_records for key in row})
     with (output / "frontier_records.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

@@ -74,6 +74,28 @@ def test_operating_cost_cap_is_enforced_without_carbon_price():
     assert constrained.operating_cost <= economic.operating_cost + 2e-6
 
 
+def test_physical_carbon_objective_excludes_heat_pump_om_cost():
+    low_om_inputs = _inputs()
+    high_om_inputs = HeatPumpDispatchInputs(
+        demand=low_om_inputs.demand,
+        pv_available=low_om_inputs.pv_available,
+        wt_available=low_om_inputs.wt_available,
+        parameters=low_om_inputs.parameters,
+        heat_pump=HeatPumpParameters(cop=3.0, heat_capacity=20.0, variable_om_cost=0.4),
+        initial_soc=low_om_inputs.initial_soc,
+    )
+    options = HeatPumpDispatchSolveOptions(
+        objective_mode="physical_carbon",
+        slack_caps=(100.0, 100.0, 100.0),
+    )
+    low_om = solve_heat_pump_dispatch_lp(low_om_inputs, options)
+    high_om = solve_heat_pump_dispatch_lp(high_om_inputs, options)
+    assert low_om.success and high_om.success
+    assert high_om.objective == pytest.approx(low_om.objective, abs=1e-8)
+    assert high_om.physical_carbon == pytest.approx(low_om.physical_carbon, abs=1e-8)
+    assert high_om.operating_cost >= low_om.operating_cost
+
+
 def test_heat_pump_options_reject_nonfinite_cost_cap():
     with pytest.raises(ValueError):
         HeatPumpDispatchSolveOptions(operating_cost_cap=float("nan")).validate()

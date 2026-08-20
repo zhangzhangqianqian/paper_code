@@ -35,6 +35,8 @@ class HeatPumpFrontierContract:
     gas_price_multipliers: tuple[float, ...]
     epsilon_cost_tolerances: tuple[float, ...]
     legacy_carbon_weights: tuple[float, ...]
+    variable_om_cost_values: tuple[float, ...]
+    nominal_variable_om_cost: float
     scenario_generation: Mapping[str, Any]
     acceptance: Mapping[str, float]
     test_set_accessed: bool
@@ -77,6 +79,12 @@ def load_frontier_contract(path: str | Path) -> HeatPumpFrontierContract:
         raise ValueError("frontier acceptance values must be finite and non-negative")
     if acceptance_values["lp_success_rate"] != 1.0 or acceptance_values["physical_feasible_rate"] != 1.0:
         raise ValueError("frontier requires 100% LP success and physical feasibility")
+    variable_om_cost_values = _tuple_numbers(payload, "variable_om_cost_values", minimum=0.0)
+    nominal_variable_om_cost = float(payload.get("nominal_variable_om_cost"))
+    if not math.isfinite(nominal_variable_om_cost) or nominal_variable_om_cost < 0.0:
+        raise ValueError("nominal_variable_om_cost must be finite and non-negative")
+    if not any(math.isclose(nominal_variable_om_cost, value, rel_tol=0.0, abs_tol=1e-12) for value in variable_om_cost_values):
+        raise ValueError("nominal_variable_om_cost must be one of variable_om_cost_values")
     return HeatPumpFrontierContract(
         schema_version=str(payload["schema_version"]),
         source_type=str(payload["source_type"]),
@@ -86,11 +94,12 @@ def load_frontier_contract(path: str | Path) -> HeatPumpFrontierContract:
         gas_price_multipliers=_tuple_numbers(payload, "gas_price_multipliers", minimum=1e-12),
         epsilon_cost_tolerances=_tuple_numbers(payload, "epsilon_cost_tolerances", minimum=0.0),
         legacy_carbon_weights=_tuple_numbers(payload, "legacy_carbon_weights", minimum=0.0),
+        variable_om_cost_values=variable_om_cost_values,
+        nominal_variable_om_cost=nominal_variable_om_cost,
         scenario_generation=dict(generation),
         acceptance=acceptance_values,
         test_set_accessed=False,
     )
-
 
 def _scenario_inputs(batch: SyntheticScenarioBatch, index: int, benchmark_values: Mapping[str, Any], heat_pump: HeatPumpParameters, gas_price_multiplier: float) -> HeatPumpDispatchInputs:
     parameters = {str(key): value for key, value in benchmark_values.items()}
@@ -166,6 +175,10 @@ def summarize_frontier(records: Sequence[Mapping[str, Any]], contract: HeatPumpF
     successful = len(rows)
     total = len(records)
     nonzero_rows = [row for row in rows if float(row["epsilon"]) > 0.0]
+    nominal_rows = [
+        row for row in nonzero_rows
+        if math.isclose(float(row.get("variable_om_cost", contract.nominal_variable_om_cost)), contract.nominal_variable_om_cost, rel_tol=0.0, abs_tol=1e-12)
+    ]
     reductions = np.asarray([float(row["carbon_reduction_rate"]) for row in nonzero_rows], dtype=np.float64)
     distances = np.asarray([float(row["dispatch_distance"]) for row in nonzero_rows], dtype=np.float64)
     summary = {
@@ -178,6 +191,8 @@ def summarize_frontier(records: Sequence[Mapping[str, Any]], contract: HeatPumpF
         "distinct_dispatch_rate": float(np.mean(distances > 1e-8)) if len(nonzero_rows) else 0.0,
         "emission_reduction_sample_rate": float(np.mean(reductions > 1e-9)) if len(nonzero_rows) else 0.0,
         "median_emission_reduction": float(np.median(reductions)) if len(nonzero_rows) else 0.0,
+        "nominal_variable_om_cost": float(contract.nominal_variable_om_cost),
+        "nominal_nonzero_epsilon_record_count": len(nominal_rows),
         "test_set_accessed": False,
     }
     checks = {
@@ -185,8 +200,8 @@ def summarize_frontier(records: Sequence[Mapping[str, Any]], contract: HeatPumpF
         "physical_feasible_rate": summary["physical_feasible_rate"] >= contract.acceptance["physical_feasible_rate"],
     }
     by_epsilon: dict[str, dict[str, float | bool]] = {}
-    for epsilon in sorted({float(row["epsilon"]) for row in nonzero_rows}):
-        level = [row for row in nonzero_rows if float(row["epsilon"]) == epsilon]
+    for epsilon in sorted({float(row["epsilon"]) for row in nominal_rows}):
+        level = [row for row in nominal_rows if float(row["epsilon"]) == epsilon]
         level_reduction = np.asarray([float(row["carbon_reduction_rate"]) for row in level], dtype=np.float64)
         level_distance = np.asarray([float(row["dispatch_distance"]) for row in level], dtype=np.float64)
         level_metrics = {
@@ -203,6 +218,34 @@ def summarize_frontier(records: Sequence[Mapping[str, Any]], contract: HeatPumpF
     checks["nonzero_epsilon_frontier"] = any(bool(level["passes"]) for level in by_epsilon.values())
     summary["gate_checks"] = checks
     summary["gate_by_epsilon"] = by_epsilon
+    sensitivity: dict[str, dict[str, Any]] = {}
+    for om_cost in contract.variable_om_cost_values:
+        om_rows = [
+            row for row in nonzero_rows
+            if math.isclose(float(row.get("variable_om_cost", contract.nominal_variable_om_cost)), om_cost, rel_tol=0.0, abs_tol=1e-12)
+        ]
+        om_by_epsilon: dict[str, dict[str, float | bool]] = {}
+        for epsilon in sorted({float(row["epsilon"]) for row in om_rows}):
+            level = [row for row in om_rows if float(row["epsilon"]) == epsilon]
+            level_reduction = np.asarray([float(row["carbon_reduction_rate"]) for row in level], dtype=np.float64)
+            level_distance = np.asarray([float(row["dispatch_distance"]) for row in level], dtype=np.float64)
+            metrics = {
+                "distinct_dispatch_rate": float(np.mean(level_distance > 1e-8)) if len(level) else 0.0,
+                "emission_reduction_sample_rate": float(np.mean(level_reduction > 1e-9)) if len(level) else 0.0,
+                "median_emission_reduction": float(np.median(level_reduction)) if len(level) else 0.0,
+            }
+            metrics["passes"] = bool(
+                metrics["distinct_dispatch_rate"] >= contract.acceptance["distinct_dispatch_rate"]
+                and metrics["emission_reduction_sample_rate"] >= contract.acceptance["emission_reduction_sample_rate"]
+                and metrics["median_emission_reduction"] >= contract.acceptance["median_emission_reduction"]
+            )
+            om_by_epsilon[str(epsilon)] = metrics
+        sensitivity[str(om_cost)] = {
+            "nonzero_epsilon_record_count": len(om_rows),
+            "gate_by_epsilon": om_by_epsilon,
+            "passes_any_epsilon": any(bool(level["passes"]) for level in om_by_epsilon.values()),
+        }
+    summary["sensitivity_by_variable_om_cost"] = sensitivity
     summary["decision_status"] = "passed" if all(checks.values()) else "failed_no_identifiable_heat_pump_frontier"
     return summary
 
