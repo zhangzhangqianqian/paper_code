@@ -173,6 +173,18 @@ class JointWindowSplit:
     def __len__(self) -> int:
         return int(self.load_history.shape[0])
 
+    def validate(self) -> None:
+        """Re-run constructor validation for callers loading mutable arrays."""
+
+        type(self)(
+            load_history=self.load_history, exog_history=self.exog_history,
+            device_history=self.device_history, device_status=self.device_status,
+            forecast_target=self.forecast_target, scheduler_context=self.scheduler_context,
+            previous_chp=self.previous_chp, teacher_dispatch=self.teacher_dispatch,
+            oracle_first_step_objective=self.oracle_first_step_objective,
+            target_times=self.target_times, split=self.split, history_source=self.history_source,
+        )
+
     def take(self, indices: Sequence[int]) -> "JointWindowSplit":
         index = np.asarray(indices, dtype=np.int64)
         fields = {
@@ -564,6 +576,8 @@ def load_joint_split(path: str | Path) -> tuple[JointWindowSplit, JointNormaliza
             raise ValueError("normalization artifact is incomplete")
         normalization = None
         if all(present):
+            if "normalization_fitted_split" not in payload:
+                raise ValueError("normalization artifact is missing fitted_split")
             normalization = JointNormalization(
                 **{name: np.asarray(payload[f"normalization_{name}"], dtype=np.float32) for name in norm_fields},
                 fitted_split=str(np.asarray(payload["normalization_fitted_split"]).item()),
