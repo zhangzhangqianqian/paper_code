@@ -186,10 +186,12 @@ def advance_closed_loop_state(
         raise ValueError("outcome dispatch shape does not match state")
     if bess_energy_capacity <= 0.0:
         raise ValueError("bess_energy_capacity must be positive")
-    next_history = torch.cat((previous.device_history[:, 1:, :], dispatch.unsqueeze(1)), dim=1)
-    next_status = torch.cat((previous.device_status[:, 1:, :], _status_from_dispatch(dispatch, status_epsilon).unsqueeze(1)), dim=1)
-    next_soc = (dispatch[:, _I["soc"]] / float(bess_energy_capacity)).clamp(0.0, 1.0).unsqueeze(-1)
-    next_chp = dispatch[:, _I["p_chp"]].unsqueeze(-1)
+    history_dispatch = dispatch.to(dtype=previous.device_history.dtype)
+    status = _status_from_dispatch(dispatch, status_epsilon).to(dtype=previous.device_status.dtype)
+    next_history = torch.cat((previous.device_history[:, 1:, :], history_dispatch.unsqueeze(1)), dim=1)
+    next_status = torch.cat((previous.device_status[:, 1:, :], status.unsqueeze(1)), dim=1)
+    next_soc = (dispatch[:, _I["soc"]] / float(bess_energy_capacity)).clamp(0.0, 1.0).to(dtype=previous.soc.dtype).unsqueeze(-1)
+    next_chp = dispatch[:, _I["p_chp"]].to(dtype=previous.previous_chp.dtype).unsqueeze(-1)
     return ClosedLoopState(next_soc, next_chp, next_history, next_status, previous.load_history, previous.exog_history)
 
 

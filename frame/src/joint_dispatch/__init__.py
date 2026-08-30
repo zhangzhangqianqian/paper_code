@@ -15,6 +15,7 @@ from .data import (
     build_causal_device_trajectory,
     build_joint_windows,
     derive_device_status,
+    fit_joint_normalization,
     load_joint_split,
     save_joint_split,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "build_causal_device_trajectory",
     "build_joint_windows",
     "derive_device_status",
+    "fit_joint_normalization",
     "load_joint_split",
     "save_joint_split",
     "DeviceHistoryEncoder",

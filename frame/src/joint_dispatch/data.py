@@ -33,6 +33,7 @@ SCHEDULER_CONTEXT_ORDER = (
     "carbon_price",
     "initial_soc",
 )
+DEVICE_STATUS_ORDER = STATUS_ORDER
 
 _STATUS_SOURCE = {
     "chp_on": "p_chp",
@@ -315,6 +316,12 @@ class JointNormalization:
         )
 
 
+def fit_joint_normalization(split: JointWindowSplit) -> JointNormalization:
+    """Public contract helper: fit statistics on the train split only."""
+
+    return JointNormalization.fit(split, expected_split="train")
+
+
 @dataclass(frozen=True)
 class LPSolveBenchmark:
     """Fail-closed timing receipt for the offline LP generation budget."""
@@ -567,6 +574,7 @@ def load_joint_split(path: str | Path) -> tuple[JointWindowSplit, JointNormaliza
 
 __all__ = [
     "SCHEDULER_CONTEXT_ORDER",
+    "DEVICE_STATUS_ORDER",
     "STATUS_ORDER",
     "JointNormalization",
     "JointWindowSplit",
@@ -575,6 +583,7 @@ __all__ = [
     "build_causal_device_trajectory",
     "build_joint_windows",
     "derive_device_status",
+    "fit_joint_normalization",
     "load_joint_split",
     "save_joint_split",
 ]
