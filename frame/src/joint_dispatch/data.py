@@ -328,6 +328,7 @@ class LPSolveBenchmark:
     gate_passed: bool
     solver: str = "scipy.optimize.linprog(method='highs')"
     python_version: str = platform.python_version()
+    cpu: str = platform.processor() or platform.machine()
 
     def __post_init__(self) -> None:
         integer_fields = ("solve_count", "success_count", "projected_total_solves")
