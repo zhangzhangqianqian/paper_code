@@ -1,0 +1,73 @@
+{
+  "schema_version": "joint-forecast-dispatch-v1",
+  "lookback": 24,
+  "horizon": 4,
+  "task_order": ["electricity", "cooling", "heating", "gas"],
+  "exog_order": [
+    "temperature", "humidity", "solar_irradiance", "wind_speed", "wind_direction",
+    "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos", "is_weekend"
+  ],
+  "dispatch_order": [
+    "grid", "pv_use", "pv_curt", "wt_use", "wt_curt", "g_chp", "g_gb", "p_chp",
+    "q_chp", "q_gb", "p_ec", "q_ec", "q_ac_in", "q_ac", "p_charge", "p_discharge",
+    "soc", "slack_e", "slack_c", "slack_h", "q_dump"
+  ],
+  "status_order": [
+    "chp_on", "gas_boiler_on", "electric_chiller_on", "absorption_chiller_on",
+    "bess_charge_on", "bess_discharge_on"
+  ],
+  "seeds": [2026, 2027, 2028, 2029, 2030],
+  "forecast_task_weights": [1.0, 1.0, 1.0, 0.25],
+  "variants": [
+    {"name": "joint_from_scratch", "forecasting_trainable": true, "scheduling_trainable": true, "initialization": "random"},
+    {"name": "warm_started_joint", "forecasting_trainable": true, "scheduling_trainable": true, "initialization": "warm_start"},
+    {"name": "frozen_pto", "forecasting_trainable": false, "scheduling_trainable": false, "initialization": "frozen"}
+  ],
+  "curriculum": {
+    "forecast_weight": 1.0,
+    "imitation_start_weight": 1.0,
+    "imitation_final_weight": 0.25,
+    "decision_start_weight": 0.05,
+    "decision_final_weight": 1.0,
+    "ramp_epochs": 20,
+    "rollin_start_fraction": 0.4,
+    "model_history_fraction": 0.5
+  },
+  "warm_start_key_prefixes": {
+    "forecast": [
+      "base.encoders.", "base.step_embeddings.", "base.role_embeddings.", "base.router.",
+      "base.message_projector.", "base.fusion.", "base.head."
+    ],
+    "scheduler": ["residual.", "output_projection."]
+  },
+  "paths": {
+    "kitakyushu_data_dir": "D:/Paper/Kitakyushu dataset",
+    "benchmark_path": "D:/Paper/standard_ies_benchmark_v1.yaml",
+    "parameter_ledger_path": "frame/configs/scheduling_parameter_ledger_v3.csv",
+    "renewable_forecast_root": "D:/Paper/renewable_forecasts_test",
+    "output_root": "frame/reports/joint_forecast_dispatch_v1",
+    "warm_start_forecast_checkpoint": "",
+    "warm_start_scheduler_checkpoint": ""
+  },
+  "selection": {
+    "selection_split": "validation",
+    "rigid_task_indices": [0, 1, 2],
+    "aggregate_wape_relative_max": 1.02,
+    "per_task_wape_relative_max": 1.05,
+    "bootstrap_block_hours": 168,
+    "bootstrap_replicates": 2000,
+    "alpha": 0.05
+  },
+  "resource_gate": {
+    "benchmark_solves": 500,
+    "max_projected_p95_hours": 24.0
+  },
+  "safety": {
+    "online_exact_lp_calls": 0,
+    "test_year": 2021,
+    "normalization_fit_split": "train",
+    "allow_output_overwrite": false,
+    "allow_future_binary_decisions": false,
+    "primary_carbon_loss": false
+  }
+}
