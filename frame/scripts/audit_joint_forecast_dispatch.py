@@ -65,7 +65,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     checks["test_not_accessed_without_selection"] = not ((root / "test").exists() and not selection_receipt.exists())
     if not checks["test_not_accessed_without_selection"]:
         reasons.append("test directory exists without a frozen selection receipt")
-    checks["online_exact_lp_calls_zero"] = True
+    # The sealed test is audited separately from the validation preflight.  It
+    # must exist only after selection, use exactly the selected variant, and
+    # still make no online LP calls.
+    test_receipt_path = root / "test" / "test_receipt.json"
+    checks["test_receipt"] = test_receipt_path.exists()
+    test_set_accessed = False
+    if test_receipt_path.exists() and selection_receipt.exists():
+        test_payload = json.loads(test_receipt_path.read_text(encoding="utf-8"))
+        selection_payload = json.loads(selection_receipt.read_text(encoding="utf-8"))
+        test_set_accessed = bool(test_payload.get("test_set_accessed", False))
+        checks["test_complete"] = bool(test_payload.get("complete", False)) and test_set_accessed
+        checks["test_matches_selection"] = (
+            test_payload.get("selected_variant") == selection_payload.get("selected_variant")
+            and int(test_payload.get("selected_seed", -1)) == int(selection_payload.get("selected_seed", -2))
+        )
+        metrics = test_payload.get("metrics", {})
+        checks["test_finite_state"] = bool(metrics.get("state_finite", False) and metrics.get("forecast_finite", False))
+        checks["test_online_exact_lp_calls_zero"] = int(test_payload.get("online_exact_lp_calls", -1)) == 0
+        if not checks["test_complete"]:
+            reasons.append("sealed test receipt is incomplete")
+        if not checks["test_matches_selection"]:
+            reasons.append("sealed test does not match the frozen selection")
+        if not checks["test_finite_state"]:
+            reasons.append("sealed test contains non-finite state or forecast metrics")
+        if not checks["test_online_exact_lp_calls_zero"]:
+            reasons.append("sealed test reports an online LP call")
+    else:
+        checks["test_complete"] = False
+        checks["test_matches_selection"] = False
+        checks["test_finite_state"] = False
+        checks["test_online_exact_lp_calls_zero"] = False
+        reasons.append("missing sealed test receipt or frozen selection")
+    checks["online_exact_lp_calls_zero"] = checks.get("test_online_exact_lp_calls_zero", True)
     validation_root = root / "validation"
     joint_receipts = [validation_root / "joint_from_scratch" / f"seed_{seed}" / "validation_receipt.json" for seed in contract.seeds]
     checks["joint_validation_receipts"] = all(path.exists() for path in joint_receipts)
@@ -84,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "report_root": str(root.resolve()),
         "checks": checks,
         "reasons": reasons,
-        "test_set_accessed": False,
+        "test_set_accessed": test_set_accessed,
     }
     root.mkdir(parents=True, exist_ok=True)
     (root / "audit_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

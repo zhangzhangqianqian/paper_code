@@ -29,6 +29,27 @@ The final conclusion must be selected from the audited evidence:
 3. joint training did not outperform the frozen PTO baseline under the fixed
    protocol.
 
-No conclusion is valid before `audit_manifest.json` has `status=pass`. Later
-publication work—figures, bilingual manuscript synchronization, typography,
-and final Word rendering—is explicitly outside this implementation scope.
+No conclusion is valid before `audit_manifest.json` has `status=pass`. The
+completed run has `status=pass`, with 500/500 resource-gate LP solves, causal
+2015–2019 training data, 2020 validation, and a sealed 2021 test. The
+from-scratch joint candidates lowered validation decision regret but failed
+the predeclared rigid-task forecast noninferiority gate. Warm-start candidates
+passed the forecast and gradient gates, but their paired 168-hour bootstrap
+for regret relative to from-scratch was −1.83 to 8.89; consequently the
+frozen PTO baseline was selected and evaluated on the sealed test. The
+evidence-dependent conclusion is therefore:
+
+> Joint training did not outperform the frozen PTO baseline under the fixed
+> protocol.
+
+This wording does not erase the diagnostic result that the joint candidates
+had substantially lower validation regret; it records that the improvement
+was not admissible under the simultaneous forecast-and-dispatch acceptance
+rule. Compact recomputable tables are stored under
+`reports/joint_forecast_dispatch_v1/evaluation_tables/`. The five required
+ablation names are registered, but no ablation values are claimed because
+those runs were not executed under the complete protocol.
+
+Later publication work—submission-grade figures, bilingual manuscript
+synchronization, typography, and final Word rendering—is explicitly outside
+this implementation scope.
