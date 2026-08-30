@@ -370,7 +370,7 @@ def load_joint_training_contract(path: str | Path) -> JointTrainingContract:
 
 
 __all__ = [
-    "CURRICULUM_SPEC", "DISPATCH_ORDER", "EXOG_ORDER", "FORECAST_TASK_WEIGHTS", "JointTrainingContract",
+    "DISPATCH_ORDER", "EXOG_ORDER", "FORECAST_TASK_WEIGHTS", "JointTrainingContract",
     "JointVariant", "CurriculumSpec", "STATUS_ORDER", "TASK_ORDER", "WARM_START_PREFIXES",
     "load_joint_training_contract", "validate_joint_contract",
 ]
