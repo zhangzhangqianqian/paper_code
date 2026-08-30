@@ -14,6 +14,7 @@ import torch
 from torch import Tensor, nn
 
 from .contract import JointTrainingContract, JointVariant
+from .data import JointWindowSplit
 from .losses import CurriculumWeights, JointLossBreakdown, joint_forecast_dispatch_loss, weights_for_epoch
 from .model import JointForecastDispatchModel
 from .rollout import ClosedLoopRollout, rollout_joint_policy
@@ -170,6 +171,69 @@ def collect_training_rollin(*args: Any, **kwargs: Any) -> ClosedLoopRollout:
     return rollout_joint_policy(*args, **kwargs)
 
 
+def rollin_refresh_epoch(max_epochs: int, start_fraction: float = 0.4) -> int:
+    if max_epochs <= 0 or not 0.0 < start_fraction < 1.0:
+        raise ValueError("max_epochs must be positive and start_fraction must be in (0,1)")
+    # Refresh only after at least one initial LP-history epoch has completed;
+    # this keeps short smoke runs from collecting a roll-in before the policy
+    # has taken a gradient step.  For the formal 3+ epoch protocol this is
+    # exactly floor(0.4 * epochs).
+    return max(1, int(np.floor(float(max_epochs) * float(start_fraction))))
+
+
+def mix_history_windows(
+    lp_history: JointWindowSplit,
+    model_history: JointWindowSplit,
+    *,
+    model_history_fraction: float = 0.5,
+    seed: int = 2026,
+) -> JointWindowSplit:
+    """Sample a reproducible LP/model-history mixture for train only."""
+
+    if lp_history.split != "train" or model_history.split != "train":
+        raise ValueError("history mixing is legal only for train splits")
+    if lp_history.history_source != "causal_lp" or model_history.history_source != "joint_policy_rollin":
+        raise ValueError("history sources must be causal_lp and joint_policy_rollin")
+    if not 0.0 <= model_history_fraction <= 1.0:
+        raise ValueError("model_history_fraction must be in [0,1]")
+    total = min(len(lp_history), len(model_history))
+    if total <= 0:
+        raise ValueError("cannot mix empty histories")
+    model_count = int(round(total * model_history_fraction))
+    lp_count = total - model_count
+    rng = np.random.default_rng(seed)
+    # LP and roll-in artifacts are generated for the same target origins.  A
+    # mixture therefore selects the history source *per origin*; concatenating
+    # both copies would create duplicate target timestamps and violate the
+    # chronological-window contract.  If origins differ, fail closed rather
+    # than silently pairing the wrong future teacher with a history window.
+    lp_times = np.asarray(lp_history.target_times, dtype="datetime64[ns]")
+    model_times = np.asarray(model_history.target_times, dtype="datetime64[ns]")
+    if not np.array_equal(np.sort(lp_times), np.sort(model_times)):
+        raise ValueError("LP and roll-in histories must share identical target origins")
+    lp_by_time = {time: idx for idx, time in enumerate(lp_times)}
+    model_by_time = {time: idx for idx, time in enumerate(model_times)}
+    origins = np.sort(lp_times)
+    model_positions = set(rng.choice(len(origins), size=model_count, replace=False).tolist()) if model_count else set()
+    selected = []
+    for position, time in enumerate(origins):
+        source = model_history if position in model_positions else lp_history
+        index = (model_by_time if source is model_history else lp_by_time)[time]
+        selected.append((source, index))
+    fields = {}
+    names = (
+        "load_history", "exog_history", "device_history", "device_status", "forecast_target",
+        "scheduler_context", "previous_chp", "teacher_dispatch", "oracle_first_step_objective", "target_times",
+    )
+    for name in names:
+        fields[name] = np.stack([getattr(source, name)[index] for source, index in selected], axis=0)
+    return JointWindowSplit(
+        **fields,
+        split="train",
+        history_source="joint_policy_rollin",
+    )
+
+
 def _atomic_torch_save(payload: Mapping[str, Any], destination: Path) -> None:
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     with temporary.open("wb") as handle:
@@ -190,6 +254,7 @@ def save_joint_checkpoint(
     data_hash: str = "",
     gradient_audit: GradientCouplingAudit | None = None,
     best_validation_score: float | None = None,
+    loss_weights: Mapping[str, float] | None = None,
 ) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -199,6 +264,8 @@ def save_joint_checkpoint(
         "epoch": int(epoch), "variant": str(variant), "seed": int(seed),
         "contract_hash": str(contract_hash), "normalization_hash": str(normalization_hash),
         "data_hash": str(data_hash), "best_validation_score": best_validation_score,
+        "loss_weights": None if loss_weights is None else dict(loss_weights),
+        "lr_scheduler": None,
         "gradient_audit": None if gradient_audit is None else asdict(gradient_audit),
         "test_set_accessed": False,
         "rng_state": {
@@ -226,7 +293,7 @@ def load_allowed_warm_start(
     raw = source.read_bytes()
     source_hash = hashlib.sha256(raw).hexdigest()
     payload = torch.load(source, map_location="cpu", weights_only=False)
-    state = payload.get("model", payload)
+    state = payload.get("model", payload.get("model_state_dict", payload))
     if not isinstance(state, Mapping):
         raise ValueError("checkpoint model state must be a mapping")
     current = model.state_dict()
@@ -235,16 +302,29 @@ def load_allowed_warm_start(
     rejected: list[str] = []
     for raw_name, value in state.items():
         name = str(raw_name)
-        normalized = name.removeprefix("forecaster.")
-        admitted = any(normalized.startswith(prefix) for prefix in forecast_prefixes) or any(name.startswith(prefix) for prefix in scheduler_prefixes)
-        if not admitted:
+        # Legacy Scheme2R checkpoints predate the connected wrapper and use
+        # ``encoders.*``/``router.*`` at the root.  Admit them only through the
+        # exact forecast whitelist after mapping into ``forecaster.base.*``;
+        # newly added device/state-fusion/scheduler-input parameters remain
+        # random by construction.
+        candidate_names = [name]
+        if not name.startswith("forecaster.") and not name.startswith("scheduler."):
+            candidate_names.append(f"forecaster.base.{name}")
+        selected_name = None
+        for candidate in candidate_names:
+            normalized = candidate.removeprefix("forecaster.")
+            admitted = any(normalized.startswith(prefix) for prefix in forecast_prefixes) or any(candidate.startswith(prefix) for prefix in scheduler_prefixes)
+            if admitted and candidate in current:
+                selected_name = candidate
+                break
+        if selected_name is None:
             rejected.append(name)
             continue
-        if name not in current or tuple(current[name].shape) != tuple(value.shape):
+        if tuple(current[selected_name].shape) != tuple(value.shape):
             skipped.append(name)
             continue
-        current[name].copy_(value)
-        loaded.append(name)
+        current[selected_name].copy_(value)
+        loaded.append(selected_name)
     model.load_state_dict(current)
     return WarmStartReceipt(tuple(sorted(loaded)), tuple(sorted(skipped)), tuple(sorted(rejected)), source_hash)
 
@@ -272,5 +352,6 @@ def run_joint_training(
 __all__ = [
     "GradientCouplingAudit", "JointStepResult", "WarmStartReceipt",
     "build_joint_optimizer", "collect_training_rollin", "joint_train_step",
-    "load_allowed_warm_start", "run_joint_training", "save_joint_checkpoint",
+    "load_allowed_warm_start", "mix_history_windows", "rollin_refresh_epoch",
+    "run_joint_training", "save_joint_checkpoint",
 ]

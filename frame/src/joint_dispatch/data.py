@@ -81,6 +81,32 @@ def _prepare_table(table: pd.DataFrame, required: Sequence[str], name: str) -> p
     return working
 
 
+def _prepare_origin_table(
+    table: pd.DataFrame,
+    required: Sequence[str],
+    name: str,
+) -> pd.DataFrame:
+    """Prepare a table whose future rows are keyed by forecast origin.
+
+    The ordinary hourly tables are keyed by target timestamp only.  Forecast
+    driven dispatch needs a second key because two different origins can
+    produce different PV/WT forecasts for the same target hour.  Keeping the
+    origin explicit prevents an accidental many-to-one merge or a future
+    value from being reused for the wrong window.
+    """
+
+    missing = [column for column in ("origin_timestamp", *required) if column not in table.columns]
+    if missing:
+        raise ValueError(f"{name} missing columns: {missing}")
+    working = table.loc[:, ["origin_timestamp", *required]].copy()
+    working["origin_timestamp"] = pd.to_datetime(working["origin_timestamp"], errors="raise")
+    working["timestamp"] = pd.to_datetime(working["timestamp"], errors="raise")
+    if working[["origin_timestamp", "timestamp"]].duplicated().any():
+        raise ValueError(f"{name} contains duplicate origin/target pairs")
+    working = working.sort_values(["origin_timestamp", "timestamp"]).reset_index(drop=True)
+    return working
+
+
 def _assert_same_timestamps(tables: Iterable[pd.DataFrame]) -> np.ndarray:
     iterator = iter(tables)
     first = next(iterator)["timestamp"].to_numpy(dtype="datetime64[ns]")
@@ -217,19 +243,73 @@ def build_joint_windows(
         raise ValueError("the joint contract fixes lookback=24 and horizon=4")
     base = _prepare_table(frame, ("timestamp", *TASK_ORDER, *EXOG_ORDER), "forecast frame")
     device = _prepare_table(device_trajectory, ("timestamp", *DISPATCH_ORDER), "device trajectory")
-    context = _prepare_table(scheduler_context, ("timestamp", *SCHEDULER_CONTEXT_ORDER), "scheduler context")
-    teacher = _prepare_table(teacher_dispatch, ("timestamp", *DISPATCH_ORDER), "teacher dispatch")
-    oracle = _prepare_table(oracle_first_step_objective, ("timestamp", "oracle_first_step_objective"), "oracle objective")
-    timestamps = _assert_same_timestamps((base, device, context, teacher, oracle))
+    origin_columns = (
+        "origin_timestamp" in scheduler_context.columns,
+        "origin_timestamp" in teacher_dispatch.columns,
+        "origin_timestamp" in oracle_first_step_objective.columns,
+    )
+    if any(origin_columns) and not all(origin_columns):
+        raise ValueError("origin_timestamp must be supplied for context, teacher, and oracle together")
+    origin_specific = all(origin_columns)
+    if origin_specific:
+        context = _prepare_origin_table(
+            scheduler_context, ("timestamp", *SCHEDULER_CONTEXT_ORDER), "scheduler context"
+        )
+        teacher = _prepare_origin_table(
+            teacher_dispatch, ("timestamp", *DISPATCH_ORDER), "teacher dispatch"
+        )
+        oracle = _prepare_origin_table(
+            oracle_first_step_objective, ("timestamp", "oracle_first_step_objective"), "oracle objective"
+        )
+        # Only the historical streams have one row per timestamp.  A causal
+        # device trajectory may legitimately stop three hours before the end
+        # of the raw frame because no four-hour LP horizon remains.  Align it
+        # to the base index with NaN tail sentinels; windows touching a missing
+        # history row are rejected below rather than silently imputed.
+        base_timestamps = base["timestamp"].to_numpy(dtype="datetime64[ns]")
+        device_timestamps = device["timestamp"].to_numpy(dtype="datetime64[ns]")
+        if not np.all(np.isin(device_timestamps, base_timestamps)):
+            raise ValueError("device trajectory contains timestamps outside forecast frame")
+        timestamps = base_timestamps
+    else:
+        context = _prepare_table(scheduler_context, ("timestamp", *SCHEDULER_CONTEXT_ORDER), "scheduler context")
+        teacher = _prepare_table(teacher_dispatch, ("timestamp", *DISPATCH_ORDER), "teacher dispatch")
+        oracle = _prepare_table(oracle_first_step_objective, ("timestamp", "oracle_first_step_objective"), "oracle objective")
+        timestamps = _assert_same_timestamps((base, device, context, teacher, oracle))
     if len(timestamps) < lookback + horizon:
         raise ValueError("aligned data is shorter than one joint window")
     lower, upper = _window_bounds(split, split_spec)
     task_values = base[list(TASK_ORDER)].to_numpy(dtype=np.float32)
     exog_values = base[list(EXOG_ORDER)].to_numpy(dtype=np.float32)
-    device_values = device[list(DISPATCH_ORDER)].to_numpy(dtype=np.float32)
-    context_values = context[list(SCHEDULER_CONTEXT_ORDER)].to_numpy(dtype=np.float32)
-    teacher_values = teacher[list(DISPATCH_ORDER)].to_numpy(dtype=np.float32)
-    oracle_values = oracle["oracle_first_step_objective"].to_numpy(dtype=np.float32)
+    raw_device_values = device[list(DISPATCH_ORDER)].to_numpy(dtype=np.float32)
+    if origin_specific and not np.array_equal(
+        device["timestamp"].to_numpy(dtype="datetime64[ns]"),
+        timestamps,
+    ):
+        device_values = np.full((len(timestamps), len(DISPATCH_ORDER)), np.nan, dtype=np.float32)
+        device_position = {time: index for index, time in enumerate(device["timestamp"].to_numpy(dtype="datetime64[ns]"))}
+        for position, time in enumerate(timestamps):
+            source_index = device_position.get(time)
+            if source_index is not None:
+                device_values[position] = raw_device_values[source_index]
+    else:
+        device_values = raw_device_values
+    context_values = None if origin_specific else context[list(SCHEDULER_CONTEXT_ORDER)].to_numpy(dtype=np.float32)
+    teacher_values = None if origin_specific else teacher[list(DISPATCH_ORDER)].to_numpy(dtype=np.float32)
+    oracle_values = None if origin_specific else oracle["oracle_first_step_objective"].to_numpy(dtype=np.float32)
+    if origin_specific:
+        context_groups = {
+            np.datetime64(origin, "ns"): group.sort_values("timestamp")
+            for origin, group in context.groupby("origin_timestamp", sort=False)
+        }
+        teacher_groups = {
+            np.datetime64(origin, "ns"): group.sort_values("timestamp")
+            for origin, group in teacher.groupby("origin_timestamp", sort=False)
+        }
+        oracle_groups = {
+            np.datetime64(origin, "ns"): group.sort_values("timestamp")
+            for origin, group in oracle.groupby("origin_timestamp", sort=False)
+        }
     one_hour = np.timedelta64(1, "h")
     loads: list[np.ndarray] = []
     exogs: list[np.ndarray] = []
@@ -251,14 +331,37 @@ def build_joint_windows(
         target_last = pd.Timestamp(times[-1])
         if target_time < lower or target_last > upper:
             continue
+        if not np.isfinite(device_values[start:end]).all():
+            continue
+        origin_key = np.datetime64(times[lookback], "ns")
+        if origin_specific:
+            target_times_for_window = np.asarray(times[lookback:target_end], dtype="datetime64[ns]")
+            context_group = context_groups.get(origin_key)
+            teacher_group = teacher_groups.get(origin_key)
+            oracle_group = oracle_groups.get(origin_key)
+            if context_group is None or teacher_group is None or oracle_group is None:
+                continue
+            context_target_times = context_group["timestamp"].to_numpy(dtype="datetime64[ns]")
+            teacher_target_times = teacher_group["timestamp"].to_numpy(dtype="datetime64[ns]")
+            oracle_target_times = oracle_group["timestamp"].to_numpy(dtype="datetime64[ns]")
+            if not np.array_equal(context_target_times, target_times_for_window):
+                continue
+            if not np.array_equal(teacher_target_times, target_times_for_window):
+                continue
+            if oracle_target_times.shape != (1,) or oracle_target_times[0] != target_times_for_window[0]:
+                continue
+            contexts.append(context_group[list(SCHEDULER_CONTEXT_ORDER)].to_numpy(dtype=np.float32))
+            teachers.append(teacher_group[list(DISPATCH_ORDER)].to_numpy(dtype=np.float32))
+            oracles.append(float(oracle_group["oracle_first_step_objective"].iloc[0]))
+        else:
+            contexts.append(context_values[end:target_end])
+            teachers.append(teacher_values[end:target_end])
+            oracles.append(float(oracle_values[end]))
         loads.append(task_values[start:end])
         exogs.append(exog_values[start:end])
         devices.append(device_values[start:end])
         targets.append(task_values[end:target_end])
-        contexts.append(context_values[end:target_end])
         previous_chp.append(float(device_values[end - 1, chp_idx]))
-        teachers.append(teacher_values[end:target_end])
-        oracles.append(float(oracle_values[end]))
         target_times.append(times[lookback])
     n = len(loads)
     empty = lambda tail, dtype=np.float32: np.empty((0, *tail), dtype=dtype)

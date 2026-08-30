@@ -37,14 +37,46 @@ def main(argv: Sequence[str] | None = None) -> int:
     checks["smoke_gate_receipt"] = smoke_receipt.exists()
     if not smoke_receipt.exists():
         reasons.append("smoke gate has not produced a complete receipt")
+    elif not bool(json.loads(smoke_receipt.read_text(encoding="utf-8")).get("complete", False)):
+        checks["smoke_gate_complete"] = False
+        reasons.append("smoke receipt is present but incomplete")
+    else:
+        checks["smoke_gate_complete"] = True
+    data_receipt = root / "data" / "data_build_receipt.json"
+    checks["formal_data_receipt"] = data_receipt.exists()
+    if data_receipt.exists():
+        data_payload = json.loads(data_receipt.read_text(encoding="utf-8"))
+        checks["formal_data_complete"] = bool(data_payload.get("formal", False)) and not bool(data_payload.get("test_set_accessed", False))
+        checks["origin_keyed_future_context"] = bool(data_payload.get("origin_keyed_future_context", False))
+        checks["causal_history_source"] = data_payload.get("history_source") == "causal_lp"
+        if not checks["formal_data_complete"]:
+            reasons.append("formal data receipt is incomplete or test-contaminated")
+    else:
+        reasons.append("missing formal data build receipt")
     selection_receipt = root / "selection" / "selection_receipt.json"
     checks["selection_receipt"] = selection_receipt.exists()
     if not selection_receipt.exists():
         reasons.append("validation selection receipt is not frozen")
+    elif not bool(json.loads(selection_receipt.read_text(encoding="utf-8")).get("complete", False)):
+        checks["selection_complete"] = False
+        reasons.append("selection receipt is present but incomplete")
+    else:
+        checks["selection_complete"] = True
     checks["test_not_accessed_without_selection"] = not ((root / "test").exists() and not selection_receipt.exists())
     if not checks["test_not_accessed_without_selection"]:
         reasons.append("test directory exists without a frozen selection receipt")
     checks["online_exact_lp_calls_zero"] = True
+    validation_root = root / "validation"
+    joint_receipts = [validation_root / "joint_from_scratch" / f"seed_{seed}" / "validation_receipt.json" for seed in contract.seeds]
+    checks["joint_validation_receipts"] = all(path.exists() for path in joint_receipts)
+    if checks["joint_validation_receipts"]:
+        joint_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in joint_receipts]
+        checks["joint_rollin_refresh"] = all(bool(item.get("rollin_refresh", {}).get("implemented", False)) for item in joint_payloads)
+        checks["joint_validation_no_online_lp"] = all(int(item.get("metrics", {}).get("online_exact_lp_calls", 1)) == 0 and not bool(item.get("test_set_accessed", True)) for item in joint_payloads)
+        if not checks["joint_rollin_refresh"]:
+            reasons.append("one or more joint validation candidates lacks the required training-only roll-in refresh")
+    else:
+        reasons.append("missing one or more five-seed joint validation receipts")
     status = "pass" if all(checks.values()) else "blocked"
     manifest = {
         "status": status,

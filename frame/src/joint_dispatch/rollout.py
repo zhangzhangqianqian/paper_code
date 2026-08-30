@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import torch
 from torch import Tensor
@@ -54,6 +54,7 @@ class ClosedLoopState:
 class ClosedLoopRollout:
     outcomes: tuple[RealizedFirstStepOutcome, ...]
     states: tuple[ClosedLoopState, ...]
+    forecasts: tuple[Tensor, ...] = ()
 
 
 def _status_from_dispatch(dispatch: Tensor, epsilon: float) -> Tensor:
@@ -202,16 +203,41 @@ def rollout_joint_policy(
     parameters: Mapping[str, Any],
     *,
     reveal_realized_load_after_action: bool = True,
+    retain_states: bool = True,
+    state_callback: Callable[[ClosedLoopState], None] | None = None,
 ) -> ClosedLoopRollout:
     """Run a model-generated closed loop with zero LP calls."""
 
     loads = hourly_inputs["loads"]
+    # ``loads`` are the realized physical demands used by recourse.  During
+    # training/evaluation the model's history buffer may be normalized, so a
+    # separate causal representation can be supplied for the post-action
+    # history update.  Keeping these two streams explicit prevents mixing raw
+    # and normalized values after the first rollout step.
+    loads_for_history = hourly_inputs.get("loads_for_history", loads)
+    device_history_mean = hourly_inputs.get("device_history_mean")
+    device_history_scale = hourly_inputs.get("device_history_scale")
     exog = hourly_inputs["exog"]
     pv = hourly_inputs["pv_available"]
     wt = hourly_inputs["wt_available"]
-    for name, value in (("loads", loads), ("exog", exog), ("pv_available", pv), ("wt_available", wt)):
+    for name, value in (("loads", loads), ("exog", exog)):
         if not isinstance(value, Tensor) or value.ndim < 2:
-            raise ValueError(f"hourly_inputs[{name}] must be a tensor")
+            raise ValueError(f"hourly_inputs[{name}] must be a tensor with a feature dimension")
+    if not isinstance(loads_for_history, Tensor) or loads_for_history.shape != loads.shape:
+        raise ValueError("hourly_inputs[loads_for_history] must match loads shape")
+    if (device_history_mean is None) != (device_history_scale is None):
+        raise ValueError("device_history_mean and device_history_scale must be supplied together")
+    if device_history_mean is not None:
+        state_dtype = initial_state.device_history.dtype
+        device_history_mean = torch.as_tensor(device_history_mean, dtype=state_dtype, device=initial_state.device_history.device)
+        device_history_scale = torch.as_tensor(device_history_scale, dtype=state_dtype, device=initial_state.device_history.device)
+        if device_history_mean.shape != (len(VARIABLES),) or device_history_scale.shape != (len(VARIABLES),):
+            raise ValueError("device history normalization vectors must have shape [21]")
+        if bool((device_history_scale <= 0).any()) or not bool(torch.isfinite(device_history_mean).all() and torch.isfinite(device_history_scale).all()):
+            raise ValueError("device history normalization vectors must be finite and positive")
+    for name, value in (("pv_available", pv), ("wt_available", wt)):
+        if not isinstance(value, Tensor) or value.ndim != 1:
+            raise ValueError(f"hourly_inputs[{name}] must be a one-dimensional tensor")
     total = loads.shape[0]
     if loads.shape[-1] != 4 or exog.shape[0] != total or pv.shape[0] != total or wt.shape[0] != total:
         raise ValueError("hourly input lengths/tasks are inconsistent")
@@ -219,10 +245,13 @@ def rollout_joint_policy(
         raise ValueError("initial state must contain a 24-hour history")
     state = initial_state
     outcomes: list[RealizedFirstStepOutcome] = []
-    states: list[ClosedLoopState] = [state]
+    states: list[ClosedLoopState] = [state] if retain_states else []
+    forecasts: list[Tensor] = []
     for current in range(total):
         if current + 4 > total:
             break
+        if state_callback is not None:
+            state_callback(state)
         soc_column = state.soc.reshape(-1)[0].expand(4)
         context = torch.stack(
             (
@@ -245,6 +274,7 @@ def rollout_joint_policy(
             scheduler_context=context,
             previous_chp=state.previous_chp,
         )
+        forecasts.append(model_output.forecast_physical.detach())
         actual = loads[current].reshape(1, 4)
         outcome = apply_first_step_recourse(
             model_output.dispatch[:, 0, :], actual[:, :3], pv[current].reshape(1), wt[current].reshape(1), parameters,
@@ -254,20 +284,35 @@ def rollout_joint_policy(
         state = advance_closed_loop_state(
             state, outcome, bess_energy_capacity=_param(parameters, "bess_energy_capacity", 1.0)
         )
+        if device_history_mean is not None:
+            # The model consumes normalized device histories.  The shared
+            # state transition is intentionally raw, so normalize only the
+            # newly revealed row before the next model call.
+            normalized_dispatch = ((outcome.realized_dispatch - device_history_mean) / device_history_scale).to(dtype=state.device_history.dtype)
+            next_device_history = torch.cat((state.device_history[:, 1:, :], normalized_dispatch.unsqueeze(1)), dim=1)
+            state = ClosedLoopState(
+                state.soc, state.previous_chp, next_device_history,
+                state.device_status, state.load_history, state.exog_history,
+            )
         # The realized current load is revealed only after action.  Keep the
         # 24-hour buffers explicit so the next model call cannot see future
         # realized demand.
         if state.load_history is not None:
-            next_load = torch.cat((state.load_history[:, 1:, :], actual[:, :3].unsqueeze(1)), dim=1)
+            # The forecaster consumes the four-task history (including the
+            # station-side gas task); recourse itself uses only the first three
+            # physical demands above.
+            observed_load = loads_for_history[current].reshape(1, 4).to(dtype=state.load_history.dtype)
+            next_load = torch.cat((state.load_history[:, 1:, :], observed_load.unsqueeze(1)), dim=1)
             state = ClosedLoopState(state.soc, state.previous_chp, state.device_history, state.device_status, next_load, state.exog_history)
         if state.exog_history is not None and "exog" in hourly_inputs:
             exog_now = hourly_inputs["exog"][current].reshape(1, -1)
             next_exog = torch.cat((state.exog_history[:, 1:, :], exog_now.unsqueeze(1)), dim=1)
             state = ClosedLoopState(state.soc, state.previous_chp, state.device_history, state.device_status, state.load_history, next_exog)
-        states.append(state)
+        if retain_states:
+            states.append(state)
         if not reveal_realized_load_after_action:
             raise ValueError("rollout requires reveal_realized_load_after_action=True")
-    return ClosedLoopRollout(tuple(outcomes), tuple(states))
+    return ClosedLoopRollout(tuple(outcomes), tuple(states), tuple(forecasts))
 
 
 __all__ = [
