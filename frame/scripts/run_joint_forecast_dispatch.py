@@ -16,6 +16,66 @@ if str(FRAME_ROOT) not in sys.path:
 from src.joint_dispatch.contract import load_joint_training_contract
 
 
+def _run_smoke(data_root: Path, output_dir: Path, limit: int, contract) -> dict[str, object]:
+    import numpy as np
+    import torch
+    import yaml
+
+    from src.joint_dispatch.data import JointNormalization, load_joint_split
+    from src.joint_dispatch.model import JointForecastDispatchModel
+    from src.joint_dispatch.training import build_joint_optimizer, joint_train_step
+
+    train, normalization, _ = load_joint_split(data_root / "train.npz")
+    validation, _, _ = load_joint_split(data_root / "validation.npz")
+    if normalization is None:
+        normalization = JointNormalization.fit(train)
+    train_norm = normalization.transform(train).take(np.arange(min(limit, len(train))))
+    validation_norm = normalization.transform(validation).take(np.arange(min(max(1, limit // 2), len(validation))))
+    benchmark = yaml.safe_load(contract.path("benchmark_path").read_text(encoding="utf-8"))
+    model = JointForecastDispatchModel(
+        task_mean=torch.from_numpy(normalization.load_mean),
+        task_scale=torch.from_numpy(normalization.load_scale),
+        physical_feature_mean=torch.from_numpy(np.concatenate((normalization.load_mean, normalization.scheduler_mean))),
+        physical_feature_scale=torch.from_numpy(np.concatenate((normalization.load_scale, normalization.scheduler_scale))),
+        decoder_parameters=benchmark["values"],
+        dropout=0.0,
+    )
+    optimizer = build_joint_optimizer(model, variant="joint_from_scratch")
+    tensors = {
+        "load_history": torch.from_numpy(train_norm.load_history),
+        "exog_history": torch.from_numpy(train_norm.exog_history),
+        "device_history": torch.from_numpy(train_norm.device_history),
+        "device_status": torch.from_numpy(train_norm.device_status),
+        "scheduler_context": torch.from_numpy(train.scheduler_context[: len(train_norm)]),
+        "previous_chp": torch.from_numpy(train_norm.previous_chp),
+        "target_normalized": torch.from_numpy(train_norm.forecast_target),
+        "target_physical": torch.from_numpy(train.forecast_target[: len(train_norm)]),
+        "teacher_dispatch": torch.from_numpy(train.teacher_dispatch[: len(train_norm)]),
+        "oracle_first_step_objective": torch.from_numpy(train.oracle_first_step_objective[: len(train_norm)]),
+    }
+    before = [parameter.detach().clone() for parameter in model.parameters()]
+    records = []
+    for epoch in range(3):
+        records.append(joint_train_step(model, tensors, benchmark["values"], optimizer, epoch=epoch))
+    after = list(model.parameters())
+    changed = any(not torch.equal(old, new.detach()) for old, new in zip(before, after))
+    latest = records[-1]
+    finite = all(bool(torch.isfinite(value).all()) for value in (latest.loss.total, latest.loss.forecast, latest.loss.imitation, latest.loss.regret))
+    receipt = {
+        "stage": "smoke", "formal": False, "complete": bool(finite and changed and latest.gradient_audit.forecaster_nonzero and latest.gradient_audit.scheduler_nonzero),
+        "train_windows": len(train_norm), "validation_windows": len(validation_norm), "epochs": 3,
+        "dispatch_shape": [len(train_norm), 4, 21], "online_exact_lp_calls": 0,
+        "finite_losses": finite, "parameters_changed": changed,
+        "forecaster_gradient_nonzero": latest.gradient_audit.forecaster_nonzero,
+        "scheduler_gradient_nonzero": latest.gradient_audit.scheduler_nonzero,
+        "decision_only_forecaster_gradient": latest.gradient_audit.forecaster_norm_from_decision_only,
+        "closed_loop_48h": False,
+        "closed_loop_reason": "hourly rollout stream is not stored in the window-only smoke artifact",
+    }
+    (output_dir / "smoke_receipt.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
+    return receipt
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", type=Path, default=Path("configs/joint_forecast_dispatch_contract_v1.json"))
@@ -73,7 +133,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             import torch  # noqa: F401
         except ImportError as exc:
             raise SystemExit("smoke stage requires optional PyTorch; no experiment was started") from exc
-        raise SystemExit("smoke execution is intentionally gated until the resource receipt is present")
+        resource = output_dir.parent / "resource_benchmark" / "resource_benchmark_receipt.json"
+        if not resource.exists():
+            raise SystemExit("smoke execution requires the passing 500-solve resource receipt")
+        receipt = _run_smoke(data_root, output_dir, int(args.smoke_limit), contract)
+        print(json.dumps(receipt, ensure_ascii=False, indent=2))
+        return 0 if receipt["complete"] else 2
     if args.stage == "validation":
         if (data_root / "test.npz").exists():
             raise SystemExit("validation stage must not read the sealed test split")
