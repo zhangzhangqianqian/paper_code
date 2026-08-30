@@ -49,5 +49,6 @@ def test_one_optimizer_step_updates_forecaster_and_scheduler():
 
 def test_frozen_variant_has_no_optimizer():
     model = JointForecastDispatchModel.for_test()
-    assert build_joint_optimizer(model, variant="frozen_pto") is None
+    optimizer = build_joint_optimizer(model, variant="frozen_pto")
+    assert optimizer is None
     assert all(not parameter.requires_grad for parameter in model.parameters())

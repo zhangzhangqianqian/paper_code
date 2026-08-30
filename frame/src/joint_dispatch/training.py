@@ -133,12 +133,15 @@ def joint_train_step(
         weights,
     )
     decision_term = breakdown.regret + breakdown.shortage
-    decision_grads = torch.autograd.grad(
-        decision_term,
-        tuple(model.forecaster.parameters()),
-        allow_unused=True,
-        retain_graph=True,
-    )
+    if decision_term.requires_grad:
+        decision_grads = torch.autograd.grad(
+            decision_term,
+            tuple(model.forecaster.parameters()),
+            allow_unused=True,
+            retain_graph=True,
+        )
+    else:
+        decision_grads = tuple(None for _ in model.forecaster.parameters())
     decision_norms = [value.detach().float().norm() for value in decision_grads if value is not None]
     forecaster_decision_norm = float(torch.stack(decision_norms).norm().item()) if decision_norms else 0.0
     if optimizer is None:
