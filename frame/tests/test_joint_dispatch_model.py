@@ -37,12 +37,13 @@ def test_softplus_physical_conversion_is_smooth_and_finite():
 
 def test_dispatch_gradient_reaches_both_networks():
     model = JointForecastDispatchModel.for_test(exog_dim=12)
+    context = torch.tensor([0.0, 0.0, 1.0, 1.0, 1.0, 0.5]).reshape(1, 1, 6).expand(2, 4, 6).clone()
     output = model(
         load_history=torch.randn(2, 24, 4),
         exog_history=torch.randn(2, 24, 12),
         device_history=torch.randn(2, 24, 21),
         device_status=torch.zeros(2, 24, 6),
-        scheduler_context=torch.ones(2, 4, 6),
+        scheduler_context=context,
         previous_chp=torch.zeros(2, 1),
     )
     output.dispatch[..., 0].sum().backward()

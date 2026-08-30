@@ -164,8 +164,10 @@ class JointWindowSplit:
             raise ValueError("device_status must be binary")
         if self.split not in {"train", "validation", "test"}:
             raise ValueError("split must be train, validation, or test")
-        if not self.history_source:
-            raise ValueError("history_source must not be empty")
+        if self.history_source not in {"causal_lp", "joint_policy_rollin"}:
+            raise ValueError("history_source must be causal_lp or joint_policy_rollin")
+        if self.history_source == "joint_policy_rollin" and self.split != "train":
+            raise ValueError("joint_policy_rollin histories are legal only for train")
 
     def __len__(self) -> int:
         return int(self.load_history.shape[0])
