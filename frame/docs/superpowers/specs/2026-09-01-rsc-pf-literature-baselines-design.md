@@ -21,7 +21,9 @@ The search must fill exactly three external slots:
 
 1. `External-Forecast-PTO`: a published strong forecasting method followed by the same exact rolling LP used by the internal PTO methods.
 2. `External-Decision-Focused`: a published decision-focused or differentiable-optimization method in which decision loss influences the predictor or decision layer.
-3. `External-Direct-Policy`: a published end-to-end learned policy or forecast-to-decision network that produces continuous dispatch decisions without requiring a separately trained load predictor at inference.
+3. `External-Direct-Policy`: a published end-to-end learned policy or forecast-to-decision network whose deployed forward pass produces continuous dispatch decisions without an exact optimizer at inference. It may expose an explicit intermediate forecast head; “direct” does not mean “forecast-free.”
+
+If a candidate appears compatible with both joint slots, assign it to `External-Direct-Policy` when its deployed network directly emits dispatch without an exact optimizer. Otherwise, when decision gradients are supplied through a differentiable optimizer, implicit gradient, SPO-style loss, or documented decision surrogate, assign it to `External-Decision-Focused`.
 
 Each slot must contain one exact paper and one exact implementation identity before training begins. A slot remains unfilled if no paper passes the compatibility gate; the pipeline then stops rather than inventing a weak or misleading baseline.
 
@@ -50,7 +52,7 @@ Fatal exclusion criteria are:
 
 Candidates that pass fatal screening receive a 100-point score:
 
-- forecast–decision coupling relevance: 25;
+- slot-specific core-method fit: 25—forecasting relevance for `External-Forecast-PTO`, verified decision-gradient coupling for `External-Decision-Focused`, and a unified optimizer-free dispatch forward path for `External-Direct-Policy`;
 - compatibility with continuous rolling dispatch: 20;
 - reproducibility from code/equations: 20;
 - fairness under the RSC-PF information set: 15;
@@ -58,7 +60,7 @@ Candidates that pass fatal screening receive a 100-point score:
 - recency: 5;
 - projected compute/resource fit: 5.
 
-The highest-scoring candidate in each slot is selected only if it scores at least 70. Ties are broken by reproducibility, then coupling relevance, then recency. The complete score table remains part of the evidence package.
+The highest-scoring candidate in each slot is selected only if it scores at least 70 overall, at least 18/25 for slot-specific core-method fit, at least 14/20 for reproducibility, and at least 10/15 for information fairness. Ties are broken by reproducibility, then slot fit, then recency. The same paper cannot fill two slots. The complete score table remains part of the evidence package.
 
 ## Reproduction Levels
 

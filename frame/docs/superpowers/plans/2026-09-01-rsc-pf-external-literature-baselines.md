@@ -1,5 +1,7 @@
 # RSC-PF External Literature Baselines Implementation Plan
 
+> **Audit status (2026-09-01):** Retained as the overall comparison roadmap, not as the first executable plan. Tasks 4–11 depend on exact papers that are not yet frozen. Execute `docs/superpowers/plans/2026-09-01-rsc-pf-external-baseline-selection.md` first; generate a source-specific reproduction/training plan only after its Task 5 audit authorizes handoff.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Select, reproduce, and formally compare three published forecast–scheduling baselines against the frozen RSC-PF model under one causal rolling Standard-IES protocol before any ablation experiment begins.
