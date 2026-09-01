@@ -106,6 +106,28 @@ Expected: FAIL because the evaluator interface is not yet defined.
 - [x] **Step 3: Record that closed-loop cumulative v2 totals must not be mixed into this table**
 - [x] **Step 4: Run `git diff --check` and commit only owned evaluator/tests/receipts**
 
+### Task 5: Render the common comparison figure with publication QA ✅
+
+**Files:**
+- Create: `scripts/plot_rsc_pf_common_validation.py`
+- Create: `tests/test_plot_rsc_pf_common_validation.py`
+- Create: `reports/rsc_pf_external_baselines_v1/implementation/figures/rsc_pf_common_comparison_v1/figure_contract.json`
+
+**Interfaces:**
+- Consumes: `common_validation_summary.csv` and the common validation manifest.
+- Produces: one 2×4 quantitative comparison figure with editable SVG/PDF, 600-dpi TIFF/PNG, source-data copy, and a machine-readable figure manifest.
+
+- [x] **Step 1: Test source-table loading, method order, and five-seed error-bar fields**
+- [x] **Step 2: Implement a Python/matplotlib quantitative-grid figure with forecast panels and decision panels**
+- [x] **Step 3: Run the nature-figure source validator and render outputs**
+- [x] **Step 4: Inspect the final-size PNG and record reviewer risks and statistics metadata**
+- [x] **Step 5: Commit only the plotting source, tests, and plan changes**
+
+```powershell
+& 'D:\anaconda\envs\pytorch\python.exe' -m pytest tests/test_plot_rsc_pf_common_validation.py -q
+& 'D:\anaconda\envs\pytorch\python.exe' C:\Users\张骞\.codex\skills\nature-figure\scripts\validate_figure.py scripts/plot_rsc_pf_common_validation.py --json
+```
+
 ## Stop rules
 
 Stop if an RSC-PF checkpoint cannot be loaded with an auditable state dict, the validation window count differs, metric units cannot be aligned, a test path is opened, or an optimizer-role/LP-call count is inconsistent. Do not expose or evaluate the sealed test split in this phase.
