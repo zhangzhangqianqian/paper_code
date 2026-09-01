@@ -209,7 +209,7 @@ def load_external_checkpoint(path: Path, *, expected_method: str, expected_seed:
 
 **Stop gate:** do not start all-seed training when calibration has non-finite losses, failed feasibility checks, or unresolved source evidence.
 
-## Task 6 — Evaluate with common metrics and resource accounting
+## Task 6 — Evaluate with common metrics and resource accounting ✅
 
 **Files:** create `scripts/evaluate_rsc_pf_external_baselines.py` and `tests/test_rsc_pf_external_baseline_runner.py`.
 
