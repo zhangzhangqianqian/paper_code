@@ -1,0 +1,14 @@
+{
+  "schema_version": "rsc-pf-external-screening-v1",
+  "protocol_schema": "rsc-pf-external-search-v1",
+  "candidate_count": 28,
+  "retained_count": 21,
+  "excluded_count": 7,
+  "retained_by_slot": {
+    "forecast_pto": 6,
+    "decision_focused": 13,
+    "direct_policy": 2
+  },
+  "evidence_sha256": "a55c2cd2c0d7e37146b10556d76092a5f6c1accc5888b5630ecd691878899c41",
+  "status": "complete"
+}

@@ -418,8 +418,47 @@ def load_external_registry(path: str | Path) -> ExternalBaselineRegistry:
     return ExternalBaselineRegistry(REGISTRY_SCHEMA, tuple(methods), source)
 
 
+def validate_candidate_evidence(evidence: CandidateEvidence) -> tuple[str, ...]:
+    """Return frozen fatal-exclusion codes for one evidence record.
+
+    The rules deliberately distinguish a forecast-only candidate from the two
+    decision-coupled slots: lack of forecast/decision coupling is expected for
+    ``forecast_pto`` and is fatal only when a paper is proposed as a joint
+    method.  This keeps the three comparison slots behaviorally disjoint.
+    """
+    exclusions: list[str] = []
+    if evidence.uses_future_truth_at_inference:
+        exclusions.append("future_truth")
+    if evidence.binary_only_without_continuous_form:
+        exclusions.append("binary_only")
+    if not evidence.equations_sufficient and not evidence.official_code_url:
+        exclusions.append("insufficient_definition")
+    if evidence.proposed_slot != "forecast_pto" and not evidence.has_forecast_decision_coupling:
+        exclusions.append("no_coupling")
+    if not evidence.preserves_core_under_adaptation:
+        exclusions.append("destructive_adaptation")
+    route = evidence.license_route.strip().lower()
+    if route in {"forbidden", "license_forbidden", "no_lawful_route"}:
+        exclusions.append("license_forbidden")
+    return tuple(dict.fromkeys(exclusions))
+
+
+def classify_slot(evidence: CandidateEvidence) -> str:
+    """Classify by the deployed forward path, not by a title or abstract."""
+    if evidence.proposed_slot == "forecast_pto":
+        return "forecast_pto"
+    if evidence.deployment_produces_dispatch and not evidence.deployment_exact_optimizer:
+        return "direct_policy"
+    if evidence.has_forecast_decision_coupling and (
+        evidence.deployment_exact_optimizer or evidence.gradient_coupling not in {"none", "forecast_only"}
+    ):
+        return "decision_focused"
+    return evidence.proposed_slot
+
+
 __all__ = [
     "CandidateEvidence", "CandidateScore", "ExternalBaselineRegistry", "ExternalBaselineSpec",
     "INTERNAL_METHODS", "QueryFamily", "REPRODUCTION_LEVELS", "REQUIRED_SLOTS", "REGISTRY_SCHEMA",
-    "SEARCH_SCHEMA", "SearchProtocol", "load_candidate_evidence", "load_external_registry", "load_search_protocol",
+    "SEARCH_SCHEMA", "SearchProtocol", "classify_slot", "load_candidate_evidence", "load_external_registry",
+    "load_search_protocol", "validate_candidate_evidence",
 ]
