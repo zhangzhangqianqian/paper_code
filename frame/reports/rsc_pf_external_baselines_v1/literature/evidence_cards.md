@@ -12,16 +12,6 @@ Protocol: `rsc-pf-external-search-v1`
 - License/reproduction route: equations_only; code: none
 - Adaptation boundary: retain the published learning objective; adapt only tensor/head and device mapping
 
-## A Hybrid LSTM-FNN Framework for Safety-Constrained Energy Management in Mining Microgrids
-- Candidate: `doi:10.32604/ee.2026.079449`; slot: `direct_policy`; year: 2026
-- Primary source: https://doi.org/10.32604/ee.2026.079449
-- Anchors: Abstract; Method architecture section; Safety-constrained EMS experiments
-- Inputs: causal history; future context; output: continuous dispatch
-- Decision layer: neural policy head; optimizer at inference: False
-- Gradient/coupling: joint_network; loss: forecast and energy-management objective
-- License/reproduction route: equations_only; code: none
-- Adaptation boundary: retain the published learning objective; adapt only tensor/head and device mapping
-
 ## Decision-Focused Learning for Power System Decision-Making Under Uncertainty
 - Candidate: `doi:10.1109/tpwrs.2025.3597806`; slot: `decision_focused`; year: 2026
 - Primary source: https://doi.org/10.1109/TPWRS.2025.3597806

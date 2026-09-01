@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -456,9 +457,95 @@ def classify_slot(evidence: CandidateEvidence) -> str:
     return evidence.proposed_slot
 
 
+def score_candidate(evidence: CandidateEvidence, protocol: SearchProtocol) -> CandidateScore:
+    """Compute the deterministic slot-specific score envelope.
+
+    The score is a screening aid, not a performance result.  It uses only the
+    evidence card and publication metadata, never RSC-PF metrics or test data.
+    """
+    slot = classify_slot(evidence)
+    fatal = validate_candidate_evidence(evidence)
+    title = evidence.paper_title.lower()
+    if slot == "forecast_pto":
+        slot_fit = 25 if any(token in title for token in ("forecast", "transformer", "convolutional", "time series")) else 20
+        dispatch = 16
+        resource = 5
+    elif slot == "decision_focused":
+        slot_fit = 25 if any(token in title for token in ("decision-focused", "decision focused", "decision-oriented", "predict, then optimize", "optnet", "differentiable")) else 19
+        dispatch = 18
+        resource = 5
+    else:
+        slot_fit = 25 if evidence.deployment_produces_dispatch and evidence.has_forecast_decision_coupling else 21
+        dispatch = 20 if evidence.deployment_produces_dispatch else 12
+        resource = 5
+    reproducibility = 20 if evidence.official_code_url else (15 if evidence.equations_sufficient and len(evidence.primary_source_anchors) >= 2 else 10)
+    fairness = 15 if not evidence.uses_future_truth_at_inference else 0
+    source_quality = 10 if evidence.doi else 8
+    recency = max(0, min(5, evidence.paper_year - 2021))
+    return CandidateScore(
+        candidate_id=evidence.candidate_id, slot=slot, publication_year=evidence.paper_year,
+        slot_fit=slot_fit, dispatch_compatibility=dispatch, reproducibility=reproducibility,
+        information_fairness=fairness, source_quality=source_quality, recency=recency,
+        resource_fit=resource, fatal_exclusions=fatal,
+    )
+
+
+def _evidence_hash(evidence: CandidateEvidence) -> str:
+    payload = json.dumps(evidence.__dict__, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def select_external_slots(scores: Sequence[CandidateScore], evidence_by_id: Mapping[str, CandidateEvidence] | None = None) -> ExternalBaselineRegistry:
+    """Select one eligible, distinct paper for each external slot.
+
+    ``evidence_by_id`` is optional for backwards-compatible validation tests;
+    production freezing always supplies it so the registry carries the exact
+    primary-source contract rather than placeholders.
+    """
+    eligible = [score for score in scores if score.eligible]
+    candidate_slots: dict[str, set[str]] = {}
+    for score in eligible:
+        candidate_slots.setdefault(score.candidate_id, set()).add(score.slot)
+    overlaps = [candidate for candidate, slots in candidate_slots.items() if len(slots) > 1]
+    if overlaps:
+        raise ValueError(f"candidate cannot fill multiple slots: {sorted(overlaps)}")
+    selected: list[CandidateScore] = []
+    for slot in REQUIRED_SLOTS:
+        candidates = [score for score in eligible if score.slot == slot]
+        if not candidates:
+            raise ValueError(f"unfilled external slot: {slot}")
+        selected.append(sorted(candidates, key=lambda item: (item.reproducibility, item.slot_fit, item.publication_year, item.total), reverse=True)[0])
+    methods: list[ExternalBaselineSpec] = []
+    for score in selected:
+        evidence = evidence_by_id.get(score.candidate_id) if evidence_by_id is not None else None
+        if evidence is None:
+            raise ValueError("evidence metadata is required to freeze an external registry")
+        if validate_candidate_evidence(evidence):
+            raise ValueError(f"selected candidate has fatal exclusions: {score.candidate_id}")
+        method_id = {
+            "forecast_pto": "iTransformer-PTO",
+            "decision_focused": "PowerSystem-DFL",
+            "direct_policy": "DigitalTwins-Policy",
+        }[score.slot]
+        methods.append(ExternalBaselineSpec(
+            slot=score.slot, candidate_id=evidence.candidate_id, method_id=method_id,
+            paper_title=evidence.paper_title, paper_year=evidence.paper_year, doi=evidence.doi,
+            stable_id=evidence.stable_id, primary_source_url=evidence.primary_source_url,
+            official_code_url=evidence.official_code_url, license_route=evidence.license_route,
+            reproduction_level="official_code_exact" if evidence.official_code_url else "faithful_reimplementation",
+            score_total=score.total, input_mode="causal history + available context",
+            output_mode=("forecast vector -> exact-optimizer dispatch" if score.slot == "decision_focused" else
+                         ("forecast vector -> Standard-IES rolling LP" if score.slot == "forecast_pto" else evidence.output_type)),
+            optimizer_role="exact optimizer at inference" if evidence.deployment_exact_optimizer else "none at inference",
+            implementation_class=f"external.{method_id}", adaptation_disclosure=evidence.adaptation_disclosure,
+            evidence_sha256=_evidence_hash(evidence), implementation_ready=True,
+        ))
+    return ExternalBaselineRegistry(REGISTRY_SCHEMA, tuple(methods))
+
+
 __all__ = [
     "CandidateEvidence", "CandidateScore", "ExternalBaselineRegistry", "ExternalBaselineSpec",
     "INTERNAL_METHODS", "QueryFamily", "REPRODUCTION_LEVELS", "REQUIRED_SLOTS", "REGISTRY_SCHEMA",
     "SEARCH_SCHEMA", "SearchProtocol", "classify_slot", "load_candidate_evidence", "load_external_registry",
-    "load_search_protocol", "validate_candidate_evidence",
+    "load_search_protocol", "score_candidate", "select_external_slots", "validate_candidate_evidence",
 ]

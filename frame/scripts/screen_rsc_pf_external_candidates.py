@@ -97,7 +97,10 @@ def evidence_for_row(row: dict[str, str]) -> CandidateEvidence:
                     optimizer=False, gradient="joint_network", loss="operating-cost plus physical-constraint penalties")
     elif "hybrid lstm-fnn" in title:
         raw = _base(row, "direct_policy", anchors=("Abstract", "Method architecture section", "Safety-constrained EMS experiments"),
-                    code=code, license_route="equations_only", equations=True, coupling=True, dispatch=True,
+                    # CrossRef metadata alone does not expose enough equations
+                    # to verify the forecast-to-dispatch path; keep it out of
+                    # the frozen slot until the full paper is inspected.
+                    code=code, license_route="equations_only", equations=False, coupling=True, dispatch=True,
                     optimizer=False, gradient="joint_network", loss="forecast and energy-management objective")
     elif any(token in title for token in ("decision-focused", "decision focused", "decision-oriented", "smart predict", "optnet", "structured differentiable")):
         raw = _base(row, "decision_focused", anchors=("Abstract", "Method/decision-loss section", "Optimization or gradient section", "Experiments"),

@@ -1,0 +1,36 @@
+{
+  "schema_version": "rsc-pf-external-selection-receipt-v1",
+  "protocol_schema": "rsc-pf-external-search-v1",
+  "selection_status": "complete",
+  "test_set_accessed": false,
+  "candidate_count": 28,
+  "eligible_count": 20,
+  "methods": [
+    {
+      "slot": "forecast_pto",
+      "method_id": "iTransformer-PTO",
+      "candidate_id": "doi:10.48550/arxiv.2310.06625",
+      "score_total": 93,
+      "doi": "10.48550/arxiv.2310.06625",
+      "stable_id": null
+    },
+    {
+      "slot": "decision_focused",
+      "method_id": "PowerSystem-DFL",
+      "candidate_id": "doi:10.1109/tpwrs.2025.3597806",
+      "score_total": 93,
+      "doi": "10.1109/tpwrs.2025.3597806",
+      "stable_id": null
+    },
+    {
+      "slot": "direct_policy",
+      "method_id": "DigitalTwins-Policy",
+      "candidate_id": "sha256:82627efe956dd9c2",
+      "score_total": 88,
+      "doi": null,
+      "stable_id": "arxiv:2109.14423"
+    }
+  ],
+  "scores_sha256": "c6420a0ff51191747e89f83e6942519fc4789170713a6e9b4e3bac6aea29f030",
+  "registry_sha256": "9ab05adef758a21dadbbdb6e1aae8ebf421140eb03f4406da3e62d4bc9a4716e"
+}
