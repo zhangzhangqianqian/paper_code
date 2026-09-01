@@ -47,7 +47,7 @@
   "authorized_for_implementation_plan": true,
   "registry_methods": [
     "iTransformer-PTO",
-    "PowerSystem-DFL",
+    "DecisionFocused-Online",
     "DigitalTwins-Policy"
   ],
   "project_root": "D:\\Paper\\github_work\\paper-code\\frame",

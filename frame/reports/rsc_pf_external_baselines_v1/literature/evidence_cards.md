@@ -12,24 +12,14 @@ Protocol: `rsc-pf-external-search-v1`
 - License/reproduction route: equations_only; code: none
 - Adaptation boundary: retain the published learning objective; adapt only tensor/head and device mapping
 
-## Decision-Focused Learning for Power System Decision-Making Under Uncertainty
-- Candidate: `doi:10.1109/tpwrs.2025.3597806`; slot: `decision_focused`; year: 2026
-- Primary source: https://doi.org/10.1109/TPWRS.2025.3597806
-- Anchors: Abstract; Method/decision-loss section; Optimization or gradient section; Experiments
-- Inputs: causal history; future context; output: forecast vector
-- Decision layer: exact optimizer; optimizer at inference: True
-- Gradient/coupling: implicit_optimization; loss: decision-focused downstream loss
-- License/reproduction route: equations_only; code: none
-- Adaptation boundary: retain the published learning objective; adapt only tensor/head and device mapping
-
 ## Decision focused online learning for real time energy aware scheduling of interconnected data centers with photovoltaic generation and battery storage
 - Candidate: `doi:10.1038/s41598-026-67967-z`; slot: `decision_focused`; year: 2026
 - Primary source: https://doi.org/10.1038/s41598-026-67967-z
-- Anchors: Abstract; Method/decision-loss section; Optimization or gradient section; Experiments
+- Anchors: Abstract; Definitions and problem formulation; Decision-focused loss and surrogate gradient; Online rolling execution
 - Inputs: causal history; future context; output: forecast vector
 - Decision layer: exact optimizer; optimizer at inference: True
-- Gradient/coupling: implicit_optimization; loss: decision-focused downstream loss
-- License/reproduction route: equations_only; code: none
+- Gradient/coupling: implicit_optimization; loss: decision-focused downstream scheduling loss
+- License/reproduction route: CC BY-NC-ND 4.0; code: none
 - Adaptation boundary: retain the published learning objective; adapt only tensor/head and device mapping
 
 ## Decision-focused learning for optimal PV-battery scheduling

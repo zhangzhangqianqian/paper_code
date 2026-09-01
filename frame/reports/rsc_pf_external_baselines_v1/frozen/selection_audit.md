@@ -17,4 +17,4 @@ Status: **complete**
 
 Authorized for implementation plan: **True**
 
-Frozen methods: iTransformer-PTO, PowerSystem-DFL, DigitalTwins-Policy
+Frozen methods: iTransformer-PTO, DecisionFocused-Online, DigitalTwins-Policy

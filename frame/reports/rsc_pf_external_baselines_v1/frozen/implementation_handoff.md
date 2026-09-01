@@ -21,21 +21,21 @@ This handoff is authorized only when the selection audit reports `complete`.
 - Required adaptation: map the published output to the 24-to-4 Standard-IES contract while retaining the method's core objective.
 - Forbidden substitution: do not use RSC-PF test data, internal controls, or an unreported exact optimizer in the deployed path.
 
-## decision_focused: PowerSystem-DFL
-- Citation: Decision-Focused Learning for Power System Decision-Making Under Uncertainty (2026).
-- Primary source: https://doi.org/10.1109/TPWRS.2025.3597806
-- Identifier: 10.1109/tpwrs.2025.3597806
-- Code/license route: equation-level reproduction; `equations_only`.
+## decision_focused: DecisionFocused-Online
+- Citation: Decision focused online learning for real time energy aware scheduling of interconnected data centers with photovoltaic generation and battery storage (2026).
+- Primary source: https://doi.org/10.1038/s41598-026-67967-z
+- Identifier: 10.1038/s41598-026-67967-z
+- Code/license route: equation-level reproduction; `CC BY-NC-ND 4.0`.
 - Reproduction level: `faithful_reimplementation`.
 - Permitted inputs: `causal history + available context`.
 - Output contract: `forecast vector -> exact-optimizer dispatch`.
 - Optimizer role: `exact optimizer at inference`.
-- Implementation class: `external.PowerSystem-DFL`.
+- Implementation class: `external.DecisionFocused-Online`.
 - Adaptation boundary: retain the published learning objective; adapt only tensor/head and device mapping
-- Primary-paper anchors: Abstract; Method/decision-loss section; Optimization or gradient section; Experiments.
+- Primary-paper anchors: Abstract; Definitions and problem formulation; Decision-focused loss and surrogate gradient; Online rolling execution.
 - Forecast representation: continuous multi-step forecast.
 - Decision layer: exact optimizer; output type: forecast vector.
-- Loss and gradient path: decision-focused downstream loss; decision loss to prediction parameters.
+- Loss and gradient path: decision-focused downstream scheduling loss; decision loss to prediction parameters.
 - Topology: published method with adaptation to the Standard-IES contract.
 - Required adaptation: map the published output to the 24-to-4 Standard-IES contract while retaining the method's core objective.
 - Forbidden substitution: do not use RSC-PF test data, internal controls, or an unreported exact optimizer in the deployed path.

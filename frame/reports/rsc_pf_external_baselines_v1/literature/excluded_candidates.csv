@@ -1,6 +1,7 @@
 candidate_id,paper_title,proposed_slot,classified_slot,exclusions
 sha256:5b997c427e02042b,Predict-then-optimize: LM-MTSF provides data-driven support for distributionally robust operation optimization of active distribution networks,decision_focused,decision_focused,insufficient_definition;no_coupling
 doi:10.32604/ee.2026.079449,A Hybrid LSTM-FNN Framework for Safety-Constrained Energy Management in Mining Microgrids,direct_policy,direct_policy,insufficient_definition
+doi:10.1109/tpwrs.2025.3597806,Decision-Focused Learning for Power System Decision-Making Under Uncertainty,decision_focused,decision_focused,insufficient_definition;no_coupling
 doi:10.1016/j.suscom.2025.101162,Smart home Demand-Side Management Based on rooftop deep learning photovoltaic power forecasting,decision_focused,decision_focused,insufficient_definition;no_coupling
 doi:10.1007/978-3-032-00303-4_12,A Deep Reinforcement Learning-Based Method for Economic Dispatch of Integrated Energy System,direct_policy,direct_policy,no_coupling
 sha256:adafe897b670fe8d,Deep Reinforcement Learning-driven Cross-Community Energy Interaction Optimal Scheduling,direct_policy,direct_policy,no_coupling

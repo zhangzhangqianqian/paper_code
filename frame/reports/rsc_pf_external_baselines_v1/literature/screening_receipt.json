@@ -2,13 +2,13 @@
   "schema_version": "rsc-pf-external-screening-v1",
   "protocol_schema": "rsc-pf-external-search-v1",
   "candidate_count": 28,
-  "retained_count": 20,
-  "excluded_count": 8,
+  "retained_count": 19,
+  "excluded_count": 9,
   "retained_by_slot": {
     "forecast_pto": 6,
-    "decision_focused": 13,
+    "decision_focused": 12,
     "direct_policy": 1
   },
-  "evidence_sha256": "d813989942c9fb04556cba31f2f9bca58e0fb18576e0a7c1d9775985024c42cc",
+  "evidence_sha256": "c82cb3124e28d738f26f8cd3da0abd44b1ec52c5728980e2dd3f34bca071aae9",
   "status": "complete"
 }

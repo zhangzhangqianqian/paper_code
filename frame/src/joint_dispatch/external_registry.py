@@ -524,7 +524,7 @@ def select_external_slots(scores: Sequence[CandidateScore], evidence_by_id: Mapp
             raise ValueError(f"selected candidate has fatal exclusions: {score.candidate_id}")
         method_id = {
             "forecast_pto": "iTransformer-PTO",
-            "decision_focused": "PowerSystem-DFL",
+            "decision_focused": "DecisionFocused-Online",
             "direct_policy": "DigitalTwins-Policy",
         }[score.slot]
         methods.append(ExternalBaselineSpec(

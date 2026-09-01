@@ -102,6 +102,17 @@ def evidence_for_row(row: dict[str, str]) -> CandidateEvidence:
                     # the frozen slot until the full paper is inspected.
                     code=code, license_route="equations_only", equations=False, coupling=True, dispatch=True,
                     optimizer=False, gradient="joint_network", loss="forecast and energy-management objective")
+    elif "decision-focused learning for power system decision-making" in title:
+        # This IEEE TPWRS item is a review/taxonomy and benchmark, not a
+        # concrete trainable method.  Keep it as related-work evidence but do
+        # not allow it to occupy the algorithmic DFL slot.
+        raw = _base(row, "decision_focused", anchors=("Abstract", "Sec. III taxonomy", "Sec. V comparative benchmark"),
+                    code=code, license_route="equations_only", equations=False, coupling=False, dispatch=False,
+                    optimizer=False, gradient="none", loss="review and benchmark only")
+    elif "decision focused online learning" in title:
+        raw = _base(row, "decision_focused", anchors=("Abstract", "Definitions and problem formulation", "Decision-focused loss and surrogate gradient", "Online rolling execution"),
+                    code=code, license_route="CC BY-NC-ND 4.0", equations=True, coupling=True, dispatch=False,
+                    optimizer=True, gradient="implicit_optimization", loss="decision-focused downstream scheduling loss")
     elif any(token in title for token in ("decision-focused", "decision focused", "decision-oriented", "smart predict", "optnet", "structured differentiable")):
         raw = _base(row, "decision_focused", anchors=("Abstract", "Method/decision-loss section", "Optimization or gradient section", "Experiments"),
                     code=code, license_route="equations_only", equations=True, coupling=True, dispatch=False,
