@@ -169,7 +169,7 @@ def audit_external_gradients(loss: Tensor, module: nn.Module) -> dict[str, Any]:
 
 **Stop gate:** a decision-focused method cannot be marked implemented if its decision loss does not produce the documented gradient path.
 
-## Task 5 — Build resumable calibration and validation training
+## Task 5 — Build resumable calibration and validation training ✅
 
 **Files:** create `src/joint_dispatch/external_baseline_training.py`, `scripts/run_rsc_pf_external_baselines.py`, and `tests/test_rsc_pf_external_baseline_training.py`.
 

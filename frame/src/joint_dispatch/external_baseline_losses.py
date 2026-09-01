@@ -23,6 +23,48 @@ class ExternalEvidenceError(RuntimeError):
     """Raised when a paper-specific operation is not sufficiently evidenced."""
 
 
+def verified_decision_focused_surrogate(
+    output: Any,
+    batch: ExternalBaselineBatch,
+    parameters: Mapping[str, Any],
+) -> Tensor:
+    """Evaluate the source-verified decision-focused training surrogate.
+
+    Equations (18)--(26) of the downloaded DecisionFocused-Online article
+    define a forecast-induced lower-level schedule, a quadratic training
+    smoothing term, normalized posterior regret, feasibility penalties, and a
+    two-sided SPSA update.  The exact optimizer is deliberately kept in the
+    evaluation adapter.  During neural validation we use the differentiable
+    surrogate form below: a detached teacher-dispatch sensitivity weights the
+    forecast error (the task/device adaptation), while the quadratic and
+    non-negativity terms implement the published smoothing and feasibility
+    penalties.  The adaptation is explicit and is never mislabeled as an
+    exact optimizer gradient.
+    """
+
+    forecast = getattr(output, "forecast", None)
+    if not isinstance(forecast, Tensor):
+        raise TypeError("decision-focused output must expose a forecast tensor")
+    _forecast_pair(forecast, batch.forecast_target)
+    dispatch = batch.teacher_dispatch.detach()
+    # Action sensitivity is a causal, label-only quantity.  It has no model
+    # gradient and therefore cannot leak future truth into the input path.
+    sensitivity = 1.0 + dispatch.abs().mean(dim=-1, keepdim=True)
+    sensitivity = sensitivity / sensitivity.mean().clamp_min(1.0)
+    error = F.smooth_l1_loss(
+        forecast, batch.forecast_target.to(dtype=forecast.dtype, device=forecast.device), reduction="none"
+    ).mean(dim=-1, keepdim=True)
+    weighted_regret = (error * sensitivity.to(dtype=error.dtype, device=error.device)).mean()
+    alpha = float(parameters.get("surrogate_smoothing", 1.0e-3))
+    rho = float(parameters.get("surrogate_feasibility_penalty", 1.0e-2))
+    s_j = float(parameters.get("surrogate_cost_scale", 1.0))
+    if not torch.isfinite(forecast.new_tensor([alpha, rho, s_j])).all() or s_j <= 0.0:
+        raise ValueError("decision-focused surrogate coefficients must be finite and valid")
+    smoothing = alpha * forecast.square().mean()
+    feasibility = rho * F.relu(-forecast[..., :3]).mean()
+    return weighted_regret / s_j + smoothing + feasibility
+
+
 def _finite(value: Tensor, name: str) -> None:
     if not isinstance(value, Tensor) or not bool(torch.isfinite(value).all().item()):
         raise ValueError(f"{name} must be a finite torch tensor")
@@ -163,4 +205,5 @@ def audit_external_gradients(loss: Tensor, module: nn.Module) -> dict[str, Any]:
 __all__ = [
     "ExternalEvidenceError", "audit_external_gradients", "decision_focused_loss",
     "forecast_loss", "physical_feasibility_penalty", "policy_imitation_loss",
+    "verified_decision_focused_surrogate",
 ]
