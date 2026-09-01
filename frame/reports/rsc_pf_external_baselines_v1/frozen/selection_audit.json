@@ -1,0 +1,55 @@
+{
+  "schema_version": "rsc-pf-external-selection-audit-v1",
+  "status": "complete",
+  "failed_gates": [],
+  "gates": {
+    "search_coverage": {
+      "status": "pass",
+      "detail": "receipt complete; 10 tier-1 attempts recorded"
+    },
+    "deduplication": {
+      "status": "pass",
+      "detail": "19 DOI-bearing rows; duplicate DOI count=0"
+    },
+    "primary_sources": {
+      "status": "pass",
+      "detail": "all frozen methods have a primary URL and at least one anchor"
+    },
+    "behavioral_classification": {
+      "status": "pass",
+      "detail": "deployed forward-path classes match all frozen slots"
+    },
+    "fatal_exclusions": {
+      "status": "pass",
+      "detail": "no frozen method carries a fatal exclusion"
+    },
+    "score_thresholds": {
+      "status": "pass",
+      "detail": "all frozen methods meet total and component floors"
+    },
+    "license": {
+      "status": "pass",
+      "detail": "each method has a lawful code or equation-level reproduction route"
+    },
+    "registry_integrity": {
+      "status": "pass",
+      "detail": "three distinct papers fill the three required slots"
+    },
+    "test_isolation": {
+      "status": "pass",
+      "detail": "selection receipt records test_set_accessed=false"
+    },
+    "implementation_readiness": {
+      "status": "pass",
+      "detail": "all method-specific handoff fields are resolved"
+    }
+  },
+  "authorized_for_implementation_plan": true,
+  "registry_methods": [
+    "iTransformer-PTO",
+    "PowerSystem-DFL",
+    "DigitalTwins-Policy"
+  ],
+  "project_root": "D:\\Paper\\github_work\\paper-code\\frame",
+  "handoff": "D:\\Paper\\github_work\\paper-code\\frame\\reports\\rsc_pf_external_baselines_v1\\frozen\\implementation_handoff.md"
+}

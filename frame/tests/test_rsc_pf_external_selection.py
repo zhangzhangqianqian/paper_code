@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ from src.joint_dispatch.external_registry import (
     CandidateEvidence, CandidateScore, REQUIRED_SLOTS, SearchProtocol, score_candidate,
     select_external_slots,
 )
+from scripts.audit_rsc_pf_external_selection import audit_external_selection
 from tests.test_rsc_pf_external_registry import complete_evidence
 
 
@@ -51,3 +54,43 @@ def test_score_candidate_uses_slot_specific_envelope() -> None:
     assert score.slot_fit == 25
     assert score.reproducibility == 20
     assert score.eligible
+
+
+def _copy_selection_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    project = Path(__file__).parents[1]
+    root = tmp_path / "project"
+    shutil.copytree(project / "reports" / "rsc_pf_external_baselines_v1", root / "reports" / "rsc_pf_external_baselines_v1")
+    (root / "configs").mkdir(parents=True)
+    shutil.copy(project / "configs" / "rsc_pf_external_baseline_search_v1.json", root / "configs" / "rsc_pf_external_baseline_search_v1.json")
+    shutil.copy(project / "configs" / "rsc_pf_external_baselines_v1.json", root / "configs" / "rsc_pf_external_baselines_v1.json")
+    return root, root / "configs" / "rsc_pf_external_baseline_search_v1.json", root / "configs" / "rsc_pf_external_baselines_v1.json", root / "reports" / "rsc_pf_external_baselines_v1"
+
+
+def test_audit_current_selection_is_complete() -> None:
+    root = Path(__file__).parents[1]
+    result = audit_external_selection(root, root / "configs" / "rsc_pf_external_baseline_search_v1.json", root / "configs" / "rsc_pf_external_baselines_v1.json", root / "reports" / "rsc_pf_external_baselines_v1")
+    assert result["status"] == "complete"
+    assert result["authorized_for_implementation_plan"] is True
+
+
+def test_audit_fails_on_missing_source_anchor(tmp_path: Path) -> None:
+    root, protocol_path, registry_path, report_root = _copy_selection_fixture(tmp_path)
+    evidence_path = report_root / "literature" / "screening_evidence.jsonl"
+    evidence = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
+    selected_id = json.loads(registry_path.read_text(encoding="utf-8"))["methods"][0]["candidate_id"]
+    next(item for item in evidence if item["candidate_id"] == selected_id)["primary_source_anchors"] = []
+    evidence_path.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in evidence) + "\n", encoding="utf-8")
+    result = audit_external_selection(root, protocol_path, registry_path, report_root)
+    assert result["status"] == "failed"
+    assert "primary_sources" in result["failed_gates"]
+
+
+def test_audit_fails_if_test_results_influenced_selection(tmp_path: Path) -> None:
+    root, protocol_path, registry_path, report_root = _copy_selection_fixture(tmp_path)
+    receipt_path = report_root / "frozen" / "literature_selection_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["test_set_accessed"] = True
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    result = audit_external_selection(root, protocol_path, registry_path, report_root)
+    assert result["status"] == "failed"
+    assert "test_isolation" in result["failed_gates"]
