@@ -1,0 +1,39 @@
+{
+  "schema_version": "rsc-pf-architecture-freeze-v1",
+  "status": "candidate",
+  "authority_contract": "configs/joint_forecast_dispatch_contract_v2.json",
+  "legacy_contracts": ["configs/joint_forecast_dispatch_contract_v1.json"],
+  "source_files": [
+    "src/joint_dispatch/data.py",
+    "src/joint_dispatch/model.py",
+    "src/joint_dispatch/losses.py",
+    "src/joint_dispatch/training.py",
+    "src/joint_dispatch/formal_training.py",
+    "src/scheduling/proxy_decoder.py"
+  ],
+  "shape_contract": {
+    "load_history": ["B", 24, 4],
+    "exog_history": ["B", 24, 12],
+    "device_history": ["B", 24, 21],
+    "device_status": ["B", 24, 6],
+    "forecast": ["B", 4, 4],
+    "scheduling_features": ["B", 4, 10],
+    "control_logits": ["B", 15],
+    "dispatch": ["B", 4, 21]
+  },
+  "required_gates": [
+    "authority",
+    "data",
+    "dependency",
+    "gradient",
+    "training",
+    "artifact",
+    "regression"
+  ],
+  "prohibited_claims": [
+    "globally_smooth_decoder",
+    "future_binary_commitment_output",
+    "online_lp_inference",
+    "four_by_fifteen_control_logits"
+  ]
+}
