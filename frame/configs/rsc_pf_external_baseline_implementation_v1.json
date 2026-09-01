@@ -1,0 +1,26 @@
+{
+  "schema_version": "rsc-pf-external-implementation-v1",
+  "registry_path": "configs/rsc_pf_external_baselines_v1.json",
+  "source_root": "reports/rsc_pf_external_baselines_v1/implementation/sources",
+  "output_root": "reports/rsc_pf_external_baselines_v1/implementation",
+  "lookback": 24,
+  "horizon": 4,
+  "task_count": 4,
+  "task_order": ["electricity", "cooling", "heating", "gas"],
+  "exog_dim": 12,
+  "dispatch_dim": 21,
+  "status_dim": 6,
+  "seeds": [2026, 2027, 2028, 2029, 2030],
+  "training": {
+    "batch_size": 256,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "min_epochs": 20,
+    "max_epochs": 30,
+    "patience": 5
+  },
+  "normalization_fit_split": "train",
+  "validation_only": true,
+  "test_set_accessed": false
+}
