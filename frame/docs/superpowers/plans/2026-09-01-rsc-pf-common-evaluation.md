@@ -128,6 +128,29 @@ Expected: FAIL because the evaluator interface is not yet defined.
 & 'D:\anaconda\envs\pytorch\python.exe' C:\Users\张骞\.codex\skills\nature-figure\scripts\validate_figure.py scripts/plot_rsc_pf_common_validation.py --json
 ```
 
+### Task 6: Add paired uncertainty analysis for the common validation comparison
+
+**Files:**
+- Create: `scripts/analyze_rsc_pf_common_statistics.py`
+- Create: `tests/test_analyze_rsc_pf_common_statistics.py`
+- Create: `reports/rsc_pf_external_baselines_v1/implementation/common_validation_statistics.csv`
+- Create: `reports/rsc_pf_external_baselines_v1/implementation/common_validation_statistics.json`
+
+**Interfaces:**
+- Consumes: the five-seed `validation_metrics.npz` files and evaluation receipts produced by Tasks 2–3.
+- Produces: paired moving-block bootstrap intervals for RSC-PF minus each baseline on the saved dispatch metrics.
+
+- [x] **Step 1: Test strict receipt/path isolation and exact five-seed, 8,780-window coverage**
+- [x] **Step 2: Compute paired mean differences and 95% moving-block intervals without inventing p values**
+- [x] **Step 3: Label the independent replication and dependence unit (five seeds, paired chronological validation windows)**
+- [x] **Step 4: Write CSV/JSON statistics receipts with source hashes and conservative CI-based interpretations**
+- [x] **Step 5: Run focused tests, inspect intervals, update the handoff, and commit only owned files**
+
+```powershell
+& 'D:\anaconda\envs\pytorch\python.exe' -m pytest tests/test_analyze_rsc_pf_common_statistics.py -q
+& 'D:\anaconda\envs\pytorch\python.exe' scripts/analyze_rsc_pf_common_statistics.py
+```
+
 ## Stop rules
 
 Stop if an RSC-PF checkpoint cannot be loaded with an auditable state dict, the validation window count differs, metric units cannot be aligned, a test path is opened, or an optimizer-role/LP-call count is inconsistent. Do not expose or evaluate the sealed test split in this phase.
