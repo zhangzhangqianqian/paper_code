@@ -10,6 +10,7 @@ from scripts.evaluate_rsc_pf_external_baselines import (
     _dispatch_metrics,
     write_external_validation_manifest,
 )
+from scripts.freeze_rsc_pf_external_validation import freeze_external_validation
 from src.joint_dispatch.data import load_joint_split
 from src.joint_dispatch.external_baseline_training import METHODS, SEEDS
 
@@ -53,3 +54,18 @@ def test_validation_manifest_rejects_incomplete_or_test_receipt(tmp_path: Path) 
     (directory / "evaluation_receipt.json").write_text(json.dumps({"test_set_accessed": True}), encoding="utf-8")
     with pytest.raises((FileNotFoundError, ValueError)):
         write_external_validation_manifest(root)
+
+
+def test_freeze_rejects_missing_validation_manifest(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        freeze_external_validation(tmp_path / "missing", ROOT / "configs" / "rsc_pf_external_baselines_v1.json")
+
+
+def test_freeze_completed_external_validation_handoff() -> None:
+    output = ROOT / "reports" / "rsc_pf_external_baselines_v1" / "implementation"
+    result = freeze_external_validation(output, ROOT / "configs" / "rsc_pf_external_baselines_v1.json")
+    receipt = json.loads(Path(result["freeze_receipt"]).read_text(encoding="utf-8"))
+    assert result["status"] == "frozen"
+    assert receipt["test_set_accessed"] is False
+    assert len(receipt["artifact_hashes"]) == 15
+    assert receipt["resource_gate"]["gate_passed"] is True

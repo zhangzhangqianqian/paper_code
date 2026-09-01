@@ -231,7 +231,7 @@ def write_external_validation_manifest(output_root: Path) -> Path: ...
 
 **Stop gate:** incomplete LP accounting, missing seed manifests, or a test-set read invalidates the comparison and prevents freeze.
 
-## Task 7 — Freeze validation and hand off to the paper/results phase
+## Task 7 — Freeze validation and hand off to the paper/results phase ✅
 
 **Files:** create `scripts/freeze_rsc_pf_external_validation.py` and extend `tests/test_rsc_pf_external_baseline_runner.py` with freeze checks.
 
