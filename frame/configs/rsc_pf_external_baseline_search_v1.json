@@ -1,0 +1,57 @@
+{
+  "schema_version": "rsc-pf-external-search-v1",
+  "year_start": 2016,
+  "year_end": 2026,
+  "sources": {
+    "tier_1": ["crossref", "arxiv"],
+    "tier_2": ["semantic_scholar"],
+    "tier_3": ["scopus", "sciencedirect"]
+  },
+  "required_slots": ["forecast_pto", "decision_focused", "direct_policy"],
+  "query_families": [
+    {
+      "id": "q1",
+      "query": "(joint forecasting scheduling OR integrated forecasting dispatch) AND (energy OR power OR integrated energy system)"
+    },
+    {
+      "id": "q2",
+      "query": "(decision-focused learning OR task-based forecasting OR predict-and-optimize) AND (economic dispatch OR energy scheduling)"
+    },
+    {
+      "id": "q3",
+      "query": "(differentiable optimization OR differentiable convex optimization OR OptNet OR cvxpylayers) AND (energy dispatch OR unit scheduling)"
+    },
+    {
+      "id": "q4",
+      "query": "(end-to-end learning OR learning to optimize OR neural policy) AND (multi-energy dispatch OR energy management)"
+    },
+    {
+      "id": "q5",
+      "query": "(predict-then-optimize OR smart predict-then-optimize OR SPO+) AND (electricity OR energy scheduling)"
+    }
+  ],
+  "fatal_exclusions": [
+    "future_truth",
+    "binary_only",
+    "insufficient_definition",
+    "no_coupling",
+    "destructive_adaptation",
+    "license_forbidden"
+  ],
+  "score_weights": {
+    "slot_fit": 25,
+    "dispatch_compatibility": 20,
+    "reproducibility": 20,
+    "information_fairness": 15,
+    "source_quality": 10,
+    "recency": 5,
+    "resource_fit": 5
+  },
+  "minimum_total": 70,
+  "minimum_components": {
+    "slot_fit": 18,
+    "reproducibility": 14,
+    "information_fairness": 10
+  },
+  "tie_break": ["reproducibility", "slot_fit", "publication_year"]
+}
