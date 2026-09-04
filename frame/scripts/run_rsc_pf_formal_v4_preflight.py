@@ -67,6 +67,7 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     """Construct evidence checks from immutable receipts below one run root."""
 
     protocol = root / "protocol"
+    gate0 = root / "gate0"
     data = root / "data"
     checks: dict[str, dict[str, Any]] = {}
 
@@ -118,7 +119,7 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     registry = FRAME_ROOT / "configs" / "joint_dispatch_invalid_runs_v4.json"
     check("invalid_run_registry", lambda: {"passed": bool(load_invalid_run_registry(registry)), "path": str(registry), "sha256": _sha256(registry)})
 
-    benchmark_path = protocol / "FORMAL_V4_BENCHMARK_RECEIPT.json"
+    benchmark_path = gate0 / "benchmark" / "FORMAL_V4_BENCHMARK_RECEIPT.json"
 
     def benchmark():
         payload = _read_json(benchmark_path)
@@ -133,7 +134,7 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     check("benchmark_boundary", benchmark)
     check("benchmark_receipt", benchmark)
 
-    capacity_path = protocol / "CAPACITY_FREEZE.json"
+    capacity_path = gate0 / "CAPACITY_FREEZE.json"
 
     def capacity(stage: str | None = None):
         payload = _read_json(capacity_path)
@@ -207,7 +208,7 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     check("data_access", access_check)
     check("no_evaluation_access", access_check)
     check("archive_receipts", lambda: _file_check(protocol / "ARCHIVE_ACCESS_RECEIPT.json", schema="formal-v4.1-archive-access-v1"))
-    check("regression_tests", lambda: _file_check(protocol / "REGRESSION_RECEIPT.json", schema="formal-v4.1-regression-receipt-v1"))
+    check("regression_tests", lambda: _file_check(root / "audit" / "REGRESSION_RECEIPT.json", schema="formal-v4.1-regression-receipt-v1"))
 
     def resources():
         path = protocol / "RESOURCE_PROJECTION.json"
@@ -242,9 +243,24 @@ def main() -> int:
     args = parser.parse_args()
     spec = load_formal_v4_spec(args.contract)
     report_root = Path(spec.paths["output_root"])
-    checks = _receipt_checks(spec, report_root)
-    checkers = {check_id: (lambda check_id=check_id: checks[check_id]) for check_id in MANDATORY_CHECK_IDS}
-    result = execute_gate0(Gate0Context(report_root, checkers, metadata={"contract": str(args.contract), "training_years": list(spec.train_years), "selection_year": spec.selection_year, "evaluation_year_locked": spec.evaluation_year}), args.run_id)
+    holder: dict[str, Path] = {}
+
+    def prepare(run_root: Path) -> None:
+        holder["run_root"] = run_root
+
+    def evidence(check_id: str) -> Mapping[str, Any]:
+        return _receipt_checks(spec, holder["run_root"])[check_id]
+
+    checkers = {check_id: (lambda check_id=check_id: evidence(check_id)) for check_id in MANDATORY_CHECK_IDS}
+    result = execute_gate0(
+        Gate0Context(
+            report_root,
+            checkers,
+            metadata={"contract": str(args.contract), "training_years": list(spec.train_years), "selection_year": spec.selection_year, "evaluation_year_locked": spec.evaluation_year},
+            prepare=prepare,
+        ),
+        args.run_id,
+    )
     print(json.dumps(result.to_payload(), ensure_ascii=False, indent=2, default=str))
     return 0 if result.authorized_gate1 else 2
 

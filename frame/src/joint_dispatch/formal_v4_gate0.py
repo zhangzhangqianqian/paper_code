@@ -118,6 +118,7 @@ class Gate0Context:
     checkers: Mapping[str, Callable[[], Mapping[str, Any] | bool]]
     metadata: Mapping[str, Any] = ()
     expected_check_ids: tuple[str, ...] = MANDATORY_CHECK_IDS
+    prepare: Callable[[Path], Any] | None = None
 
 
 def _coerce_check(check_id: str, value: Mapping[str, Any] | bool) -> Gate0CheckResult:
@@ -162,6 +163,8 @@ def execute_gate0(context: Gate0Context, run_id: str) -> Gate0Result:
     marker.write_text(json.dumps({"schema_version": "formal-v4.1-gate0-in-progress-v1", "run_id": safe_id}, indent=2), encoding="utf-8")
 
     try:
+        if context.prepare is not None:
+            context.prepare(gate_root.parent)
         checks = evaluate_gate0(context.checkers, expected_check_ids=context.expected_check_ids)
         authorized = all(check.passed for check in checks.values())
         result = Gate0Result(safe_id, gate_root, authorized, checks)
