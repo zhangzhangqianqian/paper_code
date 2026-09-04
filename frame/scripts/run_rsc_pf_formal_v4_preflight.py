@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any, Mapping
 
@@ -29,7 +30,7 @@ from src.joint_dispatch.formal_v4_gate0 import (  # noqa: E402
 )
 from src.joint_dispatch.formal_v4_itransformer import validate_itransformer_receipt  # noqa: E402
 from src.joint_dispatch.formal_v4_objective import validate_c_ref_receipt  # noqa: E402
-from src.joint_dispatch.formal_v4_provenance import load_invalid_run_registry, validate_source_manifest  # noqa: E402
+from src.joint_dispatch.formal_v4_provenance import build_source_manifest, load_invalid_run_registry, validate_source_manifest  # noqa: E402
 from src.joint_dispatch.formal_v4_resources import ResourceProjection  # noqa: E402
 
 
@@ -243,10 +244,17 @@ def main() -> int:
     args = parser.parse_args()
     spec = load_formal_v4_spec(args.contract)
     report_root = Path(spec.paths["output_root"])
+    closure = Path(spec.source_closure_file) if spec.source_closure_file is not None else FRAME_ROOT / "configs" / "formal_v4_source_closure_v4_1.txt"
     holder: dict[str, Path] = {}
 
     def prepare(run_root: Path) -> None:
         holder["run_root"] = run_root
+        commit = subprocess.check_output(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True).strip()
+        paths = [line.strip() for line in closure.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
+        manifest = build_source_manifest(REPO_ROOT, paths, commit)
+        manifest_path = run_root / "protocol" / "SOURCE_MANIFEST.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest.to_payload(), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def evidence(check_id: str) -> Mapping[str, Any]:
         return _receipt_checks(spec, holder["run_root"])[check_id]
