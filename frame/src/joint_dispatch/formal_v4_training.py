@@ -181,6 +181,47 @@ def _grad_norm_from_values(values: Sequence[Tensor | None]) -> float:
     return float(torch.stack(tensors).norm()) if tensors else 0.0
 
 
+def probe_gradient_boundary(
+    model: RSCPFModel,
+    batch: Mapping[str, Tensor],
+    parameters: Mapping[str, Any],
+    *,
+    mode: Literal["joint", "decoupled"],
+    c_ref: float,
+) -> GradientBoundaryReceipt:
+    """Measure one decision-loss backward pass without updating parameters."""
+
+    configure_stage_j(model, mode)
+    model.eval()
+    output = model(**_forward_inputs(batch))
+    breakdown = formal_v4_joint_loss(
+        output,
+        batch["target_normalized"],
+        batch["target_physical"],
+        batch["realized_renewables"],
+        batch["initial_soc"],
+        batch["previous_chp"],
+        batch.get("teacher_dispatch"),
+        parameters,
+        c_ref=c_ref,
+        forecast_weight=0.0,
+        imitation_weight=0.0,
+        decision_weight=1.0,
+    )
+    decision = breakdown.normalized_realized_objective + breakdown.constraint_penalty
+    forecast_params = tuple(model.forecaster_parameters())
+    scheduler_params = tuple(model.scheduler_parameters())
+    active_forecaster = tuple(parameter for parameter in forecast_params if parameter.requires_grad)
+    active_scheduler = tuple(parameter for parameter in scheduler_params if parameter.requires_grad)
+    forecaster_grads = torch.autograd.grad(decision, active_forecaster, allow_unused=True, retain_graph=True) if active_forecaster else tuple()
+    scheduler_grads = torch.autograd.grad(decision, active_scheduler, allow_unused=True) if active_scheduler else tuple()
+    return GradientBoundaryReceipt(
+        mode=mode,
+        forecaster_decision_gradient_norm=_grad_norm_from_values(forecaster_grads),
+        scheduler_decision_gradient_norm=_grad_norm_from_values(scheduler_grads),
+    )
+
+
 def save_stage_checkpoint(path: str | Path, model: torch.nn.Module, receipt: StageCheckpointReceipt) -> None:
     destination = Path(path); destination.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model": model.state_dict(), "receipt": receipt.to_dict(), "test_set_accessed": False}, destination)
@@ -193,6 +234,6 @@ def stage_p_checkpoint(run_root: str | Path, seed: int) -> Path:
 
 
 __all__ = [
-    "GradientBoundaryReceipt", "StageCheckpointReceipt", "configure_stage_j", "save_stage_checkpoint",
+    "GradientBoundaryReceipt", "StageCheckpointReceipt", "configure_stage_j", "probe_gradient_boundary", "save_stage_checkpoint",
     "stage_p_checkpoint", "train_stage_j", "train_stage_p", "train_stage_s",
 ]
