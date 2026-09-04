@@ -29,6 +29,7 @@ def _trajectory(root: Path) -> dict:
         "benchmark": _write(root, "gate0/benchmark/FORMAL_V4_BENCHMARK_RECEIPT.json", b"benchmark"),
         "train": _write(root, "data/train.npz", b"train"),
         "selection": _write(root, "data/selection.npz", b"selection"),
+        "trajectory": _write(root, "data/trajectory.npz", b"trajectory"),
     }
     return {
         "schema_version": "formal-v4.1-trajectory-receipt-v1",
@@ -42,6 +43,8 @@ def _trajectory(root: Path) -> dict:
         "train_archive_sha256": hashes["train"],
         "selection_archive_path": "data/selection.npz",
         "selection_archive_sha256": hashes["selection"],
+        "trajectory_path": "data/trajectory.npz",
+        "trajectory_file_sha256": hashes["trajectory"],
         "trajectory_id": "trajectory-001",
         "trajectory_sha256": _HASH,
         "rule_version": "formal-v4.1-causal-realized-settlement-v1",

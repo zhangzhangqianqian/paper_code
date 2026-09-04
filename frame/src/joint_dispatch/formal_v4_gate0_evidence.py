@@ -166,13 +166,14 @@ def _validate_trajectory(payload: Mapping[str, Any], run_root: Path) -> None:
         "protocol_id", "source_commit", "capacity_receipt_path", "capacity_receipt_sha256",
         "benchmark_path", "benchmark_sha256", "train_archive_path", "train_archive_sha256",
         "selection_archive_path", "selection_archive_sha256", "trajectory_id",
-        "trajectory_sha256", "rule_version", "trajectory_audit",
+        "trajectory_path", "trajectory_file_sha256", "trajectory_sha256", "rule_version", "trajectory_audit",
     )
     for path_field, hash_field in (
         ("capacity_receipt_path", "capacity_receipt_sha256"),
         ("benchmark_path", "benchmark_sha256"),
         ("train_archive_path", "train_archive_sha256"),
         ("selection_archive_path", "selection_archive_sha256"),
+        ("trajectory_path", "trajectory_file_sha256"),
     ):
         _verify_artifact_hash(payload, path_field=path_field, hash_field=hash_field, run_root=run_root)
     _string(payload["protocol_id"], "trajectory.protocol_id")

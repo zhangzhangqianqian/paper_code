@@ -12,6 +12,7 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 import numpy as np
@@ -19,6 +20,7 @@ import pandas as pd
 import yaml
 
 FRAME_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FRAME_ROOT.parent
 if str(FRAME_ROOT) not in sys.path:
     sys.path.insert(0, str(FRAME_ROOT))
 
@@ -196,6 +198,85 @@ def _save_materialized(split, path: Path, normalization: FormalV4Normalization |
     path.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
+def _save_trajectory(trajectory: SettledTrajectory, path: Path) -> None:
+    """Persist the exact settled trajectory that produced device histories."""
+
+    if path.exists():
+        raise FileExistsError(f"refusing to overwrite formal-v4 trajectory archive: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        settled_dispatch=trajectory.settled_dispatch,
+        activity_indicators=trajectory.activity_indicators,
+        initial_soc=trajectory.initial_soc,
+        previous_chp=trajectory.previous_chp,
+        next_soc=trajectory.next_soc,
+        next_previous_chp=trajectory.next_previous_chp,
+        settled_mask=trajectory.settled_mask,
+        target_times=trajectory.target_times,
+        trajectory_id=np.asarray(trajectory.trajectory_id),
+        trajectory_sha256=np.asarray(trajectory.trajectory_sha256),
+        rule_version=np.asarray("formal-v4.1-causal-realized-settlement-v1"),
+    )
+
+
+def _git_commit() -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+
+
+def _relative_run_path(path: Path, run_root: Path, name: str) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(run_root.resolve()).as_posix()
+    except ValueError as exc:
+        raise ValueError(f"{name} must be inside the formal-v4.1 run root") from exc
+
+
+def build_trajectory_receipt(
+    *,
+    run_root: Path,
+    settled_trajectory: SettledTrajectory,
+    train_archive_path: Path,
+    selection_archive_path: Path,
+    capacity_receipt_path: Path,
+    benchmark_path: Path,
+) -> dict[str, object]:
+    """Build a hash-bound trajectory receipt after all files are materialized."""
+
+    trajectory_path = run_root / "data" / "trajectory.npz"
+    for path, name in (
+        (capacity_receipt_path, "capacity_receipt"),
+        (benchmark_path, "benchmark"),
+        (train_archive_path, "train_archive"),
+        (selection_archive_path, "selection_archive"),
+        (trajectory_path, "trajectory"),
+    ):
+        if not path.is_file():
+            raise FileNotFoundError(f"{name} artifact is missing: {path}")
+    return {
+        "schema_version": "formal-v4.1-trajectory-receipt-v1",
+        "protocol_id": "formal-v4.1-trajectory-causal-audit-v1",
+        "source_commit": _git_commit(),
+        "capacity_receipt_path": _relative_run_path(capacity_receipt_path, run_root, "capacity_receipt"),
+        "capacity_receipt_sha256": sha256_file(capacity_receipt_path),
+        "benchmark_path": _relative_run_path(benchmark_path, run_root, "benchmark"),
+        "benchmark_sha256": sha256_file(benchmark_path),
+        "train_archive_path": _relative_run_path(train_archive_path, run_root, "train_archive"),
+        "train_archive_sha256": sha256_file(train_archive_path),
+        "selection_archive_path": _relative_run_path(selection_archive_path, run_root, "selection_archive"),
+        "selection_archive_sha256": sha256_file(selection_archive_path),
+        "trajectory_path": _relative_run_path(trajectory_path, run_root, "trajectory"),
+        "trajectory_file_sha256": sha256_file(trajectory_path),
+        "trajectory_id": settled_trajectory.trajectory_id,
+        "trajectory_sha256": settled_trajectory.trajectory_sha256,
+        "rule_version": "formal-v4.1-causal-realized-settlement-v1",
+        "trajectory_audit": settled_trajectory.audit.to_payload(),
+    }
+
+
 def main() -> int:
     args = _parser().parse_args()
     spec = load_formal_v4_spec(args.contract)
@@ -245,6 +326,8 @@ def main() -> int:
         output_root = run_root / "data"
         for split, windows in by_split.items():
             _save_materialized(windows, output_root / f"{split}.npz", normalization if split == "train" else None, {"schema_version": "formal-v4-materialized-v1", "capacity_receipt": str(args.capacity_receipt), "split": split, "rows": len(windows), "trajectory_id": trajectory.trajectory_id, "trajectory_audit": trajectory.audit.to_payload()})
+        trajectory_path = output_root / "trajectory.npz"
+        _save_trajectory(trajectory, trajectory_path)
         if "train" in by_split and "selection" in by_split:
             capacity_hash = sha256_file(args.capacity_receipt)
             train_hash = sha256_file(output_root / "train.npz")
@@ -260,10 +343,21 @@ def main() -> int:
             normalization_path.write_text(json.dumps(normalization_payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
             artifact_manifest = build_artifact_manifest(
                 run_root,
-                [output_root / "train.npz", output_root / "selection.npz", normalization_path],
+                [output_root / "train.npz", output_root / "selection.npz", output_root / "trajectory.npz", normalization_path],
                 lineage={"capacity_receipt_sha256": capacity_hash, "capacity_scenario_hash": str(receipt.get("capacity_scenario_hash", ""))},
             )
             artifact_manifest.save(run_root / "ARTIFACT_MANIFEST.json")
+            write_immutable_json(
+                run_root / "protocol" / "TRAJECTORY_RECEIPT.json",
+                build_trajectory_receipt(
+                    run_root=run_root,
+                    settled_trajectory=trajectory,
+                    train_archive_path=output_root / "train.npz",
+                    selection_archive_path=output_root / "selection.npz",
+                    capacity_receipt_path=args.capacity_receipt,
+                    benchmark_path=benchmark_path,
+                ),
+            )
         print(json.dumps({"status": "pass", "mode": args.mode, "splits": list(by_split), "rows": {key: len(value) for key, value in by_split.items()}, "output_root": str(output_root)}, ensure_ascii=False))
         return 0
     benchmark = yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))
@@ -325,7 +419,8 @@ def main() -> int:
         origin_manifest_path = audit_root / "capacity_origins_v4_1.json"
         manifest.save(origin_manifest_path)
         origin_count = len(manifest.origin_indices)
-    np.savez_compressed(audit_root / "capacity_inputs.npz", split=np.asarray(args.splits), rows=np.asarray([len(frame)]), audit_origins=np.asarray(origin_count))
+    total_rows = sum(len(value) for value in frames.values())
+    np.savez_compressed(audit_root / "capacity_inputs.npz", split=np.asarray(args.splits), rows=np.asarray([total_rows]), audit_origins=np.asarray(origin_count))
     if run_root is not None:
         protocol_root = run_root / "protocol"
         write_immutable_json(protocol_root / "DATA_ACCESS_RECEIPT.json", controller.build_data_access_receipt())
@@ -350,3 +445,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+__all__ = ["build_trajectory_receipt", "main"]
