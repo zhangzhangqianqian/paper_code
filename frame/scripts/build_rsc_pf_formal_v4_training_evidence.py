@@ -86,7 +86,9 @@ def _batch_from_train(path: Path, *, batch_size: int = 2) -> dict[str, torch.Ten
             "device_history": torch.as_tensor(normalized("device_history"), dtype=torch.float32),
             "activity_history": torch.as_tensor(payload["activity_history"][indices], dtype=torch.float32),
             "scheduler_context": torch.as_tensor(context, dtype=torch.float32),
-            "previous_chp": torch.as_tensor(payload["previous_chp"][indices], dtype=torch.float32),
+            # Preserve the exact physical boundary value (e.g. 450.45 kW)
+            # instead of rounding it above capacity in float32.
+            "previous_chp": torch.as_tensor(payload["previous_chp"][indices], dtype=torch.float64),
             "target_normalized": torch.as_tensor(normalized("forecast_target"), dtype=torch.float32),
             "target_physical": torch.as_tensor(payload["forecast_target"][indices], dtype=torch.float32),
             "realized_renewables": torch.as_tensor(payload["renewable_realized"][indices], dtype=torch.float32),

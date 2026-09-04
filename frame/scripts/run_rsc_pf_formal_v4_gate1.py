@@ -55,7 +55,10 @@ def _batch(data: dict[str, np.ndarray], indices: np.ndarray, parameters: dict[st
         "device_history": torch.as_tensor(norm("device_history", "normalization_device_mean", "normalization_device_scale"), dtype=torch.float32),
         "activity_history": torch.as_tensor(data["activity_history"][indices], dtype=torch.float32),
         "scheduler_context": torch.as_tensor(context, dtype=torch.float32),
-        "previous_chp": torch.as_tensor(data["previous_chp"][indices], dtype=torch.float32),
+        # Keep the physical boundary state in float64.  450.45 is exactly
+        # representable in the frozen archive but rounds upward in float32,
+        # which would falsely trip the CHP-capacity guard at the boundary.
+        "previous_chp": torch.as_tensor(data["previous_chp"][indices], dtype=torch.float64),
         "target_normalized": torch.as_tensor(norm("forecast_target", "normalization_load_mean", "normalization_load_scale"), dtype=torch.float32),
         "target_physical": torch.as_tensor(data["forecast_target"][indices], dtype=torch.float64),
         "realized_renewables": torch.as_tensor(data["renewable_realized"][indices], dtype=torch.float64),
