@@ -59,7 +59,13 @@ def run_regression(*, output_path: str | Path, python_executable: str | Path = D
     # tests copy the repository into a fixture; placing basetemp below the
     # checkout would recursively copy this run's own temporary tree and can
     # exceed Windows path limits.
-    basetemp = Path(tempfile.gettempdir()) / f"formal_v4_regression_{destination.stem}_pytest_tmp"
+    # Keep the directory name short on Windows.  The receipt stem can be
+    # deliberately descriptive and, when embedded here, pushes copied
+    # external-baseline fixture paths beyond MAX_PATH.  A path hash preserves
+    # deterministic separation between concurrent receipts without exposing
+    # the long artifact name to the temporary-tree layout.
+    temp_key = _sha256(str(destination).encode("utf-8"))[:12]
+    basetemp = Path(tempfile.gettempdir()) / f"fv4_{temp_key}_pytest_tmp"
     command = [str(executable), "-B", "-m", "pytest", str(FRAME_ROOT / "tests"), "-q", "--basetemp", str(basetemp), "-p", "no:cacheprovider", *map(str, pytest_args)]
     env = dict(**__import__("os").environ)
     env["PYTHONPATH"] = str(FRAME_ROOT)
