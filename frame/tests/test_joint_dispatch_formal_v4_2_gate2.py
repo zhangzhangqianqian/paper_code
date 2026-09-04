@@ -45,20 +45,9 @@ def test_gate2_requires_primary_direction_and_shortage_guardrail():
     assert GATE2["authorize_gate2"](valid, _contract()).authorized_gate3 is False
 
 
-def test_independent_audit_recomputes_stage_p_identity_and_extension(tmp_path):
+def test_independent_audit_rejects_json_only_legacy_rows(tmp_path):
     root = tmp_path / "run"; (root / "protocol").mkdir(parents=True)
     rows = _valid_matrix()
-    rows[("State-Conditioned-PTO", 2026)]["stage_p_checkpoint_method"] = "State-Conditioned-PTO"
     (root / "gate2_rows.json").write_text(__import__("json").dumps({f"{key[0]}/{key[1]}": value for key, value in rows.items()}), encoding="utf-8")
-    audit = AUDIT["audit_gate2"](root)
-    assert audit.authorized_gate3 is True
-    assert (root / "protocol" / "SEED_EXTENSION_AUTHORIZATION.json").is_file()
-
-
-def test_failed_audit_never_authorizes_seed_extension(tmp_path):
-    root = tmp_path / "run"; (root / "protocol").mkdir(parents=True)
-    rows = _valid_matrix(); rows.pop(("RSC-PF", 2028))
-    (root / "gate2_rows.json").write_text(__import__("json").dumps({f"{key[0]}/{key[1]}": value for key, value in rows.items()}), encoding="utf-8")
-    audit = AUDIT["audit_gate2"](root)
-    assert audit.authorized_gate3 is False
-    assert not (root / "protocol" / "SEED_EXTENSION_AUTHORIZATION.json").exists()
+    with __import__("pytest").raises(FileNotFoundError):
+        AUDIT["audit_gate2"](root)

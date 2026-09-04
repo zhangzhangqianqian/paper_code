@@ -144,9 +144,11 @@ def execute_gate2_row(
     metrics_hash = sha256_file(directory / "METRICS.json")
     if key.seed is None:
         checkpoint_hash = training_hash = "not_applicable"
+        training_payload: Mapping[str, Any] = {}
     else:
         checkpoint_hash = sha256_file(directory / "CHECKPOINT.pt")
         training_hash = sha256_file(directory / "TRAINING_RECEIPT.json")
+        training_payload = json.loads((directory / "TRAINING_RECEIPT.json").read_text(encoding="utf-8"))
     row_payload = {
         **dict(lineage),
         "method_id": key.method_id,
@@ -161,6 +163,9 @@ def execute_gate2_row(
         "runtime_seconds": float(runtime),
         "forecast_metrics_applicable": forecast_applicable,
         "forecast_metrics": metrics_payload["forecast_metrics"],
+        "stage_s_parent_sha256": training_payload.get("stage_s_parent_sha256", "not_applicable"),
+        "decision_forecaster_gradient_norm": training_payload.get("decision_forecaster_gradient_norm", "not_applicable"),
+        "test_set_accessed": False,
         "shortage_energy": float(np.sum(metrics.shortage_energy)),
         "shortage_by_carrier": metrics.shortage_energy.tolist(),
         "shortage_rate": metrics.shortage_rate.tolist(),
