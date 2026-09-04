@@ -433,19 +433,26 @@ def train_rsc_family(
     base_batches = full_gate2_batches(data.train, data.normalization, batch_size=batch_size)
     model = build_rsc_model(data, parameters)
     stage_p = run_stage_p(model, {"train": base_batches}, budget=active_budget, seed=seed)
+    stage_p_frozen = deepcopy(stage_p.model)
     if teacher_dispatch is None:
         teacher_dispatch, teacher_objective = build_same_information_teacher_dispatch(
             stage_p.model, data, parameters, batch_size=batch_size,
         )
     else:
         teacher_objective = np.ones(len(data.train), dtype=np.float64)
+    shared_dir = Path(output_dir) / "_shared" / str(seed)
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    teacher_path = shared_dir / "TEACHER.npz"
+    if teacher_path.exists():
+        raise FileExistsError(f"refusing to overwrite teacher: {teacher_path}")
+    np.savez_compressed(teacher_path, dispatch=np.asarray(teacher_dispatch), objective=np.asarray(teacher_objective))
     train_batches = _with_teacher(data, teacher_dispatch, batch_size=batch_size)
     stage_s = run_stage_s(stage_p.model, {"train": train_batches}, budget=active_budget, seed=seed)
     root = Path(output_dir)
     lineage = _lineage(data, freeze)
     # Persisting the parent before either branch makes its byte identity auditable.
     parent_checkpoint = save_training_checkpoint(
-        root / "shared" / "STAGE_S.pt",
+        shared_dir / "STAGE_S.pt",
         model=stage_s.model,
         optimizer=stage_s.optimizer,
         epoch=max(stage_s.epochs - 1, 0),
@@ -461,7 +468,7 @@ def train_rsc_family(
         )
         artifacts[method_id] = _save_artifact(
             method_id=method_id, seed=seed, model=result.model, optimizer=result.optimizer,
-            epochs=result.epochs, output_dir=root / method_id, lineage={
+            epochs=result.epochs, output_dir=root / method_id / str(seed), lineage={
                 **lineage, "parent_checkpoint_sha256": parent_checkpoint.model_sha256,
             }, stage_s_parent_sha256=parent_checkpoint.model_sha256,
             decision_forecaster_gradient_norm=result.decision_forecaster_gradient_norm,
@@ -477,9 +484,9 @@ def train_rsc_family(
     # This PTO row intentionally uses the Stage-P state-conditioned predictor,
     # not either Stage-J branch.
     artifacts["State-Conditioned-PTO"] = _save_artifact(
-        method_id="State-Conditioned-PTO", seed=seed, model=stage_p.model,
+        method_id="State-Conditioned-PTO", seed=seed, model=stage_p_frozen,
         optimizer=stage_p.optimizer, epochs=stage_p.epochs,
-        output_dir=root / "State-Conditioned-PTO", lineage=lineage,
+        output_dir=root / "State-Conditioned-PTO" / str(seed), lineage=lineage,
         receipt={
             "optimizer_steps": stage_p.optimizer_steps,
             "forecast_loss_applicable": True,
@@ -658,7 +665,7 @@ def train_differentiable_lp(
 
     from .formal_v4_diffopt import DifferentiableIESLayer
 
-    if diffopt_receipt.get("eligible_for_gate0") is not True and diffopt_receipt.get("authorized") is not True:
+    if not any(diffopt_receipt.get(name) is True for name in ("eligible", "eligible_for_gate0", "authorized")):
         raise ValueError("Differentiable-LP receipt is not authorized")
     active_budget = _budget(freeze, budget)
     if model is None:

@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import shutil
 import sys
 from typing import Any, Iterable, Mapping
 
@@ -15,8 +16,11 @@ FRAME_ROOT = Path(__file__).resolve().parents[1]
 if str(FRAME_ROOT) not in sys.path:
     sys.path.insert(0, str(FRAME_ROOT))
 
-from src.joint_dispatch.formal_v4_2_artifacts import write_once_json  # noqa: E402
-from src.joint_dispatch.formal_v4_2_contract import FormalV42Contract  # noqa: E402
+import yaml
+
+from src.joint_dispatch.formal_v4_2_artifacts import sha256_file, write_failure_receipt, write_once_json  # noqa: E402
+from src.joint_dispatch.formal_v4_2_contract import FormalV42Contract, load_formal_v4_2_contract  # noqa: E402
+from src.joint_dispatch.formal_v4_2_gate2_execution import execute_gate2_matrix  # noqa: E402
 from src.joint_dispatch.formal_v4_2_methods import registered_method_rows  # noqa: E402
 
 
@@ -40,10 +44,9 @@ class Gate2DecisionV42:
 
 def build_gate2_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-root", type=Path, required=True)
-    parser.add_argument("--gate1-freeze", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--contract", type=Path, default=FRAME_ROOT / "configs" / "joint_forecast_dispatch_formal_v4_2.json")
+    parser.add_argument("--output-root", type=Path, default=FRAME_ROOT / "reports" / "joint_forecast_dispatch_formal_v4_2")
+    parser.add_argument("--run-id", required=True)
     return parser
 
 
@@ -106,7 +109,9 @@ def authorize_gate2(rows: Any, contract: FormalV42Contract | Mapping[str, Any]) 
         if row.get("test_set_accessed", row.get("evaluation_year_accessed", False)) is True:
             failed.append(f"{label}:evaluation_access")
         calls = _numeric(row, "optimizer_calls", "online_optimizer_calls")
-        if calls is not None and int(calls) != EXPECTED_CALLS[method_id]:
+        settled_hours = _numeric(row, "settled_hours")
+        expected_calls = 0 if EXPECTED_CALLS[method_id] == 0 else int(settled_hours if settled_hours is not None else 1)
+        if calls is not None and int(calls) != expected_calls:
             failed.append(f"{label}:optimizer_calls")
         for field in ("penalized_objective", "shortage_energy", "balance_residual_max", "capacity_violation_max"):
             value = _numeric(row, field)
@@ -140,16 +145,57 @@ def write_gate2_decision(path: str | Path, decision: Gate2DecisionV42, *, contra
     return Path(path)
 
 
+def _parameters(root: Path) -> dict[str, Any]:
+    benchmark_path = root / "gate0" / "benchmark" / "STANDARD_IES_BENCHMARK.yaml"
+    capacity_path = root / "gate0" / "CAPACITY_FREEZE.json"
+    benchmark = yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))
+    capacity = json.loads(capacity_path.read_text(encoding="utf-8"))
+    values = dict(benchmark["values"])
+    multiplier = float(capacity["selected"]["multiplier"])
+    for name in ("electric_chiller_capacity", "absorption_chiller_capacity"):
+        values[name] = float(values[name]) * multiplier
+    values.setdefault("surplus_penalty", 0.1)
+    values["carbon_price"] = values.get("carbon_price_default", 0.0)
+    return values
+
+
+def run_gate2(contract_path: str | Path, output_root: str | Path, run_id: str) -> Gate2DecisionV42:
+    contract = load_formal_v4_2_contract(contract_path)
+    root = Path(output_root).resolve() / str(run_id)
+    protocol = root / "protocol"
+    protocol.mkdir(parents=True, exist_ok=True)
+    contract_copy = protocol / "formal_v4_2_contract.json"
+    if contract_copy.exists():
+        if contract_copy.read_bytes() != Path(contract_path).resolve().read_bytes():
+            raise FileExistsError("run-root contract copy differs from the requested contract")
+    else:
+        shutil.copyfile(Path(contract_path).resolve(), contract_copy)
+    try:
+        rows = execute_gate2_matrix(contract=contract, run_root=root, parameters=_parameters(root))
+        decision = authorize_gate2(rows, contract)
+        write_gate2_decision(
+            root / "gate2" / "GATE2_DECISION.json", decision,
+            contract_sha256=contract.contract_sha256,
+            gate1_sha256=sha256_file(root / "gate1" / "GATE1_FREEZE.json"),
+        )
+        return decision
+    except Exception as exc:
+        write_failure_receipt(
+            root / "gate2" / "GATE2_FAILURE.json", stage="gate2", exception=exc,
+            lineage={"contract_sha256": contract.contract_sha256},
+        )
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_gate2_parser().parse_args(argv)
-    payload = json.loads(Path(args.run_root).joinpath("gate2_rows.json").read_text(encoding="utf-8"))
-    decision = authorize_gate2(payload, {"gate2_seeds": [2026, 2027, 2028]})
-    write_gate2_decision(args.output, decision, contract_sha256="" * 64)
-    print(json.dumps(decision.to_dict(), ensure_ascii=False)); return 0
+    decision = run_gate2(args.contract, args.output_root, args.run_id)
+    print(json.dumps(decision.to_dict(), ensure_ascii=False))
+    return 0 if decision.authorized_gate3 else 2
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["Gate2DecisionV42", "authorize_gate2", "build_gate2_parser", "main", "write_gate2_decision"]
+__all__ = ["Gate2DecisionV42", "authorize_gate2", "build_gate2_parser", "main", "run_gate2", "write_gate2_decision"]
