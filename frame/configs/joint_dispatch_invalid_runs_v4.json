@@ -1,0 +1,91 @@
+{
+  "schema_version": "rsc-pf-invalid-run-registry-v4",
+  "status": "frozen",
+  "audit_date": "2026-09-04",
+  "runs": [
+    {
+      "run_root": "formal_v4_20260903",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["pre-repair provenance and Gate 0 evidence are not admissible"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry1",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["pre-repair retry; inherited unverified artifacts"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry2",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["pre-repair retry; inherited unverified artifacts"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["pre-repair Gate 0 and downstream artifacts"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate1d",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate1e",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate1f",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate1_g",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate1_h",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate1_i",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate1_final",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "formal_v4_20260903_retry3_gate2",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["downstream of invalid pre-repair Gate 0"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "gate1_smoke",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["smoke artifact outside the repaired formal protocol"],
+      "allowed_for_formal_results": false
+    },
+    {
+      "run_root": "joint_forecast_dispatch_formal_v4_retry_gate1",
+      "status": "invalid_pre_repair_trial",
+      "reasons": ["sibling retry root outside the repaired formal protocol"],
+      "allowed_for_formal_results": false
+    }
+  ]
+}
