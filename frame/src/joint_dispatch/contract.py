@@ -80,6 +80,9 @@ class JointTrainingContract:
     selection: Mapping[str, Any]
     resource_gate: Mapping[str, Any]
     safety: Mapping[str, Any]
+    contract_status: str = ""
+    integrity_audit: Mapping[str, Any] = MappingProxyType({})
+    pilot: Mapping[str, Any] = MappingProxyType({})
     source_path: Path | None = None
 
     def variant(self, name: str) -> JointVariant:
@@ -121,6 +124,9 @@ class JointTrainingContract:
             "selection": thaw(self.selection),
             "resource_gate": thaw(self.resource_gate),
             "safety": thaw(self.safety),
+            "contract_status": self.contract_status,
+            "integrity_audit": thaw(self.integrity_audit),
+            "pilot": thaw(self.pilot),
         }
 
 
@@ -171,19 +177,25 @@ def validate_joint_contract(data: Mapping[str, Any]) -> None:
 
     if not isinstance(data, Mapping):
         raise ValueError("joint contract must be an object")
-    required = {
+    base_required = {
         "schema_version", "lookback", "horizon", "task_order", "exog_order", "dispatch_order",
         "status_order", "seeds", "forecast_task_weights", "variants", "curriculum",
         "warm_start_key_prefixes", "paths", "selection", "resource_gate", "safety",
     }
+    schema_version = str(data.get("schema_version", ""))
+    v3_additional = {"contract_status", "integrity_audit", "pilot"}
+    required = base_required | v3_additional if schema_version == "joint-forecast-dispatch-v3" else base_required
     missing = sorted(required - set(data))
     unknown = sorted(set(data) - required)
     if missing:
         raise ValueError(f"joint contract missing fields: {missing}")
     if unknown:
         raise ValueError(f"joint contract has unknown fields: {unknown}")
-    if data["schema_version"] != "joint-forecast-dispatch-v1":
-        raise ValueError("schema_version must be joint-forecast-dispatch-v1")
+    if schema_version not in {"joint-forecast-dispatch-v1", "joint-forecast-dispatch-v3"}:
+        raise ValueError("schema_version must be joint-forecast-dispatch-v1 or joint-forecast-dispatch-v3")
+    if schema_version == "joint-forecast-dispatch-v3":
+        if not isinstance(data["contract_status"], str) or not data["contract_status"].strip():
+            raise ValueError("contract_status must be a nonempty string")
     if _positive_int(data["lookback"], "lookback") != 24:
         raise ValueError("lookback must equal 24")
     if _positive_int(data["horizon"], "horizon") != 4:
@@ -255,6 +267,8 @@ def validate_joint_contract(data: Mapping[str, Any]) -> None:
         "kitakyushu_data_dir", "benchmark_path", "parameter_ledger_path", "renewable_forecast_root",
         "output_root", "warm_start_forecast_checkpoint", "warm_start_scheduler_checkpoint",
     }
+    if schema_version == "joint-forecast-dispatch-v3":
+        expected_paths |= {"data_root", "audit_data_root", "legacy_v2_root"}
     if set(paths) != expected_paths:
         raise ValueError("paths fields are not frozen")
     for name, value in paths.items():
@@ -291,6 +305,8 @@ def validate_joint_contract(data: Mapping[str, Any]) -> None:
         "online_exact_lp_calls", "test_year", "normalization_fit_split", "allow_output_overwrite",
         "allow_future_binary_decisions", "primary_carbon_loss",
     }
+    if schema_version == "joint-forecast-dispatch-v3":
+        expected_safety |= {"allow_test_access", "allow_legacy_overwrite"}
     if set(safety) != expected_safety:
         raise ValueError("safety fields are not frozen")
     if safety["online_exact_lp_calls"] != 0:
@@ -305,6 +321,34 @@ def validate_joint_contract(data: Mapping[str, Any]) -> None:
         raise ValueError("allow_future_binary_decisions must be false")
     if safety["primary_carbon_loss"] is not False:
         raise ValueError("primary_carbon_loss must be false")
+    if schema_version == "joint-forecast-dispatch-v3":
+        if safety["allow_test_access"] is not False:
+            raise ValueError("allow_test_access must be false")
+        if safety["allow_legacy_overwrite"] is not False:
+            raise ValueError("allow_legacy_overwrite must be false")
+        audit = _mapping(data["integrity_audit"], "integrity_audit")
+        if set(audit) != {"split", "windows", "audit_start", "required_precontext_hours", "objective_atol", "objective_rtol", "negative_gap_tolerance"}:
+            raise ValueError("integrity_audit fields are not frozen")
+        if audit["split"] != "validation":
+            raise ValueError("integrity_audit.split must be validation")
+        if _positive_int(audit["windows"], "integrity_audit.windows") != 500:
+            raise ValueError("integrity_audit.windows must equal 500")
+        if audit["audit_start"] != "2020-01-03T00:00:00":
+            raise ValueError("integrity_audit.audit_start is frozen")
+        if _positive_int(audit["required_precontext_hours"], "integrity_audit.required_precontext_hours") != 48:
+            raise ValueError("integrity_audit.required_precontext_hours must equal 48")
+        _exact_float(audit["objective_atol"], 1.0e-5, "integrity_audit.objective_atol")
+        _exact_float(audit["objective_rtol"], 1.0e-7, "integrity_audit.objective_rtol")
+        _exact_float(audit["negative_gap_tolerance"], 1.0e-5, "integrity_audit.negative_gap_tolerance")
+        pilot = _mapping(data["pilot"], "pilot")
+        if set(pilot) != {"seed", "epochs", "split"}:
+            raise ValueError("pilot fields are not frozen")
+        if _positive_int(pilot["seed"], "pilot.seed") != 2026:
+            raise ValueError("pilot.seed must equal 2026")
+        if _positive_int(pilot["epochs"], "pilot.epochs") != 8:
+            raise ValueError("pilot.epochs must equal 8")
+        if pilot["split"] != "validation":
+            raise ValueError("pilot.split must be validation")
 
 
 def _repo_root(contract_path: Path) -> Path:
@@ -312,10 +356,38 @@ def _repo_root(contract_path: Path) -> Path:
     return contract_path.resolve().parents[2]
 
 
+def _resolve_contract_source(path: str | Path) -> Path:
+    """Resolve repository-relative defaults from any supported working dir.
+
+    Older runners passed ``configs/foo.json`` as a relative default.  The
+    actual source lives below ``<repo>/frame/configs``; resolving that known
+    config namespace here keeps calls from both the Git root and ``frame/``
+    deterministic without reinterpretating arbitrary user paths.
+    """
+
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    cwd_candidate = (Path.cwd() / candidate).resolve()
+    if cwd_candidate.is_file():
+        return cwd_candidate
+    module_repo = Path(__file__).resolve().parents[3]
+    if candidate.parts and candidate.parts[0] == "configs":
+        frame_candidate = (module_repo / "frame" / candidate).resolve()
+        if frame_candidate.is_file():
+            return frame_candidate
+    repo_candidate = (module_repo / candidate).resolve()
+    if repo_candidate.is_file():
+        return repo_candidate
+    # Preserve the informative FileNotFoundError from the eventual open while
+    # still reporting the canonical repository-relative location.
+    return (module_repo / "frame" / candidate).resolve()
+
+
 def load_joint_training_contract(path: str | Path) -> JointTrainingContract:
     """Load, validate, and materialize the immutable joint contract."""
 
-    source = Path(path).resolve()
+    source = _resolve_contract_source(path)
     with source.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     validate_joint_contract(payload)
@@ -365,12 +437,28 @@ def load_joint_training_contract(path: str | Path) -> JointTrainingContract:
         selection=MappingProxyType(dict(payload["selection"])),
         resource_gate=MappingProxyType(dict(payload["resource_gate"])),
         safety=MappingProxyType(dict(payload["safety"])),
+        contract_status=str(payload.get("contract_status", "")),
+        integrity_audit=MappingProxyType(dict(payload.get("integrity_audit", {}))),
+        pilot=MappingProxyType(dict(payload.get("pilot", {}))),
         source_path=source,
     )
+
+
+def assert_validation_only_path(path: str | Path, *, test_year: int = 2021) -> None:
+    """Reject paths that could address a sealed test artifact during repair."""
+
+    value = Path(path)
+    normalized = str(value).replace("\\", "/").lower()
+    parts = tuple(part for part in normalized.split("/") if part)
+    if any(part in {"test", "test_set", "sealed_test"} for part in parts):
+        raise ValueError(f"test path is forbidden during validation-only repair: {path}")
+    year = str(int(test_year))
+    if year in parts or f"{year}_" in normalized or f"_{year}" in normalized:
+        raise ValueError(f"test-year artifact is forbidden during validation-only repair: {path}")
 
 
 __all__ = [
     "DISPATCH_ORDER", "EXOG_ORDER", "FORECAST_TASK_WEIGHTS", "JointTrainingContract",
     "JointVariant", "CurriculumSpec", "STATUS_ORDER", "TASK_ORDER", "WARM_START_PREFIXES",
-    "load_joint_training_contract", "validate_joint_contract",
+    "assert_validation_only_path", "load_joint_training_contract", "validate_joint_contract",
 ]

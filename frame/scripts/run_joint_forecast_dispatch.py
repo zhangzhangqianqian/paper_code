@@ -721,7 +721,7 @@ def _run_sealed_test(data_root: Path, output_dir: Path, selection: dict[str, obj
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--contract", type=Path, default=Path("configs/joint_forecast_dispatch_contract_v1.json"))
+    parser.add_argument("--contract", type=Path, default=FRAME_ROOT / "configs" / "joint_forecast_dispatch_contract_v1.json")
     parser.add_argument("--data-root", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--stage", choices=("dry-run", "smoke", "validation", "select", "test"), required=True)
