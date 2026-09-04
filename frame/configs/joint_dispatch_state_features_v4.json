@@ -1,0 +1,19 @@
+{
+  "schema_version": "joint-dispatch-state-features-v4",
+  "continuous_features": [
+    "grid", "pv_use", "pv_curt", "wt_use", "wt_curt", "g_chp", "g_gb",
+    "p_chp", "q_chp", "q_gb", "p_ec", "q_ec", "q_ac_in", "q_ac",
+    "p_charge", "p_discharge", "soc"
+  ],
+  "activity_features": [
+    "chp_on", "gas_boiler_on", "electric_chiller_on",
+    "absorption_chiller_on", "bess_charge_on", "bess_discharge_on"
+  ],
+  "excluded_features": ["slack_e", "slack_c", "slack_h", "q_dump"],
+  "activity_threshold": 1e-6,
+  "source_dispatch_order": [
+    "grid", "pv_use", "pv_curt", "wt_use", "wt_curt", "g_chp", "g_gb", "p_chp",
+    "q_chp", "q_gb", "p_ec", "q_ec", "q_ac_in", "q_ac", "p_charge", "p_discharge",
+    "soc", "slack_e", "slack_c", "slack_h", "q_dump"
+  ]
+}

@@ -45,8 +45,8 @@ _STATUS_SOURCE = {
 }
 
 
-def _as_float_array(value: object, *, name: str, ndim: int | None = None) -> np.ndarray:
-    array = np.asarray(value, dtype=np.float32)
+def _as_float_array(value: object, *, name: str, ndim: int | None = None, dtype: np.dtype | type = np.float32) -> np.ndarray:
+    array = np.asarray(value, dtype=dtype)
     if ndim is not None and array.ndim != ndim:
         raise ValueError(f"{name} must have {ndim} dimensions")
     if not np.isfinite(array).all():
@@ -144,6 +144,9 @@ class JointWindowSplit:
     target_times: np.ndarray
     split: str
     history_source: str = "causal_lp"
+    realized_renewables: np.ndarray | None = None
+    oracle_dispatch: np.ndarray | None = None
+    oracle_four_step_objective: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         arrays = {
@@ -157,7 +160,14 @@ class JointWindowSplit:
             "teacher_dispatch": self.teacher_dispatch,
             "oracle_first_step_objective": self.oracle_first_step_objective,
         }
-        converted = {key: _as_float_array(value, name=key) for key, value in arrays.items()}
+        # V3 integrity fields are kept in float64 so objective-parity and
+        # physical-constraint audits are not masked by float32 quantisation.
+        # Legacy v1/v2 artifacts retain their historical float32 storage.
+        v3_present = any(value is not None for value in (self.realized_renewables, self.oracle_dispatch, self.oracle_four_step_objective))
+        converted = {
+            key: _as_float_array(value, name=key, dtype=np.float64 if v3_present else np.float32)
+            for key, value in arrays.items()
+        }
         object.__setattr__(self, "target_times", np.asarray(self.target_times, dtype="datetime64[ns]"))
         for key, value in converted.items():
             object.__setattr__(self, key, value)
@@ -195,6 +205,26 @@ class JointWindowSplit:
             raise ValueError("history_source must be causal_lp or joint_policy_rollin")
         if self.history_source == "joint_policy_rollin" and self.split != "train":
             raise ValueError("joint_policy_rollin histories are legal only for train")
+        v3_fields = (self.realized_renewables, self.oracle_dispatch, self.oracle_four_step_objective)
+        if any(value is not None for value in v3_fields):
+            if not all(value is not None for value in v3_fields):
+                raise ValueError("v3 split fields must be supplied together")
+            realized = np.asarray(self.realized_renewables, dtype=np.float64)
+            oracle_dispatch = np.asarray(self.oracle_dispatch, dtype=np.float64)
+            oracle_objective = np.asarray(self.oracle_four_step_objective, dtype=np.float64)
+            if realized.shape != (n, 4, 2):
+                raise ValueError("realized_renewables must have shape [N,4,2]")
+            if oracle_dispatch.shape != (n, 4, len(DISPATCH_ORDER)):
+                raise ValueError("oracle_dispatch must have shape [N,4,21]")
+            if oracle_objective.shape != (n,):
+                raise ValueError("oracle_four_step_objective must have shape [N]")
+            if not np.isfinite(realized).all() or not np.isfinite(oracle_dispatch).all() or not np.isfinite(oracle_objective).all():
+                raise ValueError("v3 split fields must be finite")
+            if (realized < 0.0).any():
+                raise ValueError("realized_renewables must be non-negative")
+            object.__setattr__(self, "realized_renewables", realized)
+            object.__setattr__(self, "oracle_dispatch", oracle_dispatch)
+            object.__setattr__(self, "oracle_four_step_objective", oracle_objective)
 
     def __len__(self) -> int:
         return int(self.load_history.shape[0])
@@ -209,6 +239,9 @@ class JointWindowSplit:
             previous_chp=self.previous_chp, teacher_dispatch=self.teacher_dispatch,
             oracle_first_step_objective=self.oracle_first_step_objective,
             target_times=self.target_times, split=self.split, history_source=self.history_source,
+            realized_renewables=self.realized_renewables,
+            oracle_dispatch=self.oracle_dispatch,
+            oracle_four_step_objective=self.oracle_four_step_objective,
         )
 
     def take(self, indices: Sequence[int]) -> "JointWindowSplit":
@@ -221,6 +254,12 @@ class JointWindowSplit:
                 "teacher_dispatch", "oracle_first_step_objective", "target_times",
             )
         }
+        if self.realized_renewables is not None:
+            fields.update({
+                "realized_renewables": self.realized_renewables[index],
+                "oracle_dispatch": self.oracle_dispatch[index],
+                "oracle_four_step_objective": self.oracle_four_step_objective[index],
+            })
         return JointWindowSplit(split=self.split, history_source=self.history_source, **fields)
 
 
@@ -279,14 +318,17 @@ def build_joint_windows(
     if len(timestamps) < lookback + horizon:
         raise ValueError("aligned data is shorter than one joint window")
     lower, upper = _window_bounds(split, split_spec)
-    task_values = base[list(TASK_ORDER)].to_numpy(dtype=np.float32)
-    exog_values = base[list(EXOG_ORDER)].to_numpy(dtype=np.float32)
-    raw_device_values = device[list(DISPATCH_ORDER)].to_numpy(dtype=np.float32)
+    # Keep source values in float64 while constructing v3 references.  This
+    # avoids quantising demand/dispatch before the strict objective and
+    # physical-constraint audit; callers may still cast batches to float32.
+    task_values = base[list(TASK_ORDER)].to_numpy(dtype=np.float64)
+    exog_values = base[list(EXOG_ORDER)].to_numpy(dtype=np.float64)
+    raw_device_values = device[list(DISPATCH_ORDER)].to_numpy(dtype=np.float64)
     if origin_specific and not np.array_equal(
         device["timestamp"].to_numpy(dtype="datetime64[ns]"),
         timestamps,
     ):
-        device_values = np.full((len(timestamps), len(DISPATCH_ORDER)), np.nan, dtype=np.float32)
+        device_values = np.full((len(timestamps), len(DISPATCH_ORDER)), np.nan, dtype=np.float64)
         device_position = {time: index for index, time in enumerate(device["timestamp"].to_numpy(dtype="datetime64[ns]"))}
         for position, time in enumerate(timestamps):
             source_index = device_position.get(time)
@@ -350,8 +392,8 @@ def build_joint_windows(
                 continue
             if oracle_target_times.shape != (1,) or oracle_target_times[0] != target_times_for_window[0]:
                 continue
-            contexts.append(context_group[list(SCHEDULER_CONTEXT_ORDER)].to_numpy(dtype=np.float32))
-            teachers.append(teacher_group[list(DISPATCH_ORDER)].to_numpy(dtype=np.float32))
+            contexts.append(context_group[list(SCHEDULER_CONTEXT_ORDER)].to_numpy(dtype=np.float64))
+            teachers.append(teacher_group[list(DISPATCH_ORDER)].to_numpy(dtype=np.float64))
             oracles.append(float(oracle_group["oracle_first_step_objective"].iloc[0]))
         else:
             contexts.append(context_values[end:target_end])
@@ -364,20 +406,160 @@ def build_joint_windows(
         previous_chp.append(float(device_values[end - 1, chp_idx]))
         target_times.append(times[lookback])
     n = len(loads)
-    empty = lambda tail, dtype=np.float32: np.empty((0, *tail), dtype=dtype)
+    empty = lambda tail, dtype=np.float64: np.empty((0, *tail), dtype=dtype)
     return JointWindowSplit(
-        load_history=np.asarray(loads, dtype=np.float32).reshape((n, lookback, len(TASK_ORDER))) if n else empty((lookback, len(TASK_ORDER))),
-        exog_history=np.asarray(exogs, dtype=np.float32).reshape((n, lookback, len(EXOG_ORDER))) if n else empty((lookback, len(EXOG_ORDER))),
-        device_history=np.asarray(devices, dtype=np.float32).reshape((n, lookback, len(DISPATCH_ORDER))) if n else empty((lookback, len(DISPATCH_ORDER))),
-        device_status=derive_device_status(np.asarray(devices, dtype=np.float32).reshape((n, lookback, len(DISPATCH_ORDER))) if n else empty((lookback, len(DISPATCH_ORDER)))),
-        forecast_target=np.asarray(targets, dtype=np.float32).reshape((n, horizon, len(TASK_ORDER))) if n else empty((horizon, len(TASK_ORDER))),
-        scheduler_context=np.asarray(contexts, dtype=np.float32).reshape((n, horizon, len(SCHEDULER_CONTEXT_ORDER))) if n else empty((horizon, len(SCHEDULER_CONTEXT_ORDER))),
-        previous_chp=np.asarray(previous_chp, dtype=np.float32).reshape((n, 1)),
-        teacher_dispatch=np.asarray(teachers, dtype=np.float32).reshape((n, horizon, len(DISPATCH_ORDER))) if n else empty((horizon, len(DISPATCH_ORDER))),
-        oracle_first_step_objective=np.asarray(oracles, dtype=np.float32),
+        load_history=np.asarray(loads, dtype=np.float64).reshape((n, lookback, len(TASK_ORDER))) if n else empty((lookback, len(TASK_ORDER))),
+        exog_history=np.asarray(exogs, dtype=np.float64).reshape((n, lookback, len(EXOG_ORDER))) if n else empty((lookback, len(EXOG_ORDER))),
+        device_history=np.asarray(devices, dtype=np.float64).reshape((n, lookback, len(DISPATCH_ORDER))) if n else empty((lookback, len(DISPATCH_ORDER))),
+        device_status=derive_device_status(np.asarray(devices, dtype=np.float64).reshape((n, lookback, len(DISPATCH_ORDER))) if n else empty((lookback, len(DISPATCH_ORDER)))),
+        forecast_target=np.asarray(targets, dtype=np.float64).reshape((n, horizon, len(TASK_ORDER))) if n else empty((horizon, len(TASK_ORDER))),
+        scheduler_context=np.asarray(contexts, dtype=np.float64).reshape((n, horizon, len(SCHEDULER_CONTEXT_ORDER))) if n else empty((horizon, len(SCHEDULER_CONTEXT_ORDER))),
+        previous_chp=np.asarray(previous_chp, dtype=np.float64).reshape((n, 1)),
+        teacher_dispatch=np.asarray(teachers, dtype=np.float64).reshape((n, horizon, len(DISPATCH_ORDER))) if n else empty((horizon, len(DISPATCH_ORDER))),
+        oracle_first_step_objective=np.asarray(oracles, dtype=np.float64),
         target_times=np.asarray(target_times, dtype="datetime64[ns]"),
         split=split,
         history_source=history_source,
+    )
+
+
+def build_joint_windows_v3(
+    frame: pd.DataFrame,
+    device_trajectory: pd.DataFrame,
+    scheduler_context: pd.DataFrame,
+    teacher_dispatch: pd.DataFrame,
+    realized_renewables: pd.DataFrame,
+    oracle_dispatch: pd.DataFrame,
+    oracle_four_step_objective: pd.DataFrame,
+    *,
+    split: str,
+    split_spec: SplitSpec = KITAKYUSHU_SPLIT,
+    history_source: str = "causal_lp",
+) -> JointWindowSplit:
+    """Build v3 windows with separate realized renewables and oracle fields.
+
+    The established v1/v2 alignment routine remains the source of the
+    forecast/history/teacher window indices. V3-only origin-keyed artifacts
+    are then joined using the resulting target origins, preventing accidental
+    positional alignment when a history row is missing.
+    """
+
+    realized = _prepare_origin_table(
+        realized_renewables,
+        ("timestamp", "pv_realized", "wt_realized"),
+        "realized renewables",
+    )
+    oracle_values = _prepare_origin_table(
+        oracle_dispatch,
+        ("timestamp", *DISPATCH_ORDER),
+        "oracle dispatch",
+    )
+    objective = _prepare_origin_table(
+        oracle_four_step_objective,
+        ("timestamp", "oracle_four_step_objective"),
+        "oracle four-hour objective",
+    )
+    legacy_objective = objective.rename(
+        columns={"oracle_four_step_objective": "oracle_first_step_objective"}
+    )
+    base = build_joint_windows(
+        frame,
+        device_trajectory,
+        scheduler_context,
+        teacher_dispatch,
+        legacy_objective,
+        split=split,
+        split_spec=split_spec,
+        history_source=history_source,
+    )
+    realized_groups = {
+        np.datetime64(origin, "ns"): group.sort_values("timestamp")
+        for origin, group in realized.groupby("origin_timestamp", sort=False)
+    }
+    oracle_groups = {
+        np.datetime64(origin, "ns"): group.sort_values("timestamp")
+        for origin, group in oracle_values.groupby("origin_timestamp", sort=False)
+    }
+    realized_rows: list[np.ndarray] = []
+    oracle_rows: list[np.ndarray] = []
+    for origin in base.target_times:
+        key = np.datetime64(origin, "ns")
+        realized_group = realized_groups.get(key)
+        oracle_group = oracle_groups.get(key)
+        if realized_group is None or oracle_group is None:
+            raise ValueError(f"v3 reference rows missing for origin {pd.Timestamp(origin)}")
+        realized_times = realized_group["timestamp"].to_numpy(dtype="datetime64[ns]")
+        oracle_times = oracle_group["timestamp"].to_numpy(dtype="datetime64[ns]")
+        expected_times = key + np.arange(4, dtype=np.int64).astype("timedelta64[h]")
+        if not np.array_equal(realized_times, expected_times) or not np.array_equal(oracle_times, expected_times):
+            raise ValueError(f"v3 reference horizon alignment failed for origin {pd.Timestamp(origin)}")
+        realized_rows.append(realized_group[["pv_realized", "wt_realized"]].to_numpy(dtype=np.float64))
+        oracle_rows.append(oracle_group[list(DISPATCH_ORDER)].to_numpy(dtype=np.float64))
+    n = len(base)
+    realized_array = np.asarray(realized_rows, dtype=np.float64).reshape((n, 4, 2))
+    oracle_array = np.asarray(oracle_rows, dtype=np.float64).reshape((n, 4, len(DISPATCH_ORDER)))
+    objective_by_origin = {
+        np.datetime64(origin, "ns"): float(group["oracle_four_step_objective"].iloc[0])
+        for origin, group in objective.groupby("origin_timestamp", sort=False)
+    }
+    try:
+        objective_array = np.asarray(
+            [objective_by_origin[np.datetime64(origin, "ns")] for origin in base.target_times],
+            dtype=np.float64,
+        )
+    except KeyError as exc:
+        raise ValueError(f"v3 objective row missing for origin {exc.args[0]}") from exc
+    # ``build_joint_windows`` intentionally preserves legacy float32 storage.
+    # Rejoin the v3 target/context rows directly from their float64 source
+    # tables so strict objective and SOC/ramp audits use the same values that
+    # generated the LP references.
+    frame_lookup = frame.copy()
+    frame_lookup["timestamp"] = pd.to_datetime(frame_lookup["timestamp"], errors="raise")
+    frame_lookup = frame_lookup.set_index("timestamp")
+    target_exact = np.asarray(
+        [frame_lookup.loc[pd.to_datetime(origin) + pd.to_timedelta(np.arange(4), unit="h"), list(TASK_ORDER)].to_numpy(dtype=np.float64) for origin in base.target_times],
+        dtype=np.float64,
+    ).reshape((n, 4, len(TASK_ORDER)))
+    context_by_origin = {
+        np.datetime64(origin, "ns"): group.sort_values("timestamp")
+        for origin, group in scheduler_context.groupby("origin_timestamp", sort=False)
+    }
+    teacher_by_origin = {
+        np.datetime64(origin, "ns"): group.sort_values("timestamp")
+        for origin, group in teacher_dispatch.groupby("origin_timestamp", sort=False)
+    }
+    device_by_time = {
+        np.datetime64(row["timestamp"], "ns"): float(row["p_chp"])
+        for _, row in device_trajectory.iterrows()
+    }
+    context_exact = np.asarray(
+        [context_by_origin[np.datetime64(origin, "ns")][list(SCHEDULER_CONTEXT_ORDER)].to_numpy(dtype=np.float64) for origin in base.target_times],
+        dtype=np.float64,
+    ).reshape((n, 4, len(SCHEDULER_CONTEXT_ORDER)))
+    previous_exact = np.asarray(
+        [device_by_time[np.datetime64(origin, "ns") - np.timedelta64(1, "h")] for origin in base.target_times],
+        dtype=np.float64,
+    ).reshape((n, 1))
+    teacher_exact = np.asarray(
+        [teacher_by_origin[np.datetime64(origin, "ns")][list(DISPATCH_ORDER)].to_numpy(dtype=np.float64) for origin in base.target_times],
+        dtype=np.float64,
+    ).reshape((n, 4, len(DISPATCH_ORDER)))
+    return JointWindowSplit(
+        load_history=base.load_history,
+        exog_history=base.exog_history,
+        device_history=base.device_history,
+        device_status=base.device_status,
+        forecast_target=target_exact,
+        scheduler_context=context_exact,
+        previous_chp=previous_exact,
+        teacher_dispatch=teacher_exact,
+        oracle_first_step_objective=objective_array,
+        target_times=base.target_times,
+        split=base.split,
+        history_source=base.history_source,
+        realized_renewables=realized_array,
+        oracle_dispatch=oracle_array,
+        oracle_four_step_objective=objective_array,
     )
 
 
@@ -637,6 +819,12 @@ def save_joint_split(
         "history_source": np.asarray(split.history_source),
         "metadata_json": np.asarray(json.dumps(dict(metadata or {}), ensure_ascii=False, sort_keys=True)),
     }
+    if split.realized_renewables is not None:
+        payload.update({
+            "realized_renewables": split.realized_renewables,
+            "oracle_dispatch": split.oracle_dispatch,
+            "oracle_four_step_objective": split.oracle_four_step_objective,
+        })
     if normalization is not None:
         for name in (
             "load_mean", "load_scale", "exog_mean", "exog_scale", "device_mean", "device_scale",
@@ -669,6 +857,9 @@ def load_joint_split(path: str | Path) -> tuple[JointWindowSplit, JointNormaliza
             oracle_first_step_objective=payload["oracle_first_step_objective"],
             target_times=payload["target_times"], split=str(np.asarray(payload["split"]).item()),
             history_source=str(np.asarray(payload["history_source"]).item()),
+            realized_renewables=payload["realized_renewables"] if "realized_renewables" in payload else None,
+            oracle_dispatch=payload["oracle_dispatch"] if "oracle_dispatch" in payload else None,
+            oracle_four_step_objective=payload["oracle_four_step_objective"] if "oracle_four_step_objective" in payload else None,
         )
         norm_fields = (
             "load_mean", "load_scale", "exog_mean", "exog_scale", "device_mean", "device_scale",
@@ -699,6 +890,7 @@ __all__ = [
     "benchmark_lp_generation",
     "build_causal_device_trajectory",
     "build_joint_windows",
+    "build_joint_windows_v3",
     "derive_device_status",
     "fit_joint_normalization",
     "load_joint_split",

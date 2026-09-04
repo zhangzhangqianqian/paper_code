@@ -85,6 +85,59 @@ def _validate_v2_metadata(metadata: Mapping[str, Any], artifact_name: str) -> No
         raise ValueError(f"{artifact_name} inference_exact_lp_calls must be zero")
 
 
+def validate_ablation_training_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    expected_variant: str | None = None,
+    expected_feature_order: tuple[str, ...] | None = None,
+    artifact_name: str = "ablation artifact",
+) -> None:
+    """Validate the compact provenance written by the ablation trainer.
+
+    The legacy v4 validator above intentionally requires the original ten
+    features.  This separate validator keeps that path unchanged while
+    allowing the S4 nine-feature input ablation to be checked without
+    weakening the legacy checkpoint contract.
+    """
+
+    required = {
+        "ablation_variant", "feature_order", "loss_weights", "decoder",
+        "physical_decoder", "diagnostic_only", "deployable", "seed",
+        "contract_sha256", "benchmark_sha256", "selection_split",
+        "test_split_used_for_selection", "train_split", "validation_split",
+        "stage",
+    }
+    missing = sorted(required - set(metadata))
+    if missing:
+        raise ValueError(f"{artifact_name} provenance is incomplete: missing {missing}")
+    variant = str(metadata["ablation_variant"])
+    if expected_variant is not None and variant != str(expected_variant):
+        raise ValueError(f"{artifact_name} variant mismatch")
+    feature_order = tuple(str(value) for value in metadata["feature_order"])
+    if not feature_order or len(set(feature_order)) != len(feature_order) or any(value not in FEATURE_ORDER for value in feature_order):
+        raise ValueError(f"{artifact_name} feature order is invalid")
+    if expected_feature_order is not None and feature_order != tuple(expected_feature_order):
+        raise ValueError(f"{artifact_name} feature order mismatch")
+    label_order = tuple(str(value) for value in metadata.get("label_order", LABEL_ORDER))
+    if label_order != LABEL_ORDER:
+        raise ValueError(f"{artifact_name} label order mismatch")
+    for name in ("contract_sha256", "benchmark_sha256"):
+        digest = str(metadata[name]).lower()
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise ValueError(f"{artifact_name} {name} is not a SHA-256 digest")
+    try:
+        seed = int(metadata["seed"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{artifact_name} seed must be an integer") from exc
+    if seed <= 0 or metadata["selection_split"] != "validation" or metadata["test_split_used_for_selection"] is not False:
+        raise ValueError(f"{artifact_name} selection provenance mismatch")
+    if metadata["train_split"] != "train" or metadata["validation_split"] != "validation":
+        raise ValueError(f"{artifact_name} split provenance mismatch")
+    stage = str(metadata["stage"])
+    if stage == "validation" and metadata.get("test_split_used_for_selection") is not False:
+        raise ValueError(f"{artifact_name} validation artifact is not test-sealed")
+
+
 def _cross_check_provenance_metadata(left: Mapping[str, Any], right: Mapping[str, Any], left_name: str, right_name: str) -> None:
     for field in _PROVENANCE_METADATA_FIELDS:
         if field in {"feature_order", "label_order"}:
@@ -608,4 +661,5 @@ __all__ = [
     "train_model",
     "load_trained_proxy",
     "load_checkpointed_proxy",
+    "validate_ablation_training_metadata",
 ]

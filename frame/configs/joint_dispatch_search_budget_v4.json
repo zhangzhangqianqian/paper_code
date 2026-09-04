@@ -1,0 +1,11 @@
+{
+  "schema_version": "joint-dispatch-search-budget-v4",
+  "methods": {
+    "RSC-PF": {"max_trials": 4, "max_epochs": 30, "patience": 5, "validation_interval": 1},
+    "Decoupled-RSC-PF": {"max_trials": 4, "max_epochs": 30, "patience": 5, "validation_interval": 1},
+    "Direct-Policy": {"max_trials": 4, "max_epochs": 30, "patience": 5, "validation_interval": 1},
+    "Scheme2R-PTO": {"max_trials": 4, "max_epochs": 30, "patience": 5, "validation_interval": 1},
+    "Official iTransformer-PTO": {"max_trials": 4, "max_epochs": 30, "patience": 5, "validation_interval": 1},
+    "Differentiable-LP": {"max_trials": 4, "max_epochs": 30, "patience": 5, "validation_interval": 1}
+  }
+}

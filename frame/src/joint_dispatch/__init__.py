@@ -19,6 +19,15 @@ from .data import (
     load_joint_split,
     save_joint_split,
 )
+from .formal_protocol import (
+    AblationSpec,
+    FormalExperimentSpec,
+    MethodSpec,
+    TrainingBudget,
+    load_formal_experiment_spec,
+    validate_formal_experiment_payload,
+)
+from .pto import PTOForecasts, PTODispatchCache, load_pto_cache, save_pto_cache, seasonal_naive_forecasts, solve_pto_windows
 
 __all__ = [
     "CurriculumSpec",
@@ -36,6 +45,18 @@ __all__ = [
     "fit_joint_normalization",
     "load_joint_split",
     "save_joint_split",
+    "AblationSpec",
+    "FormalExperimentSpec",
+    "MethodSpec",
+    "TrainingBudget",
+    "load_formal_experiment_spec",
+    "validate_formal_experiment_payload",
+    "PTOForecasts",
+    "PTODispatchCache",
+    "load_pto_cache",
+    "save_pto_cache",
+    "seasonal_naive_forecasts",
+    "solve_pto_windows",
     "DeviceHistoryEncoder",
     "JointForecastDispatchModel",
     "JointForwardOutput",

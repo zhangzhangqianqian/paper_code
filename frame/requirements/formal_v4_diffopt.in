@@ -1,0 +1,5 @@
+numpy<2,>=1.24
+cvxpy==1.7.5
+cvxpylayers==0.1.6
+diffcp==1.0.23
+ecos==2.0.14

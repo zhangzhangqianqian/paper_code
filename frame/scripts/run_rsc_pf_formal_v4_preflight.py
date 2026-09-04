@@ -19,7 +19,7 @@ if str(FRAME_ROOT) not in sys.path:
     sys.path.insert(0, str(FRAME_ROOT))
 
 from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec  # noqa: E402
-from src.joint_dispatch.formal_v4_access import DataAccessReceipt  # noqa: E402
+from src.joint_dispatch.formal_v4_access import DataAccessReceipt, scan_runtime_access  # noqa: E402
 from src.joint_dispatch.formal_v4_diffopt import DifferentiableLPGateReceipt  # noqa: E402
 from src.joint_dispatch.formal_v4_gate0 import (  # noqa: E402
     MANDATORY_CHECK_IDS,
@@ -82,7 +82,29 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     check("protocol_freeze", lambda: {"passed": spec.schema_version == "joint-forecast-dispatch-formal-v4.1", "schema_version": spec.schema_version})
 
     closure = Path(spec.source_closure_file) if spec.source_closure_file is not None else FRAME_ROOT / "configs" / "formal_v4_source_closure_v4_1.txt"
-    check("source_closure", lambda: {"passed": closure.is_file(), "path": str(closure)})
+    def source_closure():
+        if not closure.is_file():
+            raise FileNotFoundError(closure)
+        declared = []
+        for line in closure.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                path = (REPO_ROOT / line).resolve()
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+                declared.append(path)
+        scan = scan_runtime_access(
+            declared,
+            allowlisted_paths=(
+                FRAME_ROOT / "src" / "kitakyushu_pipeline.py",
+                FRAME_ROOT / "src" / "joint_dispatch" / "formal_v4_access.py",
+            ),
+        )
+        if scan["status"] != "pass":
+            raise ValueError(f"unapproved data-access bypasses: {scan['findings']}")
+        return {"passed": True, "path": str(closure), "entry_count": len(declared), "scan": scan}
+
+    check("source_closure", source_closure)
     manifest_path = protocol / "SOURCE_MANIFEST.json"
 
     def source_manifest():

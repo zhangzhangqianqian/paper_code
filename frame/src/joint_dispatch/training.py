@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import random
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -15,7 +15,7 @@ from torch import Tensor, nn
 
 from .contract import JointTrainingContract, JointVariant
 from .data import JointWindowSplit
-from .losses import CurriculumWeights, JointLossBreakdown, joint_forecast_dispatch_loss, weights_for_epoch
+from .losses import CurriculumWeights, JointLossBreakdown, JointV3LossBreakdown, joint_forecast_dispatch_loss, joint_forecast_dispatch_loss_v3, weights_for_epoch
 from .model import JointForecastDispatchModel
 from .rollout import ClosedLoopRollout, rollout_joint_policy
 
@@ -110,6 +110,9 @@ def joint_train_step(
     epoch: int,
     ramp_epochs: int = 20,
     grad_clip_norm: float = 1.0,
+    normalize_decision: bool = False,
+    loss_weight_multipliers: Mapping[str, float] | None = None,
+    forecast_task_weights: Sequence[float] | None = None,
 ) -> JointStepResult:
     """Run exactly one complete forward/backward/optimizer step."""
 
@@ -124,20 +127,70 @@ def joint_train_step(
         scheduler_context=_batch_value(batch, "scheduler_context"),
         previous_chp=_batch_value(batch, "previous_chp"),
     )
-    breakdown = joint_forecast_dispatch_loss(
-        output,
-        _batch_value(batch, "target_normalized"),
-        _batch_value(batch, "target_physical"),
-        _batch_value(batch, "teacher_dispatch"),
-        _batch_value(batch, "oracle_first_step_objective"),
-        parameters,
-        weights,
-    )
-    decision_term = breakdown.regret + breakdown.shortage
-    if decision_term.requires_grad:
+    if all(name in batch for name in ("realized_renewables", "initial_soc", "oracle_four_step_objective")):
+        breakdown = joint_forecast_dispatch_loss_v3(
+            output,
+            _batch_value(batch, "target_normalized"),
+            _batch_value(batch, "target_physical"),
+            _batch_value(batch, "realized_renewables"),
+            _batch_value(batch, "initial_soc"),
+            _batch_value(batch, "previous_chp"),
+            _batch_value(batch, "teacher_dispatch"),
+            _batch_value(batch, "oracle_four_step_objective"),
+            parameters,
+            weights,
+            forecast_task_weights=forecast_task_weights,
+        )
+        decision_shortage = breakdown.normalized_shortage
+        decision_term = breakdown.four_hour_optimality_gap + decision_shortage + breakdown.constraint_penalty
+    else:
+        breakdown = joint_forecast_dispatch_loss(
+            output,
+            _batch_value(batch, "target_normalized"),
+            _batch_value(batch, "target_physical"),
+            _batch_value(batch, "teacher_dispatch"),
+            _batch_value(batch, "oracle_first_step_objective"),
+            parameters,
+            weights,
+            normalize_decision=normalize_decision,
+        )
+        decision_shortage = breakdown.normalized_shortage if normalize_decision else breakdown.shortage
+        decision_term = breakdown.regret + decision_shortage
+    if decision_shortage is None:  # pragma: no cover - defensive for custom breakdowns
+        decision_shortage = breakdown.shortage
+    multipliers = {"forecast": 1.0, "imitation": 1.0, "decision": 1.0}
+    if loss_weight_multipliers is not None:
+        for name, value in loss_weight_multipliers.items():
+            if name not in multipliers or not np.isfinite(float(value)) or float(value) < 0.0:
+                raise ValueError("loss_weight_multipliers must contain finite non-negative forecast/imitation/decision values")
+            multipliers[name] = float(value)
+    if isinstance(breakdown, JointV3LossBreakdown):
+        total = (
+            multipliers["forecast"] * weights.forecast * breakdown.forecast
+            + multipliers["imitation"] * weights.imitation * breakdown.imitation
+            + multipliers["decision"] * weights.decision * (breakdown.four_hour_optimality_gap + breakdown.normalized_shortage + breakdown.constraint_penalty)
+        )
+        breakdown = JointV3LossBreakdown(
+            total=total, forecast=breakdown.forecast, imitation=breakdown.imitation,
+            four_hour_optimality_gap=breakdown.four_hour_optimality_gap, shortage=breakdown.shortage,
+            constraint_penalty=breakdown.constraint_penalty, normalized_shortage=breakdown.normalized_shortage,
+        )
+    else:
+        total = (
+            multipliers["forecast"] * weights.forecast * breakdown.forecast
+            + multipliers["imitation"] * weights.imitation * breakdown.imitation
+            + multipliers["decision"] * weights.decision * (breakdown.regret + decision_shortage)
+        )
+        breakdown = JointLossBreakdown(
+            total=total, forecast=breakdown.forecast, imitation=breakdown.imitation,
+            regret=breakdown.regret, shortage=breakdown.shortage, carbon_metric=breakdown.carbon_metric,
+            planned_feasibility=breakdown.planned_feasibility, normalized_shortage=breakdown.normalized_shortage,
+        )
+    trainable_forecaster = tuple(parameter for parameter in model.forecaster.parameters() if parameter.requires_grad)
+    if decision_term.requires_grad and trainable_forecaster:
         decision_grads = torch.autograd.grad(
             decision_term,
-            tuple(model.forecaster.parameters()),
+            trainable_forecaster,
             allow_unused=True,
             retain_graph=True,
         )
@@ -152,7 +205,7 @@ def joint_train_step(
             weights,
         )
     breakdown.total.backward()
-    forecaster_norm = _norm(model.forecaster.parameters())
+    forecaster_norm = _norm(trainable_forecaster)
     scheduler_norm = _norm(model.scheduler.parameters())
     if grad_clip_norm <= 0.0:
         raise ValueError("grad_clip_norm must be positive")
@@ -255,6 +308,7 @@ def save_joint_checkpoint(
     gradient_audit: GradientCouplingAudit | None = None,
     best_validation_score: float | None = None,
     loss_weights: Mapping[str, float] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -273,6 +327,7 @@ def save_joint_checkpoint(
             "numpy": np.random.get_state(),
             "python": random.getstate(),
         },
+        "metadata": None if metadata is None else dict(metadata),
     }
     _atomic_torch_save(payload, destination)
 
@@ -310,10 +365,13 @@ def load_allowed_warm_start(
         candidate_names = [name]
         if not name.startswith("forecaster.") and not name.startswith("scheduler."):
             candidate_names.append(f"forecaster.base.{name}")
+            if name.startswith(("residual.", "output_projection.")):
+                candidate_names.append(f"scheduler.{name}")
         selected_name = None
         for candidate in candidate_names:
             normalized = candidate.removeprefix("forecaster.")
-            admitted = any(normalized.startswith(prefix) for prefix in forecast_prefixes) or any(candidate.startswith(prefix) for prefix in scheduler_prefixes)
+            scheduler_local = candidate.removeprefix("scheduler.")
+            admitted = any(normalized.startswith(prefix) for prefix in forecast_prefixes) or any(scheduler_local.startswith(prefix) for prefix in scheduler_prefixes)
             if admitted and candidate in current:
                 selected_name = candidate
                 break

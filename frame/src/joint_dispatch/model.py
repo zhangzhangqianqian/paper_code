@@ -171,10 +171,12 @@ class JointForecastDispatchModel(nn.Module):
         scheduler_context_mean: Tensor | None = None,
         scheduler_context_scale: Tensor | None = None,
         dropout: float = 0.1,
+        use_gas_prior: bool = True,
     ) -> None:
         super().__init__()
         self.forecaster = StateConditionedScheme2R(exog_dim=exog_dim, dropout=dropout)
         self.scheduler = JointSchedulingProxy(dropout=dropout)
+        self.use_gas_prior = bool(use_gas_prior)
         self.register_buffer("task_mean", self._vector(task_mean, 4, 0.0))
         self.register_buffer("task_scale", self._positive_vector(task_scale, 4, 1.0))
         self.register_buffer("physical_feature_mean", self._vector(physical_feature_mean, 10, 0.0))
@@ -236,7 +238,12 @@ class JointForecastDispatchModel(nn.Module):
         if scheduler_context.shape[0] != forecast_physical.shape[0]:
             raise ValueError("scheduler_context batch does not match forecast")
         _check_finite(scheduler_context, "scheduler_context")
-        context = scheduler_context.to(dtype=forecast_physical.dtype)
+        # Keep the physical decoder inputs in float64.  Forecast heads may be
+        # trained in float32, but silently down-casting the carried SOC and
+        # price/context state here creates avoidable 1e-5--1e-4 feasibility
+        # residuals in the strict post-training audit.
+        context = scheduler_context.to(dtype=torch.float64)
+        forecast_physical = forecast_physical.to(dtype=torch.float64)
         soc = context[..., -1]
         if bool((soc < 0.0).any()) or bool((soc > 1.0).any()):
             raise ValueError("initial_soc must be in [0,1]")
@@ -258,15 +265,27 @@ class JointForecastDispatchModel(nn.Module):
             load_history, exog_history, device_history, device_status
         )
         forecast_physical = self.forecast_to_physical(forecast_normalized)
+        if not self.use_gas_prior:
+            # The gas forecast remains a reported auxiliary task, but it is
+            # removed from the scheduler context in the named No-Gas-Prior
+            # ablation.  This keeps the graph shape and decoder contract fixed.
+            forecast_physical = forecast_physical.clone()
+            forecast_physical[..., 3] = 0.0
         physical_features = self._raw_physical_features(forecast_physical, scheduler_context)
         normalized_features = (physical_features - self.physical_feature_mean) / self.physical_feature_scale
+        normalized_features = normalized_features.to(dtype=forecast_normalized.dtype)
         device_state = forecast_details["device_state"]
-        control_logits = self.scheduler(normalized_features, device_state, previous_chp)
+        # The scheduler MLP follows the forecaster's training dtype, while the
+        # decoder receives the original high-precision carried state below.
+        scheduler_previous_chp = previous_chp.to(dtype=normalized_features.dtype)
+        control_logits = self.scheduler(normalized_features, device_state, scheduler_previous_chp)
         dispatch = decode_feasible_dispatch(
             control_logits,
             physical_features,
             self.decoder_parameters,
             temperature=CONTROL_TEMPERATURE,
+            previous_chp=previous_chp,
+            allow_heat_dump=True,
         )
         details = dict(forecast_details)
         details.update({"normalized_physical_features": normalized_features})

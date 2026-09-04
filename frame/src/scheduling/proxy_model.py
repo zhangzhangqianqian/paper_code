@@ -149,8 +149,8 @@ class FeasibleSchedulingProxy(nn.Module):
     def __init__(self, config: FeasibleSchedulingProxyConfig | None = None):
         super().__init__()
         self.config = config or FeasibleSchedulingProxyConfig()
-        if self.config.horizon != HORIZON or self.config.input_dim != len(FEATURE_ORDER):
-            raise ValueError("v2 proxy dimensions must be input=10 and horizon=4")
+        if self.config.horizon != HORIZON or self.config.input_dim <= 0:
+            raise ValueError("v2 proxy dimensions must have a positive input_dim and horizon=4")
         if self.config.decision_dim != CONTROL_DIM:
             raise ValueError("v2 proxy decision dimension must be 15")
         if self.config.hidden_width <= 0 or self.config.residual_blocks <= 0:

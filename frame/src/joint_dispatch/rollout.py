@@ -99,52 +99,103 @@ def apply_first_step_recourse(
         raise ValueError("actual demand and renewables must be non-negative")
     if not bool(torch.isfinite(planned_dispatch).all()):
         raise ValueError("planned_dispatch must be finite")
-    realized = planned_dispatch.clone()
-    # Bound planned renewable use by what is available in the realized hour.
-    pv_use = torch.minimum(torch.clamp(planned_dispatch[:, _I["pv_use"]], min=0.0), pv)
-    wt_use = torch.minimum(torch.clamp(planned_dispatch[:, _I["wt_use"]], min=0.0), wt)
-    grid = torch.clamp(planned_dispatch[:, _I["grid"]], min=0.0, max=_param(parameters, "grid_import_capacity"))
-    electric_balance = (
-        demand[:, 0]
-        + torch.clamp(planned_dispatch[:, _I["p_ec"]], min=0.0)
-        + torch.clamp(planned_dispatch[:, _I["p_charge"]], min=0.0)
-        - torch.clamp(planned_dispatch[:, _I["p_chp"]], min=0.0)
-        - torch.clamp(planned_dispatch[:, _I["p_discharge"]], min=0.0)
-        - grid
-        - pv_use
-        - wt_use
-    )
+    # Compute all recourse quantities as new tensors, then assemble the
+    # realized dispatch in one ``stack``.  Avoiding in-place writes here is
+    # essential: the realized plan is part of the joint forecast-to-dispatch
+    # autograd graph and every source tensor may be used by the loss.
+    p_ec_plan = torch.clamp(planned_dispatch[:, _I["p_ec"]], min=0.0)
+    p_charge_plan = torch.clamp(planned_dispatch[:, _I["p_charge"]], min=0.0)
+    p_chp_plan = torch.clamp(planned_dispatch[:, _I["p_chp"]], min=0.0)
+    p_discharge_plan = torch.clamp(planned_dispatch[:, _I["p_discharge"]], min=0.0)
+    pv_use_plan = torch.minimum(torch.clamp(planned_dispatch[:, _I["pv_use"]], min=0.0), pv)
+    wt_use_plan = torch.minimum(torch.clamp(planned_dispatch[:, _I["wt_use"]], min=0.0), wt)
+    grid_plan = torch.clamp(planned_dispatch[:, _I["grid"]], min=0.0, max=_param(parameters, "grid_import_capacity"))
+    electric_balance = demand[:, 0] + p_ec_plan + p_charge_plan - p_chp_plan - p_discharge_plan - grid_plan - pv_use_plan - wt_use_plan
     deficit = torch.clamp(electric_balance, min=0.0)
-    extra_grid = torch.minimum(deficit, planned_dispatch.new_tensor(_param(parameters, "grid_import_capacity")) - grid)
-    grid = grid + torch.clamp(extra_grid, min=0.0)
-    electric_shortage = torch.clamp(deficit - torch.clamp(extra_grid, min=0.0), min=0.0)
+    grid_capacity = planned_dispatch.new_tensor(_param(parameters, "grid_import_capacity"))
+    extra_grid = torch.minimum(deficit, torch.clamp(grid_capacity - grid_plan, min=0.0))
+    grid_after_deficit = grid_plan + extra_grid
+    electric_shortage = torch.clamp(deficit - extra_grid, min=0.0)
     surplus = torch.clamp(-electric_balance, min=0.0)
-    reduce_grid = torch.minimum(surplus, grid)
-    grid = grid - reduce_grid
+    reduce_grid = torch.minimum(surplus, grid_after_deficit)
+    grid_after_surplus = grid_after_deficit - reduce_grid
     remaining_surplus = surplus - reduce_grid
-    reduce_pv = torch.minimum(remaining_surplus, pv_use)
-    pv_use = pv_use - reduce_pv
+    reduce_pv = torch.minimum(remaining_surplus, pv_use_plan)
+    pv_after_first = pv_use_plan - reduce_pv
     remaining_surplus = remaining_surplus - reduce_pv
-    reduce_wt = torch.minimum(remaining_surplus, wt_use)
-    wt_use = wt_use - reduce_wt
+    reduce_wt = torch.minimum(remaining_surplus, wt_use_plan)
+    wt_after_first = wt_use_plan - reduce_wt
     electric_surplus = torch.clamp(remaining_surplus - reduce_wt, min=0.0)
-    realized[:, _I["grid"]] = grid
-    realized[:, _I["pv_use"]] = pv_use
-    realized[:, _I["wt_use"]] = wt_use
-    realized[:, _I["pv_curt"]] = torch.clamp(pv - pv_use, min=0.0)
-    realized[:, _I["wt_curt"]] = torch.clamp(wt - wt_use, min=0.0)
-    realized[:, _I["slack_e"]] = electric_shortage
-    q_cooling = torch.clamp(planned_dispatch[:, _I["q_ec"]], min=0.0) + torch.clamp(planned_dispatch[:, _I["q_ac"]], min=0.0)
+
+    q_ec_plan = torch.clamp(planned_dispatch[:, _I["q_ec"]], min=0.0)
+    q_ac_plan = torch.clamp(planned_dispatch[:, _I["q_ac"]], min=0.0)
+    q_cooling_plan = q_ec_plan + q_ac_plan
+    # Cooling production can be curtailed when realized cooling demand is
+    # lower than the forecast plan.  Keep conversion identities intact by
+    # curtailing the corresponding electric/thermal inputs as well.
+    cooling_scale = torch.minimum(torch.ones_like(q_cooling_plan), demand[:, 1] / q_cooling_plan.clamp_min(1.0e-8))
+    q_ec = q_ec_plan * cooling_scale
+    q_ac = q_ac_plan * cooling_scale
+    # The lightweight rollout tests intentionally omit COP parameters.  In
+    # that compatibility mode, retain the legacy zero input convention;
+    # benchmark parameter bundles always provide positive COP values.
+    if "electric_chiller_cop" in parameters:
+        p_ec = q_ec / max(_param(parameters, "electric_chiller_cop"), 1.0e-8)
+    else:
+        p_ec = torch.zeros_like(q_ec)
+    if "absorption_chiller_cop" in parameters:
+        q_ac_in = q_ac / max(_param(parameters, "absorption_chiller_cop"), 1.0e-8)
+    else:
+        q_ac_in = torch.zeros_like(q_ac)
+    q_cooling = q_ec + q_ac
     cooling_error = demand[:, 1] - q_cooling
     cooling_shortage = torch.clamp(cooling_error, min=0.0)
     cooling_surplus = torch.clamp(-cooling_error, min=0.0)
-    realized[:, _I["slack_c"]] = cooling_shortage
-    q_heat = torch.clamp(planned_dispatch[:, _I["q_chp"]], min=0.0) + torch.clamp(planned_dispatch[:, _I["q_gb"]], min=0.0) - torch.clamp(planned_dispatch[:, _I["q_ac_in"]], min=0.0)
+    q_chp = torch.clamp(planned_dispatch[:, _I["q_chp"]], min=0.0)
+    q_gb = torch.clamp(planned_dispatch[:, _I["q_gb"]], min=0.0)
+    q_heat = q_chp + q_gb - torch.clamp(q_ac_in, min=0.0)
     heat_error = demand[:, 2] - q_heat
     heat_shortage = torch.clamp(heat_error, min=0.0)
     heat_surplus = torch.clamp(-heat_error, min=0.0)
-    realized[:, _I["slack_h"]] = heat_shortage
-    realized[:, _I["q_dump"]] = torch.clamp(planned_dispatch[:, _I["q_dump"]], min=0.0) + heat_surplus
+    q_dump = torch.clamp(planned_dispatch[:, _I["q_dump"]], min=0.0) + heat_surplus
+
+    # Reconcile electricity once more after cooling curtailment.  The first
+    # pass may have used electric-chiller consumption to absorb a forecast
+    # surplus; after curtailment, reduce sources in the same order.
+    electric_balance = demand[:, 0] + p_ec + p_charge_plan - p_chp_plan - p_discharge_plan - grid_after_surplus - pv_after_first - wt_after_first
+    final_deficit = torch.clamp(electric_balance, min=0.0)
+    final_extra_grid = torch.minimum(final_deficit, torch.clamp(grid_capacity - grid_after_surplus, min=0.0))
+    grid_after_deficit_final = grid_after_surplus + final_extra_grid
+    electric_shortage = torch.clamp(final_deficit - final_extra_grid, min=0.0)
+    final_surplus = torch.clamp(-electric_balance, min=0.0)
+    reduce_grid = torch.minimum(final_surplus, grid_after_deficit_final)
+    grid_after = grid_after_deficit_final - reduce_grid
+    remaining = final_surplus - reduce_grid
+    reduce_pv = torch.minimum(remaining, pv_after_first)
+    pv_after = pv_after_first - reduce_pv
+    remaining = remaining - reduce_pv
+    reduce_wt = torch.minimum(remaining, wt_after_first)
+    wt_after = wt_after_first - reduce_wt
+    electric_surplus = torch.clamp(remaining - reduce_wt, min=0.0)
+    realized_columns = [planned_dispatch[:, index] for index in range(len(VARIABLES))]
+    replacements = {
+        "grid": grid_after,
+        "pv_use": pv_after,
+        "pv_curt": torch.clamp(pv - pv_after, min=0.0),
+        "wt_use": wt_after,
+        "wt_curt": torch.clamp(wt - wt_after, min=0.0),
+        "p_ec": p_ec,
+        "q_ec": q_ec,
+        "q_ac_in": q_ac_in,
+        "q_ac": q_ac,
+        "slack_e": electric_shortage,
+        "slack_c": cooling_shortage,
+        "slack_h": heat_shortage,
+        "q_dump": q_dump,
+    }
+    for name, value in replacements.items():
+        realized_columns[_I[name]] = value
+    realized = torch.stack(realized_columns, dim=-1)
     shortage = torch.stack((electric_shortage, cooling_shortage, heat_shortage), dim=-1)
     surplus_vector = torch.stack((electric_surplus, cooling_surplus, heat_surplus), dim=-1)
     if grid_price is None:
@@ -159,13 +210,13 @@ def apply_first_step_recourse(
     carbon_price = carbon_price.to(dtype=planned_dispatch.dtype)
     gas = torch.clamp(realized[:, _I["g_chp"]], min=0.0) + torch.clamp(realized[:, _I["g_gb"]], min=0.0)
     operating = (
-        grid * grid_price
+        grid_after * grid_price
         + gas * gas_price
         + _param(parameters, "bess_throughput_cost") * (
             torch.clamp(realized[:, _I["p_charge"]], min=0.0) + torch.clamp(realized[:, _I["p_discharge"]], min=0.0)
         )
     )
-    carbon = grid * _param(parameters, "grid_emission_factor") + gas * _param(parameters, "gas_emission_factor")
+    carbon = grid_after * _param(parameters, "grid_emission_factor") + gas * _param(parameters, "gas_emission_factor")
     surplus_penalty = _param(parameters, "surplus_penalty", 0.0) * surplus_vector.sum(dim=-1)
     penalized = operating + carbon_price * carbon + _param(parameters, "unserved_penalty") * shortage.sum(dim=-1) + surplus_penalty
     return RealizedFirstStepOutcome(realized, shortage, surplus_vector, operating, carbon, penalized)

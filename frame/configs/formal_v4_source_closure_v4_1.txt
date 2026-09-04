@@ -9,7 +9,8 @@ frame/configs/joint_dispatch_state_features_v4.json
 frame/configs/standard_ies_formal_v4_rules.yaml
 frame/configs/scheduling_parameter_ledger_v2.csv
 frame/configs/rsc_pf_external_baseline_implementation_v1.json
-frame/requirements/rsc_pf_diffopt_v4.txt
+frame/requirements/formal_v4_diffopt.in
+frame/requirements/formal_v4_diffopt.lock
 frame/src/joint_dispatch/__init__.py
 frame/src/joint_dispatch/contract.py
 frame/src/joint_dispatch/data.py
@@ -23,6 +24,10 @@ frame/src/joint_dispatch/formal_v4_baselines.py
 frame/src/joint_dispatch/formal_v4_data.py
 frame/src/joint_dispatch/formal_v4_diffopt.py
 frame/src/joint_dispatch/formal_v4_evaluation.py
+frame/src/joint_dispatch/formal_v4_artifacts.py
+frame/src/joint_dispatch/formal_v4_access.py
+frame/src/joint_dispatch/formal_v4_resources.py
+frame/src/joint_dispatch/formal_v4_gate0.py
 frame/src/joint_dispatch/formal_v4_history.py
 frame/src/joint_dispatch/formal_v4_itransformer.py
 frame/src/joint_dispatch/formal_v4_models.py
@@ -43,6 +48,7 @@ frame/scripts/run_rsc_pf_formal_v4_diffopt_gate.py
 frame/scripts/prepare_rsc_pf_official_itransformer_v4.py
 frame/scripts/prepare_rsc_pf_diffopt_env_v4.py
 frame/scripts/audit_rsc_pf_formal_v4_gate0.py
+frame/scripts/run_repository_regression_v4.py
 frame/tests/test_joint_dispatch_formal_protocol_v4.py
 frame/tests/test_joint_dispatch_formal_v4_provenance.py
 frame/tests/test_joint_dispatch_formal_v4_benchmark.py
@@ -57,4 +63,7 @@ frame/tests/test_joint_dispatch_formal_v4_evaluation.py
 frame/tests/test_joint_dispatch_formal_v4_preflight.py
 frame/tests/test_joint_dispatch_formal_v4_gate0_integration.py
 frame/tests/test_audit_rsc_pf_formal_v4_gate0.py
+frame/tests/test_joint_dispatch_formal_v4_access.py
+frame/tests/test_joint_dispatch_formal_v4_resources.py
+frame/tests/test_repository_regression_v4.py
 frame/third_party/iTransformer/README_RSC_PF_ADAPTATION.md

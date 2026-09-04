@@ -145,7 +145,13 @@ def _assemble(values: Mapping[str, Tensor], features: Tensor) -> Tensor:
     return dispatch
 
 
-def _decode_stages(controls: Tensor, features: Tensor, parameters: Mapping[str, Any]) -> Tensor:
+def _decode_stages(
+    controls: Tensor,
+    features: Tensor,
+    parameters: Mapping[str, Any],
+    previous_chp: Tensor | None = None,
+    allow_heat_dump: bool = False,
+) -> Tensor:
     p = _parameters(parameters)
     demand_e = features[..., _FEATURE_INDEX["electricity"]]
     demand_c = features[..., _FEATURE_INDEX["cooling"]]
@@ -176,24 +182,37 @@ def _decode_stages(controls: Tensor, features: Tensor, parameters: Mapping[str, 
 
     # A forward start-reachable cap followed by a backward viability pass gives
     # a non-empty ramp interval at every step, including time-varying heat and
-    # electric demand caps.
+    # electric demand caps.  Anchor the first interval at the actual preceding
+    # CHP output when it is supplied; the legacy default remains a zero start.
     net_before_chp = demand_e + p_ec
-    local_chp_cap = _minimum(
+    local_chp_cap_terms = [
         features.new_tensor(p["chp_p"]),
         features.new_tensor(p["chp_q"] / p["rho"]),
-        (demand_h + q_ac_in) / p["rho"],
         net_before_chp,
-    )
-    forward_cap = torch.minimum(
-        local_chp_cap,
-        features.new_tensor(p["ramp"]) * torch.arange(1, HORIZON + 1, dtype=torch.float64, device=features.device),
-    )
+    ]
+    if not allow_heat_dump:
+        local_chp_cap_terms.insert(2, (demand_h + q_ac_in) / p["rho"])
+    local_chp_cap = _minimum(*local_chp_cap_terms)
+    if previous_chp is None:
+        previous_chp_value = torch.zeros_like(net_before_chp[:, 0])
+    else:
+        if not isinstance(previous_chp, Tensor) or previous_chp.shape != (features.shape[0], 1):
+            raise ValueError("previous_chp must have shape [B,1]")
+        previous_chp_value = previous_chp.to(dtype=torch.float64)[:, 0]
+        if not bool(torch.isfinite(previous_chp_value).all()) or bool((previous_chp_value < 0.0).any()):
+            raise ValueError("previous_chp must be finite and non-negative")
+        if bool((previous_chp_value > p["chp_p"] + 1.0e-10).any()):
+            raise ValueError("previous_chp cannot exceed chp_electric_capacity")
+    forward_caps: list[Tensor] = [torch.minimum(local_chp_cap[:, 0], previous_chp_value + p["ramp"])]
+    for index in range(1, HORIZON):
+        forward_caps.append(torch.minimum(local_chp_cap[:, index], forward_caps[-1] + p["ramp"]))
+    forward_cap = torch.stack(forward_caps, dim=1)
     viable = [forward_cap[:, -1]]
     for index in range(HORIZON - 2, -1, -1):
         viable.append(torch.minimum(forward_cap[:, index], viable[-1] + p["ramp"]))
     viable = torch.stack(list(reversed(viable)), dim=1)
     p_chp_values: list[Tensor] = []
-    previous_chp = torch.zeros_like(net_before_chp[:, 0])
+    previous_chp = previous_chp_value
     for index in range(HORIZON):
         lower_chp = (previous_chp - p["ramp"]).clamp_min(0.0)
         upper_chp = torch.minimum(viable[:, index], previous_chp + p["ramp"])
@@ -294,12 +313,14 @@ def decode_feasible_controls(
     controls: Tensor,
     physical_features: Tensor,
     parameters: Mapping[str, Any],
+    previous_chp: Tensor | None = None,
+    allow_heat_dump: bool = False,
 ) -> Tensor:
     """Decode normalized controls ``[B,15]`` into physical ``[B,4,21]``."""
 
     features = _check_features(physical_features)
     checked = _check_controls(controls, batch=int(features.shape[0]))
-    return _decode_stages(checked, features, parameters)
+    return _decode_stages(checked, features, parameters, previous_chp=previous_chp, allow_heat_dump=allow_heat_dump)
 
 
 def decode_feasible_dispatch(
@@ -307,6 +328,8 @@ def decode_feasible_dispatch(
     physical_features: Tensor,
     parameters: Mapping[str, Any],
     temperature: float = CONTROL_TEMPERATURE,
+    previous_chp: Tensor | None = None,
+    allow_heat_dump: bool = False,
 ) -> Tensor:
     """Apply the fixed-temperature sigmoid and decode a feasible dispatch."""
 
@@ -322,7 +345,7 @@ def decode_feasible_dispatch(
     if not bool(torch.isfinite(logits).all()):
         raise ValueError("logits must be finite")
     controls = torch.sigmoid(logits.to(dtype=torch.float64) / temperature)
-    return _decode_stages(controls, features, parameters)
+    return _decode_stages(controls, features, parameters, previous_chp=previous_chp, allow_heat_dump=allow_heat_dump)
 
 
 def recover_teacher_controls(
@@ -374,7 +397,6 @@ def recover_teacher_controls(
     local_chp_cap = _minimum(
         features.new_tensor(p["chp_p"]),
         features.new_tensor(p["chp_q"] / p["rho"]),
-        (demand_h + q_ac_in) / p["rho"],
         net_before_chp,
     )
     forward_cap = torch.minimum(
