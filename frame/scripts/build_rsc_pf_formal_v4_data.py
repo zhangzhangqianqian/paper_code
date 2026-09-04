@@ -26,6 +26,7 @@ from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec  # noqa: E
 from src.joint_dispatch.formal_v4_capacity import select_capacity_origins  # noqa: E402
 from src.joint_dispatch.formal_v4_data import FormalV4BaseSeries, FormalV4Normalization, materialize_state_windows  # noqa: E402
 from src.joint_dispatch.formal_v4_history import SettledTrajectory, generate_settled_device_trajectory  # noqa: E402
+from src.joint_dispatch.formal_v4_artifacts import build_artifact_manifest, build_normalization_receipt, sha256_file  # noqa: E402
 from src.joint_dispatch.contract import DISPATCH_ORDER  # noqa: E402
 from src.scheduling.dispatch_lp import DispatchInputs, solve_dispatch_lp  # noqa: E402
 from src.kitakyushu_pipeline import clean_kitakyushu_dataframe, read_kitakyushu_canonical  # noqa: E402
@@ -150,6 +151,8 @@ def main() -> int:
     args = _parser().parse_args()
     spec = load_formal_v4_spec(args.contract)
     if args.mode == "materialize-state":
+        if args.run_root is None:
+            raise ValueError("formal-v4.1 materialization requires an explicit --run-root")
         if args.capacity_receipt is None:
             raise PermissionError("--capacity-receipt is required for state materialization")
         receipt = json.loads(args.capacity_receipt.read_text(encoding="utf-8"))
@@ -183,14 +186,34 @@ def main() -> int:
             by_split[base.split] = materialize_state_windows(
                 piece, trajectory.settled_dispatch[offset:offset + len(piece.timestamps)], capacity_receipt=args.capacity_receipt, split=base.split,
                 settled_mask=trajectory.settled_mask[offset:offset + len(piece.timestamps)],
+                trajectory_hash=trajectory.trajectory_sha256,
                 bess_energy_capacity=float(receipt["bess_energy_capacity"]),
             )
             offset += len(piece.timestamps)
         normalization = FormalV4Normalization.fit(by_split["train"]) if "train" in by_split else None
-        run_root = args.run_root or (Path(spec.paths["output_root"]) / "formal_v4_1_unsealed")
+        run_root = args.run_root
         output_root = run_root / "data"
         for split, windows in by_split.items():
             _save_materialized(windows, output_root / f"{split}.npz", normalization if split == "train" else None, {"schema_version": "formal-v4-materialized-v1", "capacity_receipt": str(args.capacity_receipt), "split": split, "rows": len(windows), "trajectory_id": trajectory.trajectory_id, "trajectory_audit": trajectory.audit.to_payload()})
+        if "train" in by_split and "selection" in by_split:
+            capacity_hash = sha256_file(args.capacity_receipt)
+            train_hash = sha256_file(output_root / "train.npz")
+            normalization_payload = build_normalization_receipt(
+                normalization,
+                train_archive_sha256=train_hash,
+                capacity_receipt_sha256=capacity_hash,
+                train_timestamps=by_split["train"].target_times,
+            )
+            normalization_path = run_root / "NORMALIZATION_RECEIPT.json"
+            if normalization_path.exists():
+                raise FileExistsError(f"refusing to overwrite normalization receipt: {normalization_path}")
+            normalization_path.write_text(json.dumps(normalization_payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+            artifact_manifest = build_artifact_manifest(
+                run_root,
+                [output_root / "train.npz", output_root / "selection.npz", normalization_path],
+                lineage={"capacity_receipt_sha256": capacity_hash, "capacity_scenario_hash": str(receipt.get("capacity_scenario_hash", ""))},
+            )
+            artifact_manifest.save(run_root / "ARTIFACT_MANIFEST.json")
         print(json.dumps({"status": "pass", "mode": args.mode, "splits": list(by_split), "rows": {key: len(value) for key, value in by_split.items()}, "output_root": str(output_root)}, ensure_ascii=False))
         return 0
     years = tuple(sorted({year for split in args.splits for year in _years_for_split(split)}))

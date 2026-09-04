@@ -231,7 +231,31 @@ def _capacity_receipt(value: Mapping[str, Any] | str | Path | None) -> Mapping[s
         payload = value
     if not isinstance(payload, Mapping) or payload.get("gate0_authorized") is not True:
         raise PermissionError("state materialization requires a Gate 0 capacity receipt")
+    schema = str(payload.get("schema_version", ""))
+    if schema == "formal-v4-capacity-freeze-v1":
+        audit = payload.get("capacity_audit")
+        if not isinstance(audit, Mapping) or audit.get("status") != "pass":
+            raise PermissionError("capacity receipt does not contain a passing audit")
+        selected = audit.get("selected")
+        if not isinstance(selected, Mapping) or not np.isfinite(float(selected.get("multiplier", np.nan))) or float(selected.get("multiplier", 0.0)) <= 0.0:
+            raise PermissionError("capacity receipt has no valid selected multiplier")
+        for name in ("origin_manifest_sha256", "source_base_sha256", "capacity_scenario_hash"):
+            candidate = audit.get(name) if name != "capacity_scenario_hash" else payload.get(name)
+            if not isinstance(candidate, str) or not candidate:
+                raise PermissionError(f"capacity receipt is missing {name}")
     return payload
+
+
+def _capacity_receipt_hash(value: Mapping[str, Any] | str | Path | None) -> str:
+    if isinstance(value, (str, Path)):
+        path = Path(value)
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    payload = _capacity_receipt(value)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
 
 
 def materialize_state_windows(
@@ -242,10 +266,13 @@ def materialize_state_windows(
     split: str | None = None,
     bess_energy_capacity: float | None = None,
     settled_mask: np.ndarray | None = None,
+    trajectory_hash: str = "",
+    trajectory_rule_version: str = "formal-v4.1-causal-realized-settlement-v1",
 ) -> FormalV4WindowSplit:
     """Create capacity-bound 24→4 windows only after Gate 0 is authorized."""
 
     receipt = _capacity_receipt(capacity_receipt)
+    capacity_receipt_hash = _capacity_receipt_hash(capacity_receipt)
     requested_split = str(split or base.split)
     if requested_split == "evaluation" and receipt.get("gate3_authorized") is not True:
         raise PermissionError("evaluation data require Gate 3 authorization")
@@ -286,7 +313,15 @@ def materialize_state_windows(
         socs.append([float(np.clip(trajectory[origin - 1, _I["soc"]] / energy_capacity, 0.0, 1.0))])
         previous.append([float(max(trajectory[origin - 1, _I["p_chp"]], 0.0))])
         target_times.append(base.timestamps[origin])
-        state_hashes.append(_hash_arrays(history_load, history_exog, history_device, histories_activity[-1], extra=str(base.timestamps[origin])))
+        state_hashes.append(_hash_arrays(
+            history_load, history_exog, history_device, histories_activity[-1],
+            extra=json.dumps({
+                "origin_timestamp": str(base.timestamps[origin]),
+                "trajectory_rule_version": str(trajectory_rule_version),
+                "trajectory_hash": str(trajectory_hash),
+                "capacity_receipt_hash": capacity_receipt_hash,
+            }, sort_keys=True, separators=(",", ":")),
+        ))
     return FormalV4WindowSplit(
         np.asarray(histories_load), np.asarray(histories_exog), np.asarray(histories_renew), np.asarray(histories_device),
         np.asarray(histories_activity), np.asarray(targets), np.asarray(rigid), np.asarray(forecasts), np.asarray(realized),
