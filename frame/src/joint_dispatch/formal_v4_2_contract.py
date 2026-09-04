@@ -80,6 +80,13 @@ class FormalV42Contract:
     def methods(self) -> tuple[str, ...]:
         return tuple(str(row["name"]) for row in self.payload["methods"])
 
+    @property
+    def gate2_budget(self) -> Mapping[str, Any]:
+        budget = self.payload.get("gate2_budget")
+        if not isinstance(budget, Mapping):
+            raise ValueError("formal-v4.2 Gate 2 budget is missing")
+        return MappingProxyType(dict(budget))
+
     def __getattr__(self, name: str) -> Any:
         try:
             return self.payload[name]
@@ -126,6 +133,38 @@ class FormalV42Contract:
             raise ValueError("Gate 1 candidate parameter is not frozen")
         if tuple(float(value) for value in selection.get("gate1_candidate_values", ())) != (1.0, 1.25, 1.5, 2.0, 2.5, 3.0):
             raise ValueError("Gate 1 candidate values are not frozen")
+        gate2_budget = self.gate2_budget
+        expected_gate2_budget = {
+            "train_scope": "all_eligible_2015_2018",
+            "calibration_origin_count": 1000,
+            "evaluation_scope": "all_eligible_2019_chronology",
+            "effective_batch_size": 64,
+            "max_epochs": {"P": 30, "S": 30, "J": 30},
+            "minimum_stage_j_epochs": 18,
+            "patience": 5,
+            "validation_interval": 1,
+            "diff_lp": {"allow_micro_batch": True, "preserve_effective_batch": True},
+            "resource_envelope_hours": 24.0,
+        }
+        if dict(gate2_budget) != expected_gate2_budget:
+            raise ValueError("formal-v4.2 Gate 2 budget must use all eligible windows and the frozen execution limits")
+        training = self.payload["training"]
+        if {
+            "P": int(training.get("stage_p_max_epochs", -1)),
+            "S": int(training.get("stage_s_max_epochs", -1)),
+            "J": int(training.get("stage_j_max_epochs", -1)),
+        } != expected_gate2_budget["max_epochs"]:
+            raise ValueError("Gate 2 epoch budget differs from the frozen stage budget")
+        if int(training.get("minimum_stage_j_epochs", -1)) != expected_gate2_budget["minimum_stage_j_epochs"]:
+            raise ValueError("Gate 2 minimum Stage J budget differs from training")
+        if int(training.get("patience", -1)) != expected_gate2_budget["patience"]:
+            raise ValueError("Gate 2 patience differs from training")
+        if int(training.get("validation_interval", -1)) != expected_gate2_budget["validation_interval"]:
+            raise ValueError("Gate 2 validation interval differs from training")
+        if int(selection.get("gate1_origin_design", {}).get("total", -1)) != expected_gate2_budget["calibration_origin_count"]:
+            raise ValueError("Gate 1 calibration count differs from the Gate 2 budget")
+        if float(self.payload.get("resource_gate", {}).get("max_projected_p95_hours", -1.0)) != expected_gate2_budget["resource_envelope_hours"]:
+            raise ValueError("Gate 2 resource envelope differs from Gate 0")
         pilot = self.payload.get("pilot")
         if not isinstance(pilot, Mapping):
             raise ValueError("formal-v4.2 pilot budget is missing")

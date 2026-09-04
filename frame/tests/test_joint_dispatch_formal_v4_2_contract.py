@@ -40,6 +40,18 @@ def test_v42_contract_freezes_information_and_budget_boundaries() -> None:
     assert len(contract.dispatch_order) == 21
     assert contract.allow_future_binary_decisions is False
     assert len(contract.methods) == 9
+    assert dict(contract.gate2_budget) == {
+        "train_scope": "all_eligible_2015_2018",
+        "calibration_origin_count": 1000,
+        "evaluation_scope": "all_eligible_2019_chronology",
+        "effective_batch_size": 64,
+        "max_epochs": {"P": 30, "S": 30, "J": 30},
+        "minimum_stage_j_epochs": 18,
+        "patience": 5,
+        "validation_interval": 1,
+        "diff_lp": {"allow_micro_batch": True, "preserve_effective_batch": True},
+        "resource_envelope_hours": 24.0,
+    }
 
 
 def test_v42_gate_order_is_fail_closed() -> None:
@@ -78,3 +90,21 @@ def test_contract_hash_changes_when_contract_bytes_change(tmp_path: Path) -> Non
     changed.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     revised = load_formal_v4_2_contract(changed)
     assert original.contract_sha256 != revised.contract_sha256
+
+
+def test_contract_rejects_reduced_gate2_training_scope(tmp_path: Path) -> None:
+    payload = json.loads(CONFIG.read_text(encoding="utf-8"))
+    payload["gate2_budget"]["train_scope"] = "sample_1000"
+    changed = tmp_path / "reduced.json"
+    changed.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="all eligible windows"):
+        load_formal_v4_2_contract(changed)
+
+
+def test_contract_rejects_gate2_budget_not_matching_training(tmp_path: Path) -> None:
+    payload = json.loads(CONFIG.read_text(encoding="utf-8"))
+    payload["training"]["stage_j_max_epochs"] = 29
+    changed = tmp_path / "mismatch.json"
+    changed.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="epoch budget differs"):
+        load_formal_v4_2_contract(changed)

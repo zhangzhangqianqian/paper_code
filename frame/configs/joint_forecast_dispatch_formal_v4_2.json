@@ -96,6 +96,21 @@
     "seed_extension_seeds": [2029, 2030],
     "gate3_seeds": [2026, 2027, 2028, 2029, 2030]
   },
+  "gate2_budget": {
+    "train_scope": "all_eligible_2015_2018",
+    "calibration_origin_count": 1000,
+    "evaluation_scope": "all_eligible_2019_chronology",
+    "effective_batch_size": 64,
+    "max_epochs": {"P": 30, "S": 30, "J": 30},
+    "minimum_stage_j_epochs": 18,
+    "patience": 5,
+    "validation_interval": 1,
+    "diff_lp": {
+      "allow_micro_batch": true,
+      "preserve_effective_batch": true
+    },
+    "resource_envelope_hours": 24.0
+  },
   "gate2_authorization": {
     "primary_contrast": "RSC-PF_minus_Decoupled-RSC-PF",
     "minimum_favorable_seed_directions": 2,
