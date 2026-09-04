@@ -121,6 +121,11 @@ class FormalV42Contract:
             raise ValueError("Gate 3 seeds are not frozen")
         if self.payload["training"].get("stage_order") != ["P", "teacher", "S", "clone", "J"]:
             raise ValueError("training stages are not strictly sequential")
+        selection = self.payload.get("selection", {})
+        if selection.get("gate1_candidate_parameter") != "stage_j_forecaster_learning_rate_multiplier":
+            raise ValueError("Gate 1 candidate parameter is not frozen")
+        if tuple(float(value) for value in selection.get("gate1_candidate_values", ())) != (1.0, 1.25, 1.5, 2.0, 2.5, 3.0):
+            raise ValueError("Gate 1 candidate values are not frozen")
         pilot = self.payload.get("pilot")
         if not isinstance(pilot, Mapping):
             raise ValueError("formal-v4.2 pilot budget is missing")

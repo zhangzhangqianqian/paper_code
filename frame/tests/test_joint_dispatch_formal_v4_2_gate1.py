@@ -34,3 +34,14 @@ def test_gate1_freeze_records_every_gate2_budget(tmp_path):
     assert required <= set(receipt["frozen_training"])
     assert receipt["authorized_gate2"] is True
     assert receipt["evaluation_year_accessed"] is False
+
+
+def test_gate1_rejects_candidates_outside_frozen_contract(tmp_path):
+    value = _input(tmp_path)
+    with pytest.raises(GATE1["Gate1AuthorizationError"], match="differ from the frozen contract"):
+        GATE1["run_gate1_calibration"](replace(value, candidate_values=(1.0, 2.0)))
+
+
+def test_gate1_cli_exposes_no_calibration_budget_overrides():
+    options = {action.dest for action in GATE1["build_gate1_parser"]()._actions}
+    assert options.isdisjoint({"epochs", "learning_rate", "candidate_values", "origins"})

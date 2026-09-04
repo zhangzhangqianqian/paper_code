@@ -79,6 +79,8 @@
   "selection": {
     "selection_split": "selection",
     "checkpoint_score": "rolling_penalized_objective",
+    "gate1_candidate_parameter": "stage_j_forecaster_learning_rate_multiplier",
+    "gate1_candidate_values": [1.0, 1.25, 1.5, 2.0, 2.5, 3.0],
     "gate1_origin_design": {
       "total": 1000,
       "cooling_active": 250,

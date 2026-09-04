@@ -34,6 +34,8 @@ def test_v42_contract_freezes_information_and_budget_boundaries() -> None:
     assert contract.pilot["seed"] == 2026
     assert contract.pilot["windows"] == 128
     assert contract.pilot["rollout_windows"] == 24
+    assert contract.selection["gate1_candidate_parameter"] == "stage_j_forecaster_learning_rate_multiplier"
+    assert contract.selection["gate1_candidate_values"] == [1.0, 1.25, 1.5, 2.0, 2.5, 3.0]
     assert contract.latent_control_dim == 15
     assert len(contract.dispatch_order) == 21
     assert contract.allow_future_binary_decisions is False
