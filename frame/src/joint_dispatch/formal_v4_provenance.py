@@ -33,6 +33,7 @@ INVALID_TRIAL_ROOTS = (
     "formal_v4_20260903_retry3_gate2",
     "gate1_smoke",
     "joint_forecast_dispatch_formal_v4_retry_gate1",
+    "formal_v4_1_gate2_20260904_104000",
 )
 
 
@@ -232,7 +233,12 @@ def validate_invalid_run_registry(value: Mapping[str, Any]) -> None:
         if root in seen or root not in INVALID_TRIAL_ROOTS:
             raise ValueError(f"invalid-run registry root is not frozen: {root}")
         seen.add(root)
-        if run["status"] != "invalid_pre_repair_trial" or run["allowed_for_formal_results"] is not False:
+        expected_status = (
+            "invalid_diagnostic"
+            if root == "formal_v4_1_gate2_20260904_104000"
+            else "invalid_pre_repair_trial"
+        )
+        if run["status"] != expected_status or run["allowed_for_formal_results"] is not False:
             raise ValueError(f"invalid-run registry entry {root} is admissible")
         if not isinstance(run["reasons"], list) or not run["reasons"] or not all(isinstance(item, str) and item.strip() for item in run["reasons"]):
             raise ValueError(f"invalid-run registry reasons are invalid: {root}")

@@ -1,0 +1,126 @@
+{
+  "schema_version": "joint-forecast-dispatch-formal-v4.2",
+  "protocol_status": "frozen",
+  "invalid_run_registry": "configs/joint_dispatch_invalid_runs_v4.json",
+  "source_closure_file": "configs/formal_v4_source_closure_v4_2.txt",
+  "source_manifest_required": true,
+  "lookback": 24,
+  "horizon": 4,
+  "latent_control_dim": 15,
+  "allow_future_binary_decisions": false,
+  "gas_semantics": "station_side_auxiliary_prior",
+  "task_order": ["electricity", "cooling", "heating", "gas"],
+  "exog_order": [
+    "temperature", "humidity", "solar_irradiance", "wind_speed", "wind_direction",
+    "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos", "is_weekend"
+  ],
+  "dispatch_order": [
+    "grid", "pv_use", "pv_curt", "wt_use", "wt_curt", "g_chp", "g_gb", "p_chp",
+    "q_chp", "q_gb", "p_ec", "q_ec", "q_ac_in", "q_ac", "p_charge", "p_discharge",
+    "soc", "slack_e", "slack_c", "slack_h", "q_dump"
+  ],
+  "status_order": [
+    "chp_on", "gas_boiler_on", "electric_chiller_on", "absorption_chiller_on",
+    "bess_charge_on", "bess_discharge_on"
+  ],
+  "train_years": [2015, 2016, 2017, 2018],
+  "selection_year": 2019,
+  "evaluation_year": 2020,
+  "excluded_years": [2021],
+  "allow_evaluation_access_before_gate3": false,
+  "claims": {"price_carbon_response": false},
+  "methods": [
+    {"name": "RSC-PF", "kind": "joint", "stochastic": true, "deployable": true, "online_exact_lp": false},
+    {"name": "Decoupled-RSC-PF", "kind": "decoupled", "stochastic": true, "deployable": true, "online_exact_lp": false},
+    {"name": "Direct-Policy", "kind": "direct_policy", "stochastic": true, "deployable": true, "online_exact_lp": false},
+    {"name": "Scheme2R-PTO", "kind": "pto", "stochastic": true, "deployable": true, "online_exact_lp": true},
+    {"name": "State-Conditioned-PTO", "kind": "pto", "stochastic": true, "deployable": true, "online_exact_lp": true},
+    {"name": "Official iTransformer-PTO", "kind": "external_pto_adaptation", "stochastic": true, "deployable": true, "online_exact_lp": true},
+    {"name": "Differentiable-LP", "kind": "differentiable_lp_adaptation", "stochastic": true, "deployable": true, "online_exact_lp": true},
+    {"name": "Perfect-Information-MPC", "kind": "oracle_reference", "stochastic": false, "deployable": false, "online_exact_lp": true},
+    {"name": "Seasonal-Naive-PTO", "kind": "deterministic_pto", "stochastic": false, "deployable": true, "online_exact_lp": true}
+  ],
+  "forecast_guardrails": {
+    "rigid_macro_wape_ratio_max": 1.02,
+    "rigid_per_task_wape_ratio_max": 1.05,
+    "gas_wape_ratio_max": 1.10
+  },
+  "training": {
+    "stage_order": ["P", "teacher", "S", "clone", "J"],
+    "stage_p_max_epochs": 30,
+    "stage_s_max_epochs": 30,
+    "stage_j_max_epochs": 30,
+    "minimum_stage_j_epochs": 18,
+    "patience": 5,
+    "validation_interval": 1,
+    "rollin_start_fraction": 0.40,
+    "model_history_fraction": 0.50,
+    "rollin_refresh_epochs": 5,
+    "forecast_weight": 1.0,
+    "imitation_start_weight": 1.0,
+    "imitation_final_weight": 0.0,
+    "decision_start_weight": 0.05,
+    "decision_final_weight": 1.0,
+    "curriculum_ramp_epochs": 18,
+    "forecast_task_weights": [1.0, 1.0, 1.0, 0.25]
+  },
+  "selection": {
+    "selection_split": "selection",
+    "checkpoint_score": "rolling_penalized_objective",
+    "gate1_origin_design": {
+      "total": 1000,
+      "cooling_active": 250,
+      "heating_active": 250,
+      "winter": 150,
+      "summer": 150,
+      "shoulder": 100,
+      "chronological_remaining": 100,
+      "minimum_cooling_active_fraction": 0.20,
+      "minimum_heating_active_fraction": 0.20
+    },
+    "gate2_seeds": [2026, 2027, 2028],
+    "seed_extension_seeds": [2029, 2030],
+    "gate3_seeds": [2026, 2027, 2028, 2029, 2030]
+  },
+  "gate2_authorization": {
+    "primary_contrast": "RSC-PF_minus_Decoupled-RSC-PF",
+    "minimum_favorable_seed_directions": 2,
+    "rsc_shortage_to_state_conditioned_pto_max": 1.05,
+    "require_complete_method_seed_matrix": true,
+    "require_finite_physical_metrics": true,
+    "require_no_evaluation_access": true
+  },
+  "statistics": {
+    "independent_unit": "model_seed",
+    "paired_unit": "seed_and_time_block",
+    "block_hours": 168,
+    "bootstrap_replicates": 2000,
+    "alpha": 0.05
+  },
+  "resource_gate": {
+    "warmup_repetitions": 2,
+    "measured_repetitions": 5,
+    "max_projected_p95_hours": 24.0,
+    "minimum_disk_margin_fraction": 0.20,
+    "require_real_forward_backward_lp_diffopt": true
+  },
+  "capacity": {
+    "candidate_multipliers": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0],
+    "fit_years": [2015, 2016, 2017, 2018],
+    "cooling_shortage_energy_ratio_max": 0.005,
+    "cooling_shortage_hour_rate_max": 0.01
+  },
+  "renewable_forecast": {
+    "method": "last_value_persistence",
+    "history_hours": 1,
+    "horizon": 4,
+    "selection_locked": true
+  },
+  "paths": {
+    "output_root": "reports/joint_forecast_dispatch_formal_v4_2",
+    "benchmark_path": "D:/Paper/standard_ies_benchmark_v1.yaml",
+    "parameter_ledger_path": "configs/scheduling_parameter_ledger_v2.csv",
+    "diffopt_python": "D:/Paper/envs/rsc_pf_diffopt_v4/python.exe",
+    "itransformer_source": "third_party/iTransformer_source"
+  }
+}
