@@ -83,12 +83,36 @@ class _BaseAdapter:
     online_optimizer_calls_per_window = 0
     forecast_metrics_applicable = True
 
-    def __init__(self, parameters: Mapping[str, Any], *, task_mean: np.ndarray | None = None, task_scale: np.ndarray | None = None) -> None:
+    def __init__(self, parameters: Mapping[str, Any], *, task_mean: np.ndarray | None = None, task_scale: np.ndarray | None = None, normalization: Any = None) -> None:
         self.parameters = dict(parameters)
         self.task_mean = np.zeros(4, dtype=np.float64) if task_mean is None else np.asarray(task_mean, dtype=np.float64)
         self.task_scale = np.ones(4, dtype=np.float64) if task_scale is None else np.asarray(task_scale, dtype=np.float64)
         if self.task_mean.shape != (4,) or self.task_scale.shape != (4,) or (self.task_scale <= 0).any():
             raise ValueError("task normalization vectors must have shape [4] and positive scale")
+        field_mean = getattr(normalization, "field_mean", {}) if normalization is not None else {}
+        field_scale = getattr(normalization, "field_scale", {}) if normalization is not None else {}
+        if isinstance(normalization, Mapping):
+            field_mean = normalization.get("field_mean", field_mean)
+            field_scale = normalization.get("field_scale", field_scale)
+        self.history_mean = {
+            "load": np.asarray(field_mean.get("load", np.zeros(4)), dtype=np.float64),
+            "exog": np.asarray(field_mean.get("exog", np.zeros(12)), dtype=np.float64),
+            "device": np.asarray(field_mean.get("device", np.zeros(17)), dtype=np.float64),
+        }
+        self.history_scale = {
+            "load": np.asarray(field_scale.get("load", np.ones(4)), dtype=np.float64),
+            "exog": np.asarray(field_scale.get("exog", np.ones(12)), dtype=np.float64),
+            "device": np.asarray(field_scale.get("device", np.ones(17)), dtype=np.float64),
+        }
+        if any(np.any(value <= 0.0) for value in self.history_scale.values()):
+            raise ValueError("history normalization scales must be positive")
+
+    def _normalize_histories(self, load: np.ndarray, exog: np.ndarray, device: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return (
+            (load - self.history_mean["load"]) / self.history_scale["load"],
+            (exog - self.history_mean["exog"]) / self.history_scale["exog"],
+            (device - self.history_mean["device"]) / self.history_scale["device"],
+        )
 
     def _window(self, window: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]:
         load_history = _array(window, "load_history", (24, 4))
@@ -129,6 +153,7 @@ class Scheme2RPTOAdapter(_BaseAdapter):
     def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         loads, exog, _, _, soc, previous = self._window(window)
+        loads, exog, _ = self._normalize_histories(loads, exog, np.zeros((24, 17)))
         renew, prices, _ = self._context(window, soc)
         with torch.no_grad():
             raw = self.model(torch.as_tensor(loads[None], dtype=torch.float32), torch.as_tensor(exog[None], dtype=torch.float32))[0].cpu().numpy()
@@ -151,6 +176,7 @@ class StateConditionedPTOAdapter(Scheme2RPTOAdapter):
     def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         loads, exog, device, activity, soc, previous = self._window(window)
+        loads, exog, device = self._normalize_histories(loads, exog, device)
         renew, prices, context_features = self._context(window, soc)
         inputs = {
             "load_history": torch.as_tensor(loads[None], dtype=torch.float32), "exog_history": torch.as_tensor(exog[None], dtype=torch.float32),
@@ -182,6 +208,7 @@ class RSCPFAdapter(_BaseAdapter):
     def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         loads, exog, device, activity, soc, previous = self._window(window)
+        loads, exog, device = self._normalize_histories(loads, exog, device)
         renew, prices, context_features = self._context(window, soc)
         inputs = {
             "load_history": torch.as_tensor(loads[None], dtype=torch.float32), "exog_history": torch.as_tensor(exog[None], dtype=torch.float32),
@@ -232,6 +259,7 @@ class DirectPolicyAdapter(_BaseAdapter):
     def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         loads, exog, device, activity, soc, previous = self._window(window)
+        loads, exog, device = self._normalize_histories(loads, exog, device)
         renew, prices, context_features = self._context(window, soc)
         inputs = {
             "load_history": torch.as_tensor(loads[None], dtype=torch.float32), "exog_history": torch.as_tensor(exog[None], dtype=torch.float32),
@@ -261,6 +289,7 @@ class OfficialITransformerPTOAdapter(Scheme2RPTOAdapter):
     def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         loads, _, _, _, soc, previous = self._window(window)
+        loads = (loads - self.history_mean["load"]) / self.history_scale["load"]
         renew, prices, _ = self._context(window, soc)
         with torch.no_grad():
             raw = self.model(torch.as_tensor(loads[None], dtype=torch.float32))[0].cpu().numpy()
@@ -289,6 +318,7 @@ class DifferentiableLPAdapter(_BaseAdapter):
     def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
         loads, exog, _, _, soc, previous = self._window(window)
+        loads, exog, _ = self._normalize_histories(loads, exog, np.zeros((24, 17)))
         renew, prices, _ = self._context(window, soc)
         with torch.no_grad():
             raw = self.model(torch.as_tensor(loads[None], dtype=torch.float32), torch.as_tensor(exog[None], dtype=torch.float32))[0].cpu().numpy()

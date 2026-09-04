@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -136,4 +136,49 @@ def compute_v42_metrics(outcome: ChronologicalRolloutV42 | SettledStepV42) -> Me
     )
 
 
-__all__ = ["MetricsV42", "compute_v42_metrics"]
+def compute_v42_metrics_from_arrays(arrays: Mapping[str, Any], *, method_id: str) -> MetricsV42:
+    """Reconstruct metrics solely from a reopened immutable rollout archive."""
+
+    required = (
+        "forecast_target", "forecast_prediction", "planned_dispatch", "settled_dispatch",
+        "shortage_energy", "p_dump", "q_dump", "operating_cost", "physical_carbon",
+        "penalized_objective", "target_times", "residual_balance", "residual_capacity",
+        "residual_conversion", "residual_soc", "residual_ramp", "residual_exclusivity",
+        "residual_renewable_accounting", "residual_finite",
+    )
+    missing = [name for name in required if name not in arrays]
+    if missing:
+        raise ValueError(f"saved rollout is missing {missing[0]}")
+    count = len(np.asarray(arrays["settled_dispatch"]))
+    residuals = tuple(
+        PhysicalResidualsV42(
+            balance=np.asarray(arrays["residual_balance"])[index],
+            capacity=np.asarray(arrays["residual_capacity"])[index],
+            conversion=np.asarray(arrays["residual_conversion"])[index],
+            soc=np.asarray(arrays["residual_soc"])[index],
+            ramp=np.asarray(arrays["residual_ramp"])[index],
+            exclusivity=np.asarray(arrays["residual_exclusivity"])[index],
+            renewable_accounting=np.asarray(arrays["residual_renewable_accounting"])[index],
+            finite=np.asarray(arrays["residual_finite"])[index],
+        )
+        for index in range(count)
+    )
+    rollout = ChronologicalRolloutV42(
+        method_id=str(method_id),
+        forecast_target=np.asarray(arrays["forecast_target"]),
+        forecast_prediction=np.asarray(arrays["forecast_prediction"]),
+        planned_dispatch=np.asarray(arrays["planned_dispatch"]),
+        settled_dispatch=np.asarray(arrays["settled_dispatch"]),
+        shortage_energy=np.asarray(arrays["shortage_energy"]),
+        p_dump=np.asarray(arrays["p_dump"]), q_dump=np.asarray(arrays["q_dump"]),
+        residuals=residuals,
+        operating_cost=np.asarray(arrays["operating_cost"]),
+        physical_carbon=np.asarray(arrays["physical_carbon"]),
+        penalized_objective=np.asarray(arrays["penalized_objective"]),
+        target_times=np.asarray(arrays["target_times"]).astype("datetime64[ns]"),
+        next_states=tuple(),
+    )
+    return compute_v42_metrics(rollout)
+
+
+__all__ = ["MetricsV42", "compute_v42_metrics", "compute_v42_metrics_from_arrays"]
