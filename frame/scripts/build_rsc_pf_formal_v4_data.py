@@ -22,7 +22,7 @@ FRAME_ROOT = Path(__file__).resolve().parents[1]
 if str(FRAME_ROOT) not in sys.path:
     sys.path.insert(0, str(FRAME_ROOT))
 
-from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec  # noqa: E402
+from src.joint_dispatch.formal_protocol_v4 import SCHEMA_VERSION_V41, load_formal_v4_spec  # noqa: E402
 from src.joint_dispatch.formal_v4_capacity import select_capacity_origins  # noqa: E402
 from src.joint_dispatch.formal_v4_data import FormalV4BaseSeries, FormalV4Normalization, materialize_state_windows  # noqa: E402
 from src.joint_dispatch.formal_v4_history import SettledTrajectory, generate_settled_device_trajectory  # noqa: E402
@@ -58,6 +58,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--audit-origins", type=int, default=None, help="legacy override; formal-v4.1 always uses the frozen 500-origin manifest")
     parser.add_argument("--capacity-receipt", type=Path, default=None)
     parser.add_argument("--run-root", type=Path, default=None)
+    parser.add_argument("--benchmark-path", type=Path, default=None)
     return parser
 
 
@@ -112,6 +113,26 @@ def _load_base(path: Path) -> FormalV4BaseSeries:
         )
 
 
+def _resolve_benchmark_path(spec, *, run_root: Path | None, benchmark_path: Path | None) -> Path:
+    if benchmark_path is not None:
+        resolved = benchmark_path.resolve()
+    elif spec.schema_version == SCHEMA_VERSION_V41:
+        if run_root is None:
+            raise ValueError("formal-v4.1 data building requires an explicit --run-root")
+        resolved = (run_root / "gate0" / "benchmark" / "STANDARD_IES_BENCHMARK.yaml").resolve()
+    else:
+        resolved = Path(spec.paths["benchmark_path"]).resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"resolved benchmark does not exist: {resolved}")
+    payload = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    if spec.schema_version == SCHEMA_VERSION_V41:
+        if not isinstance(payload, dict) or payload.get("schema_version") != "standard-ies-benchmark-v4.1":
+            raise ValueError("formal-v4.1 requires a generated standard-ies-benchmark-v4.1 benchmark")
+        if tuple(payload.get("source_years", ())) != (2015, 2016, 2017, 2018):
+            raise ValueError("formal-v4.1 benchmark must be bounded to 2015-2018")
+    return resolved
+
+
 def _causal_trajectory(base: FormalV4BaseSeries, parameters: dict[str, float], capacity_receipt: Path) -> SettledTrajectory:
     """Generate the causal trajectory through the canonical settled transition."""
 
@@ -150,15 +171,17 @@ def _save_materialized(split, path: Path, normalization: FormalV4Normalization |
 def main() -> int:
     args = _parser().parse_args()
     spec = load_formal_v4_spec(args.contract)
+    run_root = args.run_root.resolve() if args.run_root is not None else None
+    benchmark_path = _resolve_benchmark_path(spec, run_root=run_root, benchmark_path=args.benchmark_path)
     if args.mode == "materialize-state":
-        if args.run_root is None:
+        if run_root is None:
             raise ValueError("formal-v4.1 materialization requires an explicit --run-root")
         if args.capacity_receipt is None:
             raise PermissionError("--capacity-receipt is required for state materialization")
         receipt = json.loads(args.capacity_receipt.read_text(encoding="utf-8"))
         if receipt.get("gate0_authorized") is not True:
             raise PermissionError("capacity receipt is not Gate 0 authorized")
-        data_root = Path(spec.paths["data_root"])
+        data_root = run_root / "data" if spec.schema_version == SCHEMA_VERSION_V41 else Path(spec.paths["data_root"])
         bases = [_load_base(data_root / f"base_{split}.npz") for split in args.splits]
         if not bases:
             raise ValueError("at least one split is required")
@@ -171,7 +194,7 @@ def main() -> int:
             np.concatenate([item.prices_and_weights for item in bases]),
             np.concatenate([item.timestamps for item in bases]), "train",
         )
-        benchmark = yaml.safe_load(Path(spec.paths["benchmark_path"]).read_text(encoding="utf-8"))
+        benchmark = yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))
         parameters = dict(benchmark["values"])
         for key, value in _ledger(FRAME_ROOT / "configs" / "scheduling_parameter_ledger_v2.csv").items():
             parameters.setdefault(key, value)
@@ -191,7 +214,6 @@ def main() -> int:
             )
             offset += len(piece.timestamps)
         normalization = FormalV4Normalization.fit(by_split["train"]) if "train" in by_split else None
-        run_root = args.run_root
         output_root = run_root / "data"
         for split, windows in by_split.items():
             _save_materialized(windows, output_root / f"{split}.npz", normalization if split == "train" else None, {"schema_version": "formal-v4-materialized-v1", "capacity_receipt": str(args.capacity_receipt), "split": split, "rows": len(windows), "trajectory_id": trajectory.trajectory_id, "trajectory_audit": trajectory.audit.to_payload()})
@@ -219,7 +241,7 @@ def main() -> int:
     years = tuple(sorted({year for split in args.splits for year in _years_for_split(split)}))
     raw, source_metadata = read_kitakyushu_canonical(args.kitakyushu_data_dir, years=years)
     frame, cleaning = clean_kitakyushu_dataframe(raw)
-    benchmark = yaml.safe_load(Path(spec.paths["benchmark_path"]).read_text(encoding="utf-8"))
+    benchmark = yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))
     parameters = dict(benchmark["values"])
     # The ledger records both final constants and derivation ratios (for
     # example, ``chp_electric_capacity=0.35`` means 0.35 times training P95,
@@ -229,14 +251,14 @@ def main() -> int:
     for key, value in _ledger(FRAME_ROOT / "configs" / "scheduling_parameter_ledger_v2.csv").items():
         parameters.setdefault(key, value)
     hashes = {str(key): str(value.get("sha256", "")) for key, value in source_metadata.get("source_files", {}).items() if isinstance(value, dict)}
-    output_root = Path(spec.paths["data_root"])
+    output_root = run_root / "data" if run_root is not None else Path(spec.paths["data_root"])
     train_base: FormalV4BaseSeries | None = None
     for split in args.splits:
         base = _build_base(frame, split, parameters)
         _save_base(base, output_root / f"base_{split}.npz", hashes)
         if split == "train":
             train_base = base
-    audit_root = Path(spec.paths["audit_root"])
+    audit_root = run_root / "audit" if run_root is not None else Path(spec.paths["audit_root"])
     audit_root.mkdir(parents=True, exist_ok=True)
     origin_count = 0
     origin_manifest_path = None

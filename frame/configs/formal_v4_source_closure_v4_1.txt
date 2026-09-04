@@ -42,6 +42,7 @@ frame/src/scheduling/proxy_model.py
 frame/src/scheduling/proxy_training.py
 frame/scripts/build_rsc_pf_formal_v4_benchmark.py
 frame/scripts/build_rsc_pf_formal_v4_data.py
+frame/scripts/run_rsc_pf_formal_v4_capacity_audit.py
 frame/scripts/run_rsc_pf_formal_v4_preflight.py
 frame/scripts/run_rsc_pf_formal_v4_baseline.py
 frame/scripts/run_rsc_pf_formal_v4_diffopt_gate.py
@@ -53,6 +54,7 @@ frame/tests/test_joint_dispatch_formal_protocol_v4.py
 frame/tests/test_joint_dispatch_formal_v4_provenance.py
 frame/tests/test_joint_dispatch_formal_v4_benchmark.py
 frame/tests/test_joint_dispatch_formal_v4_capacity.py
+frame/tests/test_joint_dispatch_formal_v4_capacity_runner.py
 frame/tests/test_joint_dispatch_formal_v4_history.py
 frame/tests/test_joint_dispatch_formal_v4_data.py
 frame/tests/test_joint_dispatch_formal_v4_objective.py
