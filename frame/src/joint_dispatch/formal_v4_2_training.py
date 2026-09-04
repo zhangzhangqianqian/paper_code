@@ -200,6 +200,17 @@ def _optimizer_steps(optimizer: torch.optim.Optimizer) -> int:
     return int(sum(int(value.get("step", 0)) for value in optimizer.state.values()))
 
 
+def _decoder_parameters(model: nn.Module, parameters: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if parameters is not None:
+        return parameters
+    if hasattr(model, "decoder_parameters"):
+        return getattr(model, "decoder_parameters")
+    core = getattr(model, "core", None)
+    if core is not None and hasattr(core, "decoder_parameters"):
+        return getattr(core, "decoder_parameters")
+    return {}
+
+
 def run_stage_p(model: nn.Module, loaders: Any, budget: StageBudgetV42 | None = None, lineage: Mapping[str, Any] | None = None, seed: int = 2026, **_: Any) -> StageResultV42:
     budget = budget or StageBudgetV42()
     seed_everything(seed)
@@ -287,7 +298,7 @@ def run_stage_j_pair(stage_s: Any, batch: Mapping[str, Any], budget: StageBudget
     budget = budget or StageBudgetV42(max_epochs=18)
     base_model = stage_s.model if isinstance(stage_s, StageResultV42) else stage_s
     joint = deepcopy(base_model); decoupled = deepcopy(base_model)
-    params = parameters or getattr(base_model, "decoder_parameters", {})
+    params = _decoder_parameters(base_model, parameters)
     receipts: list[GradientBoundaryReceiptV42] = []
     for mode, model in (("joint", joint), ("decoupled", decoupled)):
         seed_everything(seed)
@@ -389,7 +400,7 @@ def run_training_seed_v42(
         last = 0.0; fg_norm = sg_norm = 0.0
         for epoch in range(budget.max_epochs):
             for batch in train:
-                loss, fg_norm, sg_norm, last = _joint_loss(model_j, batch, mode=mode, epoch=epoch, budget=budget, c_ref=c_ref, parameters=parameters or getattr(model_j, "decoder_parameters", {}))
+                loss, fg_norm, sg_norm, last = _joint_loss(model_j, batch, mode=mode, epoch=epoch, budget=budget, c_ref=c_ref, parameters=_decoder_parameters(model_j, parameters))
                 _optimizer_step(optimizer, model_j, tuple(p for p in (*forecast_params, *scheduler_params) if p.requires_grad), loss, budget.max_grad_norm)
         j_steps[key] = _optimizer_steps(optimizer); losses[key] = last
         boundaries.append(GradientBoundaryReceiptV42(mode, fg_norm, sg_norm))
