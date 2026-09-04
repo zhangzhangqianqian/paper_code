@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Any, Mapping
@@ -241,6 +242,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", type=Path, default=FRAME_ROOT / "configs" / "joint_forecast_dispatch_formal_v4_1.json")
     parser.add_argument("--run-id", required=True)
+    parser.add_argument(
+        "--seed-root",
+        type=Path,
+        default=None,
+        help="optional immutable evidence root to copy into the fresh Gate 0 run root before checks",
+    )
     args = parser.parse_args()
     spec = load_formal_v4_spec(args.contract)
     report_root = Path(spec.paths["output_root"])
@@ -249,6 +256,38 @@ def main() -> int:
 
     def prepare(run_root: Path) -> None:
         holder["run_root"] = run_root
+        if args.seed_root is not None:
+            seed_root = args.seed_root.resolve()
+            if seed_root == run_root.resolve():
+                raise ValueError("--seed-root must differ from the fresh Gate 0 run root")
+            if not seed_root.is_dir():
+                raise FileNotFoundError(seed_root)
+            # Transfer only existing evidence; the destination is fresh and
+            # execute_gate0 has already created its in-progress marker.
+            # Copying preserves bytes and therefore lets every checker bind
+            # to the immutable hashes produced by the previous stage.
+            for source in seed_root.iterdir():
+                destination = run_root / source.name
+                if source.name == "gate0" and destination.is_dir():
+                    # execute_gate0 creates the destination gate0 directory
+                    # and its IN_PROGRESS marker before calling prepare.
+                    # Merge the staged evidence beneath that directory while
+                    # refusing to overwrite the marker or any existing file.
+                    for staged in source.iterdir():
+                        staged_destination = destination / staged.name
+                        if staged_destination.exists():
+                            raise FileExistsError(f"seed destination already exists: {staged_destination}")
+                        if staged.is_dir():
+                            shutil.copytree(staged, staged_destination)
+                        else:
+                            shutil.copy2(staged, staged_destination)
+                    continue
+                if destination.exists():
+                    raise FileExistsError(f"seed destination already exists: {destination}")
+                if source.is_dir():
+                    shutil.copytree(source, destination)
+                else:
+                    shutil.copy2(source, destination)
         commit = subprocess.check_output(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True).strip()
         paths = [line.strip() for line in closure.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
         manifest = build_source_manifest(REPO_ROOT, paths, commit)
