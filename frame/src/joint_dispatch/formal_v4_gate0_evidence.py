@@ -209,12 +209,15 @@ def _validate_teacher_alignment(payload: Mapping[str, Any]) -> None:
     _require(
         payload, "production_overlay_deferred_until_stage_p", "stage_p_checkpoint_sha256",
         "window_count", "timestamps_aligned", "state_aligned", "lp_feasible",
-        "forecast_shape", "dispatch_shape",
+        "forecast_shape", "dispatch_shape", "train_archive_sha256", "capacity_receipt_sha256",
+        "normalization_sha256", "solver_sha256", "implementation_sha256", "production_overlay_written",
     )
     if _bool(payload["production_overlay_deferred_until_stage_p"], "teacher_alignment.production_overlay_deferred_until_stage_p") is not True:
         _fail("teacher alignment must defer production overlay until Stage P")
     if payload["stage_p_checkpoint_sha256"] is not None:
         _fail("Gate 0 teacher alignment must not invent a Stage P checkpoint hash")
+    for key in ("train_archive_sha256", "capacity_receipt_sha256", "normalization_sha256", "solver_sha256", "implementation_sha256"):
+        _sha256_string(payload[key], f"teacher_alignment.{key}")
     if int(payload["window_count"]) != 100:
         _fail("teacher alignment probe must use exactly 100 windows")
     for key in ("timestamps_aligned", "state_aligned", "lp_feasible"):
@@ -222,6 +225,8 @@ def _validate_teacher_alignment(payload: Mapping[str, Any]) -> None:
             _fail(f"teacher alignment field failed: {key}")
     if list(payload["forecast_shape"]) != [4, 4] or list(payload["dispatch_shape"]) != [4, 21]:
         _fail("teacher alignment probe shape mismatch")
+    if _bool(payload["production_overlay_written"], "teacher_alignment.production_overlay_written") is not False:
+        _fail("Gate 0 teacher alignment must not write a production overlay")
 
 
 def _validate_curriculum(payload: Mapping[str, Any]) -> None:
@@ -248,6 +253,40 @@ def _validate_curriculum(payload: Mapping[str, Any]) -> None:
     first = _mapping(epochs[0], "curriculum.epochs[0]")
     if _finite(first["decision"], "curriculum.epochs[0].decision") <= 0.0:
         _fail("decision loss is inactive at the first Stage J epoch")
+
+
+def validate_c_ref_gate0_receipt(payload: Mapping[str, Any], *, run_root: str | Path) -> None:
+    """Validate the stronger Gate 0 C-ref contract, including file lineage."""
+
+    _require(
+        payload,
+        "schema_version", "source_split", "train_archive_sha256", "capacity_receipt_sha256",
+        "capacity_scenario_hash", "objective_implementation_sha256", "step_weights",
+        "sample_count", "c_ref", "c_ref_sha256",
+    )
+    if payload.get("schema_version") != "formal-v4.1-c-ref-receipt-v1":
+        _fail("C_ref receipt schema mismatch")
+    if payload.get("source_split") != "train":
+        _fail("C_ref receipt must be fitted on train")
+    if int(payload["sample_count"]) != 34959:
+        _fail("C_ref receipt must contain exactly 34959 train windows")
+    if tuple(float(value) for value in payload["step_weights"]) != STEP_WEIGHTS:
+        _fail("C_ref receipt step weights are not frozen")
+    if _finite(payload["c_ref"], "C_ref.c_ref") <= 0.0:
+        _fail("C_ref must be positive")
+    for key in ("train_archive_sha256", "capacity_receipt_sha256", "capacity_scenario_hash", "objective_implementation_sha256", "c_ref_sha256"):
+        _sha256_string(payload[key], f"C_ref.{key}")
+    root = Path(run_root).resolve()
+    train_path = root / "data" / "train.npz"
+    capacity_path = root / "gate0" / "CAPACITY_FREEZE.json"
+    if not train_path.is_file() or _sha256(train_path) != str(payload["train_archive_sha256"]):
+        _fail("C_ref train archive hash does not match the run root")
+    if not capacity_path.is_file() or _sha256(capacity_path) != str(payload["capacity_receipt_sha256"]):
+        _fail("C_ref capacity receipt hash does not match the run root")
+    # Reuse the canonical self-hash implementation from the objective module.
+    from .formal_v4_objective import validate_c_ref_receipt
+
+    validate_c_ref_receipt(payload, train_archive_sha256=str(payload["train_archive_sha256"]), capacity_receipt_sha256=str(payload["capacity_receipt_sha256"]))
 
 
 def _validate_gradient(payload: Mapping[str, Any]) -> None:
@@ -454,6 +493,7 @@ __all__ = [
     "GATE0_RECEIPT_SCHEMAS",
     "STEP_WEIGHTS",
     "load_gate0_receipt",
+    "validate_c_ref_gate0_receipt",
     "validate_gate0_receipt",
     "write_immutable_json",
 ]

@@ -84,6 +84,12 @@ def _teacher() -> dict:
         "lp_feasible": True,
         "forecast_shape": [4, 4],
         "dispatch_shape": [4, 21],
+        "train_archive_sha256": _HASH,
+        "capacity_receipt_sha256": _HASH,
+        "normalization_sha256": _HASH,
+        "solver_sha256": _HASH,
+        "implementation_sha256": _HASH,
+        "production_overlay_written": False,
     })
     return payload
 

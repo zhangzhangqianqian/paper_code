@@ -23,7 +23,7 @@ if str(FRAME_ROOT) not in sys.path:
 from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec  # noqa: E402
 from src.joint_dispatch.formal_v4_access import DataAccessReceipt, scan_runtime_access  # noqa: E402
 from src.joint_dispatch.formal_v4_diffopt import DifferentiableLPGateReceipt  # noqa: E402
-from src.joint_dispatch.formal_v4_gate0_evidence import validate_gate0_receipt  # noqa: E402
+from src.joint_dispatch.formal_v4_gate0_evidence import validate_c_ref_gate0_receipt, validate_gate0_receipt  # noqa: E402
 from src.joint_dispatch.formal_v4_gate0 import (  # noqa: E402
     MANDATORY_CHECK_IDS,
     Gate0Context,
@@ -181,6 +181,7 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     def objective():
         payload = _read_json(c_ref)
         validate_c_ref_receipt(payload)
+        validate_c_ref_gate0_receipt(payload, run_root=root)
         return {"passed": True, "path": str(c_ref), "sha256": _sha256(c_ref), "c_ref": payload.get("c_ref")}
 
     check("c_ref_receipt", objective)
