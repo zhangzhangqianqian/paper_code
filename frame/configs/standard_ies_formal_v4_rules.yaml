@@ -1,0 +1,30 @@
+schema_version: standard-ies-benchmark-rules-v4.1
+source_years: [2015, 2016, 2017, 2018]
+time_resolution: 1h
+horizon_hours: 4
+required_columns: [timestamp, electricity, cooling, heating, gas, temperature, solar_irradiance, wind_speed]
+capacity_ratios:
+  grid_import_capacity: 1.50
+  chp_electric_capacity: 0.35
+  gas_boiler_capacity: 1.20
+  electric_chiller_capacity: 0.60
+  absorption_chiller_capacity: 0.60
+  bess_power_capacity: 0.20
+  bess_energy_hours: 4.0
+renewable_energy_shares:
+  pv: 0.15
+  wt: 0.10
+renewable_profile:
+  pv_profile_rated_capacity: 1.0
+  wt_profile_rated_capacity: 1.0
+  source: "transparent physical profile from training-period weather"
+source_units:
+  electricity: dataset_native_unit
+  cooling: dataset_native_unit
+  heating: dataset_native_unit
+  gas: m3
+  renewable_profiles: normalized_available_power
+parameter_labels:
+  ledger_values: simulated
+  p95_derived_capacities: derived
+  renewable_capacities: derived
