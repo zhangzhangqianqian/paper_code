@@ -17,6 +17,7 @@ from src.joint_dispatch.formal_protocol_v4 import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "configs" / "joint_forecast_dispatch_formal_v4.json"
+CONTRACT_V41 = ROOT / "configs" / "joint_forecast_dispatch_formal_v4_1.json"
 
 
 def test_v4_method_matrix_and_test_boundary() -> None:
@@ -29,6 +30,13 @@ def test_v4_method_matrix_and_test_boundary() -> None:
     assert spec.allow_evaluation_access_before_gate3 is False
     assert spec.claims["price_carbon_response"] is False
     assert spec.method("RSC-PF").online_exact_lp is False
+
+
+def test_v41_capacity_grid_is_extended_without_changing_legacy_v4() -> None:
+    v41 = load_formal_v4_spec(CONTRACT_V41)
+    legacy = load_formal_v4_spec(CONTRACT)
+    assert v41.capacity["candidate_multipliers"] == pytest.approx([1.0 + 0.1 * i for i in range(21)])
+    assert legacy.capacity["candidate_multipliers"] == pytest.approx([1.0 + 0.1 * i for i in range(11)])
 
 
 def test_state_ledger_excludes_balance_diagnostics() -> None:
@@ -86,4 +94,3 @@ def test_v4_validator_rejects_unknown_keys_and_bad_split() -> None:
     changed["train_years"] = [2015, 2016, 2017, 2018, 2019]
     with pytest.raises(ValueError, match="train_years"):
         validate_formal_v4_payload(changed)
-

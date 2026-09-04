@@ -90,7 +90,7 @@
     "minimum_disk_margin_fraction": 0.20
   },
   "capacity": {
-    "candidate_multipliers": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0],
+    "candidate_multipliers": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0],
     "cooling_shortage_energy_ratio_max": 0.005,
     "cooling_shortage_hour_rate_max": 0.01,
     "main_scenario_name": "capacity_adequate_main",

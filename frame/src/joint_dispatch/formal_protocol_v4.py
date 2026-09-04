@@ -360,7 +360,7 @@ def validate_formal_v4_payload(payload: Mapping[str, Any], *, repo_root: Path | 
         capacity_fields.add("origin_selection")
     _strict_keys(capacity, capacity_fields, "capacity")
     multipliers = tuple(_float(x, "capacity.candidate_multipliers[]", positive=True) for x in _sequence(capacity["candidate_multipliers"], "capacity.candidate_multipliers"))
-    expected_multipliers = tuple(1.0 + 0.1 * i for i in range(11))
+    expected_multipliers = tuple(1.0 + 0.1 * i for i in range(21 if schema_version == SCHEMA_VERSION_V41 else 11))
     if len(multipliers) != len(expected_multipliers) or any(abs(a - b) > 1e-12 for a, b in zip(multipliers, expected_multipliers)) or _float(capacity["cooling_shortage_energy_ratio_max"], "capacity.cooling_shortage_energy_ratio_max") != 0.005 or _float(capacity["cooling_shortage_hour_rate_max"], "capacity.cooling_shortage_hour_rate_max") != 0.01:
         raise ValueError("capacity audit settings are not frozen")
     if schema_version == SCHEMA_VERSION_V41:
