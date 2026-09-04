@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -50,6 +50,31 @@ class MethodAdapterResult:
 
 # Protocol name used by the formal-v4 evaluation contract.
 MethodStepResult = MethodAdapterResult
+
+
+@dataclass(frozen=True)
+class FormalV4MethodContract:
+    method_id: str
+    role: str
+    deployable: bool
+    produces_forecast: bool
+    forecast_metrics_applicable: bool
+    online_optimizer_calls_per_window: int
+    expected_forecast_shape: tuple[int, int] | None
+    expected_dispatch_shape: tuple[int, int] = (4, len(DISPATCH_ORDER))
+
+
+FORMAL_V4_METHOD_CONTRACTS: tuple[FormalV4MethodContract, ...] = (
+    FormalV4MethodContract("RSC-PF", "proposed_joint_network", True, True, True, 0, (4, 4)),
+    FormalV4MethodContract("Decoupled-RSC-PF", "decoupled_joint_network", True, True, True, 0, (4, 4)),
+    FormalV4MethodContract("Direct-Policy", "decision_only_network", True, False, False, 0, None),
+    FormalV4MethodContract("Scheme2R-PTO", "forecast_then_optimize", True, True, True, 1, (4, 4)),
+    FormalV4MethodContract("State-Conditioned-PTO", "state_conditioned_forecast_then_optimize", True, True, True, 1, (4, 4)),
+    FormalV4MethodContract("Official iTransformer-PTO", "official_backbone_adaptation", True, True, True, 1, (4, 4)),
+    FormalV4MethodContract("Differentiable-LP", "differentiable_optimizer", True, True, True, 1, (4, 4)),
+    FormalV4MethodContract("Perfect-Information-MPC", "oracle_reference", False, False, False, 1, None),
+    FormalV4MethodContract("Seasonal-Naive-PTO", "seasonal_naive_forecast_then_optimize", True, True, True, 1, (4, 4)),
+)
 
 
 class _BaseAdapter:
@@ -141,6 +166,39 @@ class StateConditionedPTOAdapter(Scheme2RPTOAdapter):
             raise RuntimeError(f"{self.method_id} LP failed: {solved.message}")
         dispatch = np.stack([solved.values[name] for name in DISPATCH_ORDER], axis=-1)
         return self._result(started, forecast, dispatch, forecast[:, :3], window.get("forecast_target"), self._next_state(dispatch), 1).to_dict()
+
+
+class RSCPFAdapter(_BaseAdapter):
+    """Deployable RSC-PF adapter with no online optimizer call."""
+
+    method_id = "RSC-PF"
+    online_exact_lp = False
+    online_optimizer_calls_per_window = 0
+
+    def __init__(self, parameters: Mapping[str, Any], **kwargs: Any) -> None:
+        super().__init__(parameters, **kwargs)
+        self.model = RSCPFModel(decoder_parameters=parameters, dropout=0.0)
+
+    def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        started = time.perf_counter()
+        loads, exog, device, activity, soc, previous = self._window(window)
+        renew, prices, context_features = self._context(window, soc)
+        inputs = {
+            "load_history": torch.as_tensor(loads[None], dtype=torch.float32), "exog_history": torch.as_tensor(exog[None], dtype=torch.float32),
+            "device_history": torch.as_tensor(device[None], dtype=torch.float32), "activity_history": torch.as_tensor(activity[None], dtype=torch.float32),
+            "scheduler_context": torch.as_tensor(context_features[None], dtype=torch.float32), "previous_chp": torch.tensor([[previous]], dtype=torch.float32),
+        }
+        with torch.no_grad():
+            output = self.model(**inputs)
+        forecast = output.forecast_physical[0].cpu().numpy()
+        dispatch = output.dispatch[0].cpu().numpy()
+        return self._result(started, forecast, dispatch, forecast[:, :3], window.get("forecast_target"), self._next_state(dispatch), 0).to_dict()
+
+
+class DecoupledRSCPFAdapter(RSCPFAdapter):
+    """Inference-equivalent adapter for the separately trained comparator."""
+
+    method_id = "Decoupled-RSC-PF"
 
 
 class SeasonalNaivePTOAdapter(_BaseAdapter):
@@ -243,6 +301,8 @@ class DifferentiableLPAdapter(_BaseAdapter):
 
 def build_formal_v4_method_adapter(method_id: str, parameters: Mapping[str, Any], **kwargs: Any) -> _BaseAdapter:
     builders = {
+        "RSC-PF": RSCPFAdapter,
+        "Decoupled-RSC-PF": DecoupledRSCPFAdapter,
         "Scheme2R-PTO": Scheme2RPTOAdapter,
         "State-Conditioned-PTO": StateConditionedPTOAdapter,
         "Seasonal-Naive-PTO": SeasonalNaivePTOAdapter,
@@ -257,6 +317,7 @@ def build_formal_v4_method_adapter(method_id: str, parameters: Mapping[str, Any]
 
 
 __all__ = [
-    "DirectPolicyAdapter", "MethodAdapterResult", "MethodStepResult", "Scheme2RPTOAdapter", "SeasonalNaivePTOAdapter",
+    "DecoupledRSCPFAdapter", "DirectPolicyAdapter", "FORMAL_V4_METHOD_CONTRACTS", "FormalV4MethodContract",
+    "MethodAdapterResult", "MethodStepResult", "RSCPFAdapter", "Scheme2RPTOAdapter", "SeasonalNaivePTOAdapter",
     "StateConditionedPTOAdapter", "build_formal_v4_method_adapter",
 ]

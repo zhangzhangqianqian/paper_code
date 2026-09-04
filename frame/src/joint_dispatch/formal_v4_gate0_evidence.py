@@ -315,13 +315,24 @@ def _validate_gradient(payload: Mapping[str, Any]) -> None:
 def _validate_method_adapter(payload: Mapping[str, Any]) -> None:
     _validate_schema(payload, "method_adapter")
     _validate_common_probe(payload, "method_adapter")
+    _require(payload, "benchmark_sha256", "train_archive_sha256")
+    _sha256_string(payload["benchmark_sha256"], "method_adapter.benchmark_sha256")
+    _sha256_string(payload["train_archive_sha256"], "method_adapter.train_archive_sha256")
     methods = _list(payload.get("methods"), "method_adapter.methods")
     rows = {_string(_mapping(item, "method_adapter.methods[]").get("method_id"), "method_adapter.method_id"): _mapping(item, "method_adapter.methods[]") for item in methods}
     if set(rows) != set(FORMAL_V4_METHOD_IDS) or len(rows) != len(FORMAL_V4_METHOD_IDS):
         _fail("method adapter registry does not contain exactly the nine formal-v4 methods")
     for method_id, row in rows.items():
-        _require(row, "role", "deployable", "produces_forecast", "forecast_metrics_applicable", "online_optimizer_calls_per_window", "expected_dispatch_shape")
+        _require(row, "role", "deployable", "produces_forecast", "forecast_metrics_applicable", "online_optimizer_calls_per_window", "expected_dispatch_shape", "probe_status")
         _string(row["role"], f"method_adapter.{method_id}.role")
+        probe_status = _string(row["probe_status"], f"method_adapter.{method_id}.probe_status")
+        if probe_status not in {"passed", "contract_only"}:
+            _fail(f"invalid probe status for {method_id}")
+        if method_id in {"Official iTransformer-PTO", "Differentiable-LP", "Perfect-Information-MPC"}:
+            if probe_status != "contract_only":
+                _fail(f"{method_id} must remain contract-only in Gate 0")
+        elif probe_status != "passed":
+            _fail(f"{method_id} executable adapter probe did not pass")
         if list(row["expected_dispatch_shape"]) != [4, 21]:
             _fail(f"dispatch shape mismatch for {method_id}")
         calls = int(row["online_optimizer_calls_per_window"])

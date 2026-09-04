@@ -135,8 +135,11 @@ def _methods() -> dict:
             "online_optimizer_calls_per_window": 0 if method_id in zero_optimizer else 1,
             "expected_forecast_shape": None if method_id == "Direct-Policy" else [4, 4],
             "expected_dispatch_shape": [4, 21],
+            "probe_status": "contract_only" if method_id in {"Official iTransformer-PTO", "Differentiable-LP", "Perfect-Information-MPC"} else "passed",
         })
     payload["methods"] = rows
+    payload["benchmark_sha256"] = _HASH
+    payload["train_archive_sha256"] = _HASH
     return payload
 
 
