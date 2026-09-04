@@ -1,8 +1,10 @@
-# RSC-PF Formal-v4 Gate 0 Comprehensive Repair Implementation Plan
+# RSC-PF Formal-v4.1 Gate 0 Comprehensive Repair Implementation Plan
+
+**Revision:** 1, incorporating the post-plan scientific and provenance audit.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Repair Tasks 1--12, rebuild a causally and physically valid formal-v4 experiment foundation, and issue a new independently verifiable Gate 0 authorization without reading 2020 or starting neural-network training.
+**Goal:** Repair Tasks 1--12 as a new formal-v4.1 protocol, rebuild a causally and physically valid experiment foundation, and issue a new independently verifiable Gate 0 authorization without reading 2020 or starting neural-network training.
 
 **Architecture:** Preserve the validated RSC-PF model and mathematical components, but rebuild the experiment provenance chain from a committed source closure through a 2015--2018-only benchmark, representative capacity audit, realized-settled device trajectory, capacity-bound data, train-only normalization and `C_ref`, executable method adapters, complete regression evidence, and a fail-closed Gate 0 orchestrator. Every generated artifact is immutable, stored below one new run root, and SHA-256-bound to its direct inputs.
 
@@ -14,12 +16,14 @@
 - The repair covers Tasks 1--12 and a new Gate 0 only. Do not start Gate 1, Gate 2, Gate 3, ablations, large neural training, or manuscript result updates.
 - Training/normalization/benchmark derivation may read only 2015--2018; 2019 is selection-only; 2020 remains inaccessible until a future Gate 3 authorization.
 - Preserve `formal_v4_20260903_retry3` and downstream trial artifacts unchanged; classify them as `invalid_pre_repair_trial` in a separate registry.
+- Preserve `frame/configs/joint_forecast_dispatch_formal_v4.json` byte-for-byte. All repaired execution uses the new `frame/configs/joint_forecast_dispatch_formal_v4_1.json` with schema `joint-forecast-dispatch-formal-v4.1`.
 - Never overwrite a generated artifact. Use a new run ID for each failed or successful Gate 0 attempt.
 - Preserve unrelated user changes. Commit only files owned by the current task, and never reset or discard the dirty worktree.
 - Forecast tasks remain electricity, cooling, heating, and station-side gas-consumption prior; only electricity/cooling/heating are rigid dispatch demands.
 - Keep 24-hour history, four-hour horizon, 15 continuous scheduling controls, 21 decoded dispatch outputs, and six derived activity indicators.
 - Do not introduce future binary commitment decisions or a price/carbon-response claim.
 - A missing, unknown, stale, mismatched, skipped, or failed mandatory check must set `authorized_gate1=false` and return a nonzero process exit code.
+- Every direct and transitive formal-v4.1 runtime dependency must be tracked, committed, clean, closure-listed, and hash-bound before authorization. Do not sweep unrelated dirty user files into the closure commit.
 - Generated runtimes and timestamps never participate in scientific identity hashes.
 - Before each commit, run `git diff --check` on the owned files.
 
@@ -29,9 +33,10 @@
 
 **Files:**
 - Create: `frame/configs/joint_dispatch_invalid_runs_v4.json`
+- Create: `frame/configs/joint_forecast_dispatch_formal_v4_1.json`
+- Create: `frame/configs/formal_v4_source_closure_v4_1.txt`
 - Create: `frame/src/joint_dispatch/formal_v4_provenance.py`
 - Create: `frame/tests/test_joint_dispatch_formal_v4_provenance.py`
-- Modify: `frame/configs/joint_forecast_dispatch_formal_v4.json`
 - Modify: `frame/src/joint_dispatch/formal_protocol_v4.py`
 - Test: `frame/tests/test_joint_dispatch_formal_protocol_v4.py`
 
@@ -41,7 +46,7 @@
 
 - [ ] **Step 1: Write failing provenance tests**
 
-Add tests proving that the source manifest rejects a dirty or hash-mismatched file in the formal-v4 source closure, rejects a missing benchmark rule file, and ignores an unrelated dirty document outside the closure.
+Add tests proving that the source manifest rejects an untracked, missing, dirty, or hash-mismatched file in the formal-v4.1 source closure, rejects a missing benchmark rule file, rejects a transitive runtime dependency omitted from the closure, and ignores an unrelated dirty document outside the closure. Assert that loading the v4.1 protocol does not modify the original v4 configuration.
 
 ```python
 def test_manifest_rejects_changed_formal_source(tmp_repo):
@@ -65,23 +70,27 @@ Expected: FAIL because the provenance module and invalid-run registry do not exi
 
 Record the pre-repair roots `formal_v4_20260903`, `formal_v4_20260903_retry1`, `formal_v4_20260903_retry2`, `formal_v4_20260903_retry3`, `formal_v4_20260903_retry3_gate1d`, `formal_v4_20260903_retry3_gate1e`, `formal_v4_20260903_retry3_gate1f`, `formal_v4_20260903_retry3_gate1_g`, `formal_v4_20260903_retry3_gate1_h`, `formal_v4_20260903_retry3_gate1_i`, `formal_v4_20260903_retry3_gate1_final`, `formal_v4_20260903_retry3_gate2`, `gate1_smoke`, and the sibling `joint_forecast_dispatch_formal_v4_retry_gate1` data root. Assign status `invalid_pre_repair_trial`, reasons, audit date, and `allowed_for_formal_results=false`. Do not edit the old run directories.
 
-- [ ] **Step 4: Implement source-closure hashing and validation**
+- [ ] **Step 4: Inventory the complete source closure and commit the reviewed baseline**
 
-Hash raw file bytes, normalize paths relative to the Git root, record the Git commit, and reject path escape, duplicate paths, missing files, mismatched hashes, or invalid-run inputs. Include formal-v4 source/config/tests, benchmark derivation rules, parameter ledger, iTransformer receipt/source files, and Differentiable-LP lock.
+Create `formal_v4_source_closure_v4_1.txt` with repository-relative paths for every direct and transitive runtime dependency: source/config/tests, benchmark rules, parameter ledger, state ledger, builders, evaluator, Gate 0 and independent-auditor scripts, iTransformer receipt/imported sources, Differentiable-LP environment lock, and search budget. Planned files not yet created remain explicit required entries and prevent authorization until later tasks commit them. Review `git status --short` and `git diff -- <each existing closure path>` before staging. Commit only reviewed formal dependencies; preserve unrelated user edits. No generated receipt may claim a final source freeze while a closure path is missing, untracked, or dirty.
 
-- [ ] **Step 5: Extend the protocol schema**
+- [ ] **Step 5: Implement source-closure hashing and validation**
 
-Add exact fields for `invalid_run_registry`, `benchmark_rule_config`, `source_manifest_required`, and the repaired Gate 0 schema. Keep the scientific task/method identities unchanged.
+Hash raw file bytes, normalize paths relative to the Git root, record the Git commit, and reject path escape, duplicate paths, missing/untracked/dirty files, mismatched hashes, closure omissions, or invalid-run inputs.
 
-- [ ] **Step 6: Run protocol and provenance tests**
+- [ ] **Step 6: Create the v4.1 protocol schema**
+
+Copy the scientific task/method identities into `joint_forecast_dispatch_formal_v4_1.json`, set schema `joint-forecast-dispatch-formal-v4.1`, and add exact fields for `invalid_run_registry`, `benchmark_rule_config`, `source_closure_file`, `source_manifest_required`, and the repaired Gate 0 schema. Treat the original v4 config as immutable legacy evidence.
+
+- [ ] **Step 7: Run protocol and provenance tests**
 
 Run the Task 1 tests plus `frame/tests/test_joint_dispatch_formal_protocol_v4.py`. Expected: PASS.
 
-- [ ] **Step 7: Commit Task 1**
+- [ ] **Step 8: Commit Task 1**
 
 ```powershell
-git add -- frame/configs/joint_dispatch_invalid_runs_v4.json frame/configs/joint_forecast_dispatch_formal_v4.json frame/src/joint_dispatch/formal_v4_provenance.py frame/src/joint_dispatch/formal_protocol_v4.py frame/tests/test_joint_dispatch_formal_v4_provenance.py frame/tests/test_joint_dispatch_formal_protocol_v4.py
-git commit -m "fix: freeze formal v4 source provenance"
+git add -- frame/configs/joint_dispatch_invalid_runs_v4.json frame/configs/joint_forecast_dispatch_formal_v4_1.json frame/configs/formal_v4_source_closure_v4_1.txt frame/src/joint_dispatch/formal_v4_provenance.py frame/src/joint_dispatch/formal_protocol_v4.py frame/tests/test_joint_dispatch_formal_v4_provenance.py frame/tests/test_joint_dispatch_formal_protocol_v4.py
+git commit -m "fix: freeze formal v4.1 source provenance"
 ```
 
 ---
@@ -93,7 +102,7 @@ git commit -m "fix: freeze formal v4 source provenance"
 - Create: `frame/src/joint_dispatch/formal_v4_benchmark.py`
 - Create: `frame/scripts/build_rsc_pf_formal_v4_benchmark.py`
 - Create: `frame/tests/test_joint_dispatch_formal_v4_benchmark.py`
-- Modify: `frame/configs/joint_forecast_dispatch_formal_v4.json`
+- Modify: `frame/configs/joint_forecast_dispatch_formal_v4_1.json`
 
 **Interfaces:**
 - Consumes: cleaned Kitakyushu 2015--2018 rows, frozen derivation rules, source hashes, and `scheduling_parameter_ledger_v2.csv`.
@@ -133,8 +142,8 @@ Use a temporary run root and only 2015--2018. Expected: resolved benchmark with 
 - [ ] **Step 7: Commit Task 2**
 
 ```powershell
-git add -- frame/configs/standard_ies_formal_v4_rules.yaml frame/configs/joint_forecast_dispatch_formal_v4.json frame/src/joint_dispatch/formal_v4_benchmark.py frame/scripts/build_rsc_pf_formal_v4_benchmark.py frame/tests/test_joint_dispatch_formal_v4_benchmark.py
-git commit -m "fix: rebuild formal v4 benchmark from train years"
+git add -- frame/configs/standard_ies_formal_v4_rules.yaml frame/configs/joint_forecast_dispatch_formal_v4_1.json frame/src/joint_dispatch/formal_v4_benchmark.py frame/scripts/build_rsc_pf_formal_v4_benchmark.py frame/tests/test_joint_dispatch_formal_v4_benchmark.py
+git commit -m "fix: rebuild formal v4.1 benchmark from train years"
 ```
 
 ---
@@ -144,7 +153,7 @@ git commit -m "fix: rebuild formal v4 benchmark from train years"
 **Files:**
 - Create: `frame/src/joint_dispatch/formal_v4_capacity.py`
 - Create: `frame/tests/test_joint_dispatch_formal_v4_capacity.py`
-- Modify: `frame/configs/joint_forecast_dispatch_formal_v4.json`
+- Modify: `frame/configs/joint_forecast_dispatch_formal_v4_1.json`
 - Modify: `frame/scripts/build_rsc_pf_formal_v4_data.py`
 
 **Interfaces:**
@@ -174,8 +183,8 @@ Expected: PASS and explicit proof that audited cooling demand is nonzero.
 - [ ] **Step 6: Commit Task 3**
 
 ```powershell
-git add -- frame/src/joint_dispatch/formal_v4_capacity.py frame/tests/test_joint_dispatch_formal_v4_capacity.py frame/configs/joint_forecast_dispatch_formal_v4.json frame/scripts/build_rsc_pf_formal_v4_data.py
-git commit -m "fix: stratify formal v4 capacity audit origins"
+git add -- frame/src/joint_dispatch/formal_v4_capacity.py frame/tests/test_joint_dispatch_formal_v4_capacity.py frame/configs/joint_forecast_dispatch_formal_v4_1.json frame/scripts/build_rsc_pf_formal_v4_data.py
+git commit -m "fix: stratify formal v4.1 capacity audit origins"
 ```
 
 ---
@@ -189,12 +198,12 @@ git commit -m "fix: stratify formal v4 capacity audit origins"
 - Test: `frame/tests/test_joint_dispatch_formal_v4_preflight.py`
 
 **Interfaces:**
-- Consumes: resolved formal-v4 benchmark, capacity-origin manifest, common PI-MPC solver, and multiplier list `[1.0,...,2.0]`.
-- Produces: `run_capacity_audit(...) -> CapacityAuditReceipt` and selected `capacity_adequate_main` multiplier.
+- Consumes: resolved formal-v4.1 benchmark, capacity-origin manifest, complete chronological 2015--2018 series, common PI-MPC solver, and multiplier list `[1.0,...,2.0]`.
+- Produces: `run_capacity_audit(...) -> CapacityAuditReceipt` containing both the stratified diagnostic and complete chronological certificate, plus the selected `capacity_adequate_main` multiplier.
 
 - [ ] **Step 1: Write failing audit tests**
 
-Test identical origins for all multipliers, correctly rated PV/WT availability, nonzero-demand guard, per-stratum metrics, smallest-passing multiplier selection, solver failure propagation, and mandatory failure when no multiplier passes.
+Test identical origins for all multipliers, correctly rated PV/WT availability, fixed independent-window diagnostic states `SOC=0.5` and `previous_CHP_output=0`, nonzero-demand guard, per-stratum metrics, full chronological state carry, gap-only resets, smallest-passing-both selection, solver failure propagation, and mandatory failure when no multiplier passes both stages.
 
 - [ ] **Step 2: Confirm current implementation fails the tests**
 
@@ -202,21 +211,25 @@ Expected failures include unit-rated PV/WT profiles, absent strata, and acceptan
 
 - [ ] **Step 3: Implement the common audit evaluator**
 
-Use the resolved PV/WT rated capacities, frozen origin order, identical initial-state/reset rules, and the common LP. Record cooling shortage energy/rate overall and by stratum plus electric/heating feasibility diagnostics.
+Use the resolved PV/WT rated capacities, frozen origin order, fixed diagnostic initial state, and the common LP. Record cooling shortage energy/rate overall and by stratum plus electric/heating feasibility diagnostics. Treat these 500 independent windows as a candidate filter only.
 
-- [ ] **Step 4: Build a deterministic capacity identity**
+- [ ] **Step 4: Certify candidates on the full chronological training trajectory**
 
-Hash the benchmark receipt, origin manifest, solver identity, thresholds and scientific results. Exclude elapsed time, machine information and output paths from `capacity_scenario_hash`.
+Evaluate candidates from smallest to largest over every valid 2015--2018 hour. Reset to `SOC=0.5` and `previous_CHP_output=0` at the series start and after a logged timestamp gap; otherwise carry both values between consecutive settled hours. Stop at the first candidate passing the frozen cooling shortage-energy and shortage-hour thresholds in both stages. If none passes, fail the audit and do not emit a selected multiplier.
 
-- [ ] **Step 5: Make capacity audit and protocol freeze mandatory blockers**
+- [ ] **Step 5: Build a deterministic capacity identity**
+
+Hash the benchmark receipt, origin manifest, diagnostic initial states, full chronological timestamp range, state-reset log, solver identity, thresholds and both stages' scientific results. Exclude elapsed time, machine information and output paths from `capacity_scenario_hash`.
+
+- [ ] **Step 6: Make capacity audit and protocol freeze mandatory blockers**
 
 Add both names to the mandatory registry now, before the full preflight rewrite, and test `authorized_gate1=false` for either failure.
 
-- [ ] **Step 6: Run capacity and preflight tests**
+- [ ] **Step 7: Run capacity and preflight tests**
 
 Expected: PASS; zero-cooling fixtures and failed audits must be denied.
 
-- [ ] **Step 7: Commit Task 4**
+- [ ] **Step 8: Commit Task 4**
 
 ```powershell
 git add -- frame/src/joint_dispatch/formal_v4_capacity.py frame/scripts/run_rsc_pf_formal_v4_preflight.py frame/tests/test_joint_dispatch_formal_v4_capacity.py frame/tests/test_joint_dispatch_formal_v4_preflight.py
@@ -253,21 +266,25 @@ Construct different yesterday/current loads and prove that storing the LP plan d
 
 - [ ] **Step 3: Implement the atomic transition**
 
-Plan from causal inputs, execute the first planned action, settle once against current realized demand/renewables, store `realized_dispatch`, and advance SOC/previous CHP only from the settled outcome.
+Freeze the causal plan inputs before implementation: at decision hour `t`, use observed loads at `t-24:t-20` as the four-step seasonal-naive load plan and repeat PV/WT availability observed at `t-1` over the four planned hours. Current realized hour-`t` loads and renewables enter settlement only. Execute the first planned action, settle once, store `realized_dispatch`, and advance SOC/previous CHP only from the settled outcome.
 
-- [ ] **Step 4: Preserve raw units and exclusion rules**
+- [ ] **Step 4: Implement the exact 48-hour causal bootstrap**
+
+After a series start or timestamp gap, use hours 1--24 only to establish the seasonal-naive forecast; begin settled device transitions at hour 25; then require 24 settled device-history hours before emitting the first model sample at hour 49 (zero-based index 48). Repeat the burn-in after every gap. If December 2018 to January 2019 is continuous, carry SOC, previous CHP output, and the causal buffer across the boundary so 2019 selection may use past 2018 context, but never 2019 labels for fitting.
+
+- [ ] **Step 5: Preserve raw units and exclusion rules**
 
 Store all 21 settlement fields in the trajectory artifact; expose only the frozen first 17 plus six raw-derived statuses as model history. Keep slack/dump available for audit but excluded from model inputs.
 
-- [ ] **Step 5: Add a bounded real-data summer test**
+- [ ] **Step 6: Add bounded real-data continuity tests**
 
-Run several contiguous July 2018 hours and assert all physical residuals and finite state advancement.
+Run a continuous July 2018 slice and a 2018--2019 boundary fixture. Assert all physical residuals, finite state advancement, first-origin index 48, gap reburn-in, allowed 2018 past context for early 2019 selection, and zero selection-label influence on fitted artifacts.
 
-- [ ] **Step 6: Run history, recourse and state tests**
+- [ ] **Step 7: Run history, recourse and state tests**
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 5**
+- [ ] **Step 8: Commit Task 5**
 
 ```powershell
 git add -- frame/src/joint_dispatch/formal_v4_history.py frame/src/joint_dispatch/formal_v4_recourse.py frame/scripts/build_rsc_pf_formal_v4_data.py frame/tests/test_joint_dispatch_formal_v4_history.py
@@ -334,7 +351,7 @@ git commit -m "fix: bind formal v4 data normalization and objective scale"
 - Modify: `frame/src/joint_dispatch/formal_v4_data.py`
 - Modify: `frame/src/joint_dispatch/formal_v4_training.py`
 - Modify: `frame/src/joint_dispatch/formal_v4_objective.py`
-- Modify: `frame/configs/joint_forecast_dispatch_formal_v4.json`
+- Modify: `frame/configs/joint_forecast_dispatch_formal_v4_1.json`
 - Test: `frame/tests/test_joint_dispatch_formal_v4_data.py`
 - Test: `frame/tests/test_joint_dispatch_formal_v4_training.py`
 
@@ -348,7 +365,7 @@ Require checkpoint, train archive, capacity, normalization, timestamp, state and
 
 - [ ] **Step 2: Freeze one curriculum definition**
 
-Move decision/imitation/forecast start/end values into the protocol config, remove conflicting defaults, and test exact epoch 0, transition and final values.
+Move the curriculum into the v4.1 protocol config and remove conflicting code defaults. Freeze forecast weight at `1.0`; linearly reduce imitation from `1.0` at epoch 0 to `0.0` at epoch 18; linearly increase decision from `0.05` at epoch 0 to `1.0` at epoch 18; and keep forecast/imitation/decision at `1.0/0.0/1.0` after epoch 18. Specify the interpolation/boundary convention once and test epoch 0, an interior epoch, epoch 18, and later epochs exactly. In particular, reject the legacy `imitation_final=0.25` behavior.
 
 - [ ] **Step 3: Preserve pre-Stage-P behavior**
 
@@ -365,8 +382,8 @@ Expected: PASS; the existing synthetic smoke tests remain as numerical checks bu
 - [ ] **Step 6: Commit Task 7**
 
 ```powershell
-git add -- frame/src/joint_dispatch/formal_v4_data.py frame/src/joint_dispatch/formal_v4_training.py frame/src/joint_dispatch/formal_v4_objective.py frame/configs/joint_forecast_dispatch_formal_v4.json frame/tests/test_joint_dispatch_formal_v4_data.py frame/tests/test_joint_dispatch_formal_v4_training.py
-git commit -m "fix: freeze formal v4 teacher and gradient contracts"
+git add -- frame/src/joint_dispatch/formal_v4_data.py frame/src/joint_dispatch/formal_v4_training.py frame/src/joint_dispatch/formal_v4_objective.py frame/configs/joint_forecast_dispatch_formal_v4_1.json frame/tests/test_joint_dispatch_formal_v4_data.py frame/tests/test_joint_dispatch_formal_v4_training.py
+git commit -m "fix: freeze formal v4.1 teacher and gradient contracts"
 ```
 
 ---
@@ -515,30 +532,34 @@ git commit -m "fix: unify formal v4 closed loop accounting"
 - Modify: `frame/scripts/run_rsc_pf_formal_v4_preflight.py`
 
 **Interfaces:**
-- Consumes: every formal-v4 input path/open event, 500 bounded real training operations, disk/memory information and method adapters.
+- Consumes: every formal-v4.1 input path/open event, archive-member event, 500 bounded real training operations, disk/memory information and method adapters.
 - Produces: `DATA_ACCESS_RECEIPT.json`, `RESOURCE_PROJECTION.json`, and mandatory Gate 0 check results.
 
 - [ ] **Step 1: Write failing access-control tests**
 
-Attempt to open an evaluation/2020 artifact through every builder and adapter boundary and assert denial plus a logged blocked event. Confirm 2015--2018 access and read-only 2019 base preparation are classified correctly.
+Attempt to open an evaluation/2020 artifact through every builder and adapter boundary and assert denial plus a logged blocked event. Attempt direct filesystem/NumPy/pandas/ZIP reads that bypass the canonical loader and require the static scan to fail. Confirm 2015--2018 access and read-only 2019 base preparation are classified correctly. For ZIP inputs, test separate hashes for the outer archive and exact opened member, and assert that Gate 0 never materializes an evaluation member.
 
 - [ ] **Step 2: Implement centralized split-aware access**
 
-Require builders and Gate 0 components to obtain dataset paths through one access controller. Record split, years, purpose, path hash, caller and allow/deny decision.
+Require builders, adapters, and Gate 0 components to obtain dataset paths through one canonical access controller with a runtime year-deny guard. Record split, years, purpose, path hash, caller and allow/deny decision. For archives, additionally record container hash, member path, member hash, and extraction/materialization status.
 
-- [ ] **Step 3: Write failing resource-threshold tests**
+- [ ] **Step 3: Add an access-bypass static scan**
+
+Scan the declared formal-v4.1 runtime closure for direct dataset-opening calls outside the canonical loader. Maintain a narrow reviewed allowlist for the loader itself. Any unapproved `open`, `Path.open`, pandas/NumPy loader, archive extraction, or equivalent data access blocks Gate 0. Require the evaluation archive/member to remain unmaterialized.
+
+- [ ] **Step 4: Write failing resource-threshold tests**
 
 Mock projected p95 above 24 hours and disk/memory margin below 20%; each case must block Gate 0.
 
-- [ ] **Step 4: Implement bounded resource benchmarking**
+- [ ] **Step 5: Implement bounded resource benchmarking**
 
 Warm adapters, run fixed training-only slices, measure p50/p95 for required components, project one method/seed runtime, and report disk plus memory margins. Store machine-dependent results outside scientific hashes.
 
-- [ ] **Step 5: Run Task 11 tests**
+- [ ] **Step 6: Run Task 11 tests**
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 11**
+- [ ] **Step 7: Commit Task 11**
 
 ```powershell
 git add -- frame/src/joint_dispatch/formal_v4_access.py frame/src/joint_dispatch/formal_v4_resources.py frame/scripts/run_rsc_pf_formal_v4_preflight.py frame/tests/test_joint_dispatch_formal_v4_access.py frame/tests/test_joint_dispatch_formal_v4_resources.py
@@ -561,7 +582,7 @@ git commit -m "fix: audit formal v4 access and resources"
 
 - [ ] **Step 1: Define one exhaustive mandatory-check registry**
 
-Include protocol/source freeze, invalid-run exclusion, benchmark boundary, capacity coverage/selection, materialized data, trajectory physics, normalization, `C_ref`, teacher absence/alignment, gradient boundaries, nine method adapters, iTransformer, DiffLP, data access, full tests and resources. Reject unknown or missing check IDs.
+Include protocol/source freeze, tracked-and-clean runtime closure, invalid-run exclusion, benchmark boundary, stratified and full-chronology capacity certification, materialized data, trajectory physics/bootstrap, normalization, `C_ref`, teacher absence/alignment, exact curriculum, gradient boundaries, nine method adapters, iTransformer, DiffLP, data access/bypass scan, archive-member receipts, full tests and resources. Reject unknown or missing check IDs.
 
 - [ ] **Step 2: Replace dummy-fixture tests with real fault injection**
 
@@ -635,11 +656,15 @@ Resolve known config defaults relative to `FRAME_ROOT`, not process CWD. Do not 
 
 When copying the live scientific contract into a fixture, explicitly clear every `SEAL_HASH_FIELDS` value before exercising first-seal behavior. Do not mutate the live contract.
 
-- [ ] **Step 5: Add the regression receipt runner**
+- [ ] **Step 5: Prove legacy scientific behavior is unchanged**
+
+Limit repairs to repository-relative path resolution, fixture isolation, or a demonstrated implementation regression. Before accepting each legacy-test change, compare the prior and repaired numerical outputs, expected metrics, and receipt/seal semantics on the same fixture. Do not alter frozen scientific calculations or expected results merely to obtain a passing test.
+
+- [ ] **Step 6: Add the regression receipt runner**
 
 Run the complete suite from `D:\Paper\github_work\paper-code`, capture command, environment, Git commit, pass/fail/skip counts and output hash. Any failure returns nonzero.
 
-- [ ] **Step 6: Run the complete suite**
+- [ ] **Step 7: Run the complete suite**
 
 ```powershell
 & 'D:\anaconda\envs\pytorch\python.exe' -m pytest frame\tests -q --basetemp D:\Paper\pytest_tmp_formal_v4_repair_full -p no:cacheprovider
@@ -647,7 +672,7 @@ Run the complete suite from `D:\Paper\github_work\paper-code`, capture command, 
 
 Expected: zero failures and zero collection errors. Existing intentional skips must be enumerated and justified in the receipt.
 
-- [ ] **Step 7: Commit Task 13**
+- [ ] **Step 8: Commit Task 13**
 
 ```powershell
 git add -- frame/src/joint_dispatch/contract.py frame/scripts/run_joint_forecast_dispatch.py frame/tests/test_joint_dispatch_contract_v3.py frame/tests/test_joint_dispatch_runner.py frame/tests/test_scheme2r_proxy_carbon_tradeoff_runner.py frame/scripts/run_repository_regression_v4.py frame/tests/test_repository_regression_v4.py
@@ -662,7 +687,7 @@ git commit -m "fix: restore complete repository regression suite"
 - Create: `frame/scripts/audit_rsc_pf_formal_v4_gate0.py`
 - Create: `frame/tests/test_audit_rsc_pf_formal_v4_gate0.py`
 - Modify only if a test exposes a defect: files owned by Tasks 1--13
-- Output: `frame/reports/joint_forecast_dispatch_formal_v4/$RunId/gate0/`, where `$RunId` is generated once in Step 5.
+- Output: `frame/reports/joint_forecast_dispatch_formal_v4_1/$RunId/gate0/`, where `$RunId` is generated once in Step 6.
 
 **Interfaces:**
 - Consumes: committed Tasks 1--13 implementation and a unique run ID supplied at execution time.
@@ -676,55 +701,59 @@ The auditor must independently recompute hashes, reopen all artifacts, recalcula
 
 Shared low-level schemas/hash utilities are allowed; the auditor must not reuse the function that decided `authorized_gate1`.
 
-- [ ] **Step 3: Run a deliberately nonauthorizing dry Gate 0**
+- [ ] **Step 3: Test and commit the independent auditor before any final manifest**
+
+Run the auditor unit tests and `git diff --check`, review the files, then commit the auditor. The later source-closure manifest must bind this commit and these exact auditor bytes; no auditor change is permitted between final manifest creation and independent verification.
+
+```powershell
+git add -- frame/scripts/audit_rsc_pf_formal_v4_gate0.py frame/tests/test_audit_rsc_pf_formal_v4_gate0.py
+git commit -m "test: independently audit repaired formal v4.1 gate0"
+```
+
+- [ ] **Step 4: Run a deliberately nonauthorizing dry Gate 0**
 
 Set `$DryRunId = "formal_v4_repair_dry_" + (Get-Date -Format "yyyyMMdd_HHmmss")` and run the bounded dry path with that ID. Confirm the orchestration path, artifact layout and failure receipts. Never reuse that ID.
 
-- [ ] **Step 4: Review all diffs and commit any dry-run fixes**
+- [ ] **Step 5: Review and commit dry-run fixes, then generate the final source manifest**
 
-Run targeted tests, full regression, `git diff --check`, and commit only task-owned corrections. Generate a fresh source manifest after the final code commit.
+Run targeted tests, full regression, `git diff --check`, and commit only task-owned corrections. Recheck every path in `formal_v4_source_closure_v4_1.txt`: all must be tracked, committed, clean, and complete, including the auditor. Generate a fresh source manifest only after the final code commit. If any closure file changes afterward, regenerate the manifest and restart the final Gate 0 with a new run ID.
 
-- [ ] **Step 5: Run the final Gate 0 with a fresh run ID**
+- [ ] **Step 6: Run the final Gate 0 with a fresh run ID**
 
 From the Git root:
 
 ```powershell
-$RunId = "formal_v4_repair_" + (Get-Date -Format "yyyyMMdd_HHmmss")
-& 'D:\anaconda\envs\pytorch\python.exe' frame\scripts\run_rsc_pf_formal_v4_preflight.py --contract frame\configs\joint_forecast_dispatch_formal_v4.json --run-id $RunId
+$RunId = "formal_v4_1_repair_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+& 'D:\anaconda\envs\pytorch\python.exe' frame\scripts\run_rsc_pf_formal_v4_preflight.py --contract frame\configs\joint_forecast_dispatch_formal_v4_1.json --run-id $RunId
 ```
 
 Expected: exit code 0 only after all mandatory artifacts/checks exist; no neural training process is launched.
 
-- [ ] **Step 6: Run the independent audit**
+- [ ] **Step 7: Run the independent audit**
 
 ```powershell
-& 'D:\anaconda\envs\pytorch\python.exe' frame\scripts\audit_rsc_pf_formal_v4_gate0.py --run-root (Join-Path 'frame\reports\joint_forecast_dispatch_formal_v4' $RunId)
+& 'D:\anaconda\envs\pytorch\python.exe' frame\scripts\audit_rsc_pf_formal_v4_gate0.py --run-root (Join-Path 'frame\reports\joint_forecast_dispatch_formal_v4_1' $RunId)
 ```
 
 Expected: `INDEPENDENT_GATE0_AUDIT.json` reports `verified=true`, reproduces every hash, and confirms no 2020 access.
 
-- [ ] **Step 7: Perform the final acceptance review**
+- [ ] **Step 8: Perform the final acceptance review**
 
 Confirm all of the following before reporting completion:
 
 - old invalid runs are preserved and excluded;
 - benchmark source years are exactly 2015--2018;
 - capacity manifest has 500 representative origins and nonzero cooling coverage;
-- capacity selection is interpretable and deterministic;
+- the same selected capacity passes the 500-origin filter and complete chronological 2015--2018 certification;
 - settled device histories have maximum physical residual at most `1e-6`;
+- the 48-hour causal burn-in and 2018--2019 continuity rules are evidenced;
 - train/selection, normalization and `C_ref` share one run root and complete hash chain;
 - all nine adapters execute with correct optimizer counts;
 - formal-v4 targeted and complete repository tests have zero failures;
 - resource thresholds pass;
 - 2020/evaluation access count is zero;
+- no direct dataset-access bypass exists and no evaluation archive member was materialized;
 - Gate 0 and independent audit both authorize/verify the same run.
-
-- [ ] **Step 8: Commit the independent auditor, not generated run artifacts**
-
-```powershell
-git add -- frame/scripts/audit_rsc_pf_formal_v4_gate0.py frame/tests/test_audit_rsc_pf_formal_v4_gate0.py
-git commit -m "test: independently audit repaired formal v4 gate0"
-```
 
 ---
 
