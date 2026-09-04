@@ -30,7 +30,7 @@ from src.joint_dispatch.formal_v4_gate0 import (  # noqa: E402
     execute_gate0,
     run_gate0,
 )
-from src.joint_dispatch.formal_v4_itransformer import validate_itransformer_receipt  # noqa: E402
+from src.joint_dispatch.formal_v4_itransformer import validate_itransformer_receipt, verify_itransformer_source_files  # noqa: E402
 from src.joint_dispatch.formal_v4_objective import validate_c_ref_receipt  # noqa: E402
 from src.joint_dispatch.formal_v4_provenance import build_source_manifest, load_invalid_run_registry, validate_source_manifest  # noqa: E402
 from src.joint_dispatch.formal_v4_resources import ResourceProjection  # noqa: E402
@@ -193,6 +193,12 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     def itransformer():
         payload = _read_json(protocol / "ITRANSFORMER_SOURCE_RECEIPT.json")
         validate_itransformer_receipt(payload)
+        source_root = (REPO_ROOT / str(payload["source_root"])).resolve()
+        try:
+            source_root.relative_to(REPO_ROOT.resolve())
+        except ValueError as exc:
+            raise ValueError("iTransformer source root escapes repository") from exc
+        verify_itransformer_source_files(source_root, payload, require_license=True)
         return {"passed": True, "path": str(protocol / "ITRANSFORMER_SOURCE_RECEIPT.json"), "sha256": _sha256(protocol / "ITRANSFORMER_SOURCE_RECEIPT.json")}
 
     check("itransformer_receipt", itransformer)

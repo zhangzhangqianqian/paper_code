@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -16,6 +17,7 @@ from torch import Tensor, nn
 
 OFFICIAL_REPOSITORY = "https://github.com/thuml/iTransformer"
 OFFICIAL_BACKBONE_CLASS = "model.iTransformer.Model"
+OFFICIAL_COMMIT = "c2426e68ca13f74aaec08045c5c724d8ad328124"
 
 
 def _sha256(path: Path) -> str:
@@ -27,6 +29,8 @@ def _sha256(path: Path) -> str:
 
 
 def validate_itransformer_receipt(receipt: Mapping[str, Any]) -> None:
+    if receipt.get("schema_version") != "formal-v4.1-itransformer-source-v1":
+        raise ValueError("iTransformer receipt schema is not formal-v4.1")
     if receipt.get("repository") != OFFICIAL_REPOSITORY:
         raise ValueError("iTransformer receipt repository is not the official THUML source")
     if receipt.get("backbone_class") != OFFICIAL_BACKBONE_CLASS:
@@ -35,7 +39,15 @@ def validate_itransformer_receipt(receipt: Mapping[str, Any]) -> None:
         raise ValueError("iTransformer receipt must be marked official_backbone_adaptation")
     if receipt.get("verified") is not True or not receipt.get("commit"):
         raise ValueError("iTransformer source receipt is not verified")
-    if "license_sha256" in receipt and (not isinstance(receipt["license_sha256"], str) or len(receipt["license_sha256"]) != 64):
+    if receipt.get("commit") != OFFICIAL_COMMIT:
+        raise ValueError("iTransformer receipt commit is not the frozen THUML commit")
+    source_root = receipt.get("source_root")
+    if not isinstance(source_root, str) or not source_root or Path(source_root).is_absolute() or ".." in Path(source_root).parts:
+        raise ValueError("iTransformer receipt source_root must be repository-relative")
+    license_file = receipt.get("license_file")
+    if not isinstance(license_file, str) or not license_file or Path(license_file).is_absolute() or ".." in Path(license_file).parts:
+        raise ValueError("iTransformer receipt license_file must be source-root-relative")
+    if not isinstance(receipt.get("license_sha256"), str) or len(receipt["license_sha256"]) != 64:
         raise ValueError("iTransformer license hash is invalid")
 
 
@@ -44,6 +56,12 @@ def verify_itransformer_source_files(source_root: str | Path, receipt: Mapping[s
 
     validate_itransformer_receipt(receipt)
     root = Path(source_root).resolve()
+    try:
+        actual_commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True, stderr=subprocess.STDOUT).strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError("iTransformer source root is not a readable Git checkout") from exc
+    if actual_commit != str(receipt["commit"]):
+        raise ValueError("iTransformer Git HEAD does not match the receipt commit")
     imported = receipt.get("imported_file_hashes", {})
     if not isinstance(imported, Mapping) or not imported:
         raise ValueError("iTransformer receipt must list imported source hashes")
@@ -56,7 +74,7 @@ def verify_itransformer_source_files(source_root: str | Path, receipt: Mapping[s
         if not path.is_file() or _sha256(path) != str(expected):
             raise ValueError(f"iTransformer upstream file hash mismatch: {relative}")
     if require_license:
-        license_path = root / str(receipt.get("license_file", "LICENSE"))
+        license_path = root / str(receipt["license_file"])
         expected = receipt.get("license_sha256")
         if not isinstance(expected, str) or len(expected) != 64 or not license_path.is_file() or _sha256(license_path) != expected:
             raise ValueError("iTransformer license hash verification failed")
@@ -120,4 +138,4 @@ class OfficialITransformerAdapter(nn.Module):
         return result.contiguous()
 
 
-__all__ = ["OFFICIAL_BACKBONE_CLASS", "OFFICIAL_REPOSITORY", "OfficialITransformerAdapter", "validate_itransformer_receipt", "verify_itransformer_source_files"]
+__all__ = ["OFFICIAL_BACKBONE_CLASS", "OFFICIAL_COMMIT", "OFFICIAL_REPOSITORY", "OfficialITransformerAdapter", "validate_itransformer_receipt", "verify_itransformer_source_files"]
