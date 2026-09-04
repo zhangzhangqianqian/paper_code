@@ -25,6 +25,7 @@ if str(FRAME_ROOT) not in sys.path:
 from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec  # noqa: E402
 from src.joint_dispatch.formal_v4_capacity import select_capacity_origins  # noqa: E402
 from src.joint_dispatch.formal_v4_data import FormalV4BaseSeries, FormalV4Normalization, materialize_state_windows  # noqa: E402
+from src.joint_dispatch.formal_v4_history import SettledTrajectory, generate_settled_device_trajectory  # noqa: E402
 from src.joint_dispatch.contract import DISPATCH_ORDER  # noqa: E402
 from src.scheduling.dispatch_lp import DispatchInputs, solve_dispatch_lp  # noqa: E402
 from src.kitakyushu_pipeline import clean_kitakyushu_dataframe, read_kitakyushu_canonical  # noqa: E402
@@ -110,48 +111,15 @@ def _load_base(path: Path) -> FormalV4BaseSeries:
         )
 
 
-def _causal_trajectory(base: FormalV4BaseSeries, parameters: dict[str, float], capacity_receipt: Path) -> np.ndarray:
-    """Generate one chronological, causal LP first-action trajectory.
+def _causal_trajectory(base: FormalV4BaseSeries, parameters: dict[str, float], capacity_receipt: Path) -> SettledTrajectory:
+    """Generate the causal trajectory through the canonical settled transition."""
 
-    The solver sees only a 24-hour-lag demand forecast and last-value renewable
-    persistence.  SOC and previous CHP output are carried between consecutive
-    hourly rows and reset only across a documented timestamp gap.
-    """
-    receipt = json.loads(capacity_receipt.read_text(encoding="utf-8"))
-    multiplier = float(receipt["capacity_audit"]["selected"]["multiplier"])
-    if not np.isfinite(multiplier) or multiplier <= 0.0:
-        raise ValueError("capacity receipt contains an invalid multiplier")
-    for key in ("electric_chiller_capacity", "absorption_chiller_capacity"):
-        parameters[key] = float(parameters[key]) * multiplier
-    loads = base.load_and_exog[:, :3]
-    n = len(base.timestamps)
-    trajectory = np.zeros((n, len(DISPATCH_ORDER)), dtype=np.float64)
-    soc, previous_chp = 0.5, 0.0
-    for index in range(n):
-        if index > 0 and base.timestamps[index] - base.timestamps[index - 1] != np.timedelta64(1, "h"):
-            soc, previous_chp = 0.5, 0.0
-        if index >= 24:
-            demand = loads[index - 24:index - 20]
-        else:
-            demand = np.repeat(loads[index:index + 1], 4, axis=0)
-        if demand.shape != (4, 3):
-            raise ValueError("causal demand window has an invalid shape")
-        context = dict(parameters)
-        context["grid_energy_price"] = np.repeat(base.prices_and_weights[index, 0], 4)
-        context["gas_energy_price"] = np.repeat(base.prices_and_weights[index, 1], 4)
-        context["carbon_price"] = np.repeat(base.prices_and_weights[index, 2], 4)
-        result = solve_dispatch_lp(DispatchInputs(
-            demand=demand, pv_available=np.repeat(base.renewable_forecast[index, 0], 4),
-            wt_available=np.repeat(base.renewable_forecast[index, 1], 4),
-            parameters=context, initial_soc=soc, previous_chp=previous_chp,
-        ))
-        if not result.success:
-            raise RuntimeError(f"causal trajectory LP failed at row {index}: {result.message}")
-        first = np.asarray([float(result.values[name][0]) for name in DISPATCH_ORDER], dtype=np.float64)
-        trajectory[index] = first
-        soc = float(np.clip(first[DISPATCH_ORDER.index("soc")] / float(parameters["bess_energy_capacity"]), 0.0, 1.0))
-        previous_chp = float(first[DISPATCH_ORDER.index("p_chp")])
-    return trajectory
+    return generate_settled_device_trajectory(
+        base,
+        parameters,
+        capacity_receipt=capacity_receipt,
+        trajectory_id=f"formal_v4_1_causal_settled_{base.split}",
+    )
 
 
 def _save_materialized(split, path: Path, normalization: FormalV4Normalization | None, metadata: dict[str, object]) -> None:
@@ -213,7 +181,8 @@ def main() -> int:
                 base.prices_and_weights, base.timestamps, base.split,
             )
             by_split[base.split] = materialize_state_windows(
-                piece, trajectory[offset:offset + len(piece.timestamps)], capacity_receipt=args.capacity_receipt, split=base.split,
+                piece, trajectory.settled_dispatch[offset:offset + len(piece.timestamps)], capacity_receipt=args.capacity_receipt, split=base.split,
+                settled_mask=trajectory.settled_mask[offset:offset + len(piece.timestamps)],
                 bess_energy_capacity=float(receipt["bess_energy_capacity"]),
             )
             offset += len(piece.timestamps)
@@ -221,7 +190,7 @@ def main() -> int:
         run_root = args.run_root or (Path(spec.paths["output_root"]) / "formal_v4_1_unsealed")
         output_root = run_root / "data"
         for split, windows in by_split.items():
-            _save_materialized(windows, output_root / f"{split}.npz", normalization if split == "train" else None, {"schema_version": "formal-v4-materialized-v1", "capacity_receipt": str(args.capacity_receipt), "split": split, "rows": len(windows), "trajectory_id": receipt.get("trajectory_id", "")})
+            _save_materialized(windows, output_root / f"{split}.npz", normalization if split == "train" else None, {"schema_version": "formal-v4-materialized-v1", "capacity_receipt": str(args.capacity_receipt), "split": split, "rows": len(windows), "trajectory_id": trajectory.trajectory_id, "trajectory_audit": trajectory.audit.to_payload()})
         print(json.dumps({"status": "pass", "mode": args.mode, "splits": list(by_split), "rows": {key: len(value) for key, value in by_split.items()}, "output_root": str(output_root)}, ensure_ascii=False))
         return 0
     years = tuple(sorted({year for split in args.splits for year in _years_for_split(split)}))
