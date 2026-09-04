@@ -256,8 +256,13 @@ def main() -> int:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps(manifest.to_payload(), ensure_ascii=False, indent=2), encoding="utf-8")
 
+    cache: dict[str, dict[str, Any]] | None = None
+
     def evidence(check_id: str) -> Mapping[str, Any]:
-        return _receipt_checks(spec, holder["run_root"])[check_id]
+        nonlocal cache
+        if cache is None:
+            cache = _receipt_checks(spec, holder["run_root"])
+        return cache[check_id]
 
     checkers = {check_id: (lambda check_id=check_id: evidence(check_id)) for check_id in MANDATORY_CHECK_IDS}
     result = execute_gate0(
