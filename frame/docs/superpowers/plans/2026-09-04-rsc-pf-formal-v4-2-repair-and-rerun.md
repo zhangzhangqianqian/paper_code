@@ -281,7 +281,7 @@ def validate_gate3_envelope(envelope: Mapping[str, Any], contract_sha256: str) -
         raise EvaluationAccessDenied("Gate 3 envelope is not an unused 2020 authorization")
 ```
 
-The controller must reject 2021 at every gate, reject 2020 before Gate 3, record every allowed/blocked access event, and atomically mark the envelope consumed when Gate 3 first opens 2020.
+The controller must reject 2021 at every gate, reject 2020 before Gate 3, record every allowed/blocked access event, and atomically create a separate immutable `GATE3_AUTHORIZATION_CONSUMED.json` receipt when Gate 3 first opens 2020. The original authorization envelope remains immutable.
 
 - [ ] **Step 6: Run focused tests**
 
@@ -1467,7 +1467,7 @@ Expected: the envelope is consumed atomically; 2020 is read once; no training, t
 
 - [ ] **Step 2: Verify the locked evaluation receipt**
 
-Run: `& $Py -c "import json,pathlib; root=pathlib.Path('reports/joint_forecast_dispatch_formal_v4_2/formal_v4_2_20260904_a'); d=json.loads((root/'gate3/GATE3_COMPLETE.json').read_text()); e=json.loads((root/'protocol/GATE3_AUTHORIZATION.json').read_text()); assert d['complete'] is True; assert d['training_calls']==0; assert d['retuning_events']==0; assert e['consumed'] is True; assert d['accessed_years']==[2020]; print(d['row_coverage'])"`
+Run: `& $Py -c "import json,pathlib; root=pathlib.Path('reports/joint_forecast_dispatch_formal_v4_2/formal_v4_2_20260904_a'); d=json.loads((root/'gate3/GATE3_COMPLETE.json').read_text()); c=json.loads((root/'protocol/GATE3_AUTHORIZATION_CONSUMED.json').read_text()); assert d['complete'] is True; assert d['training_calls']==0; assert d['retuning_events']==0; assert c['allowed_years']==[2020]; assert d['accessed_years']==[2020]; print(d['row_coverage'])"`
 
 Expected: full five-seed/deterministic coverage, zero training/retuning and no 2021 access.
 
