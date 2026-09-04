@@ -59,6 +59,11 @@ def _source_hash(base: FormalV4BaseSeries) -> str:
     return digest.hexdigest()
 
 
+def _parameter_hash(parameters: Mapping[str, Any]) -> str:
+    payload = {str(key): float(value) for key, value in sorted(parameters.items()) if np.asarray(value).ndim == 0 and np.isfinite(float(value))}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def _valid_origins(timestamps: np.ndarray) -> np.ndarray:
     valid: list[int] = []
     for origin in range(24, len(timestamps) - 3):
@@ -163,6 +168,7 @@ class CapacityAuditReceipt:
     full_timestamp_end: str
     full_state_reset_count: int
     solver_identity: str
+    resolved_parameter_sha256: str = ""
     capacity_scenario_hash: str = ""
 
     def __post_init__(self) -> None:
@@ -192,6 +198,7 @@ class CapacityAuditReceipt:
             "full_timestamp_end": self.full_timestamp_end,
             "full_state_reset_count": self.full_state_reset_count,
             "solver_identity": self.solver_identity,
+            "resolved_parameter_sha256": self.resolved_parameter_sha256,
         }
 
     def to_payload(self) -> dict[str, Any]:
@@ -359,6 +366,7 @@ def run_capacity_audit(
         full_timestamp_end=str(timestamps[valid[-1] + 3]),
         full_state_reset_count=full_resets,
         solver_identity=f"{getattr(solver, '__module__', '')}.{getattr(solver, '__qualname__', repr(solver))}",
+        resolved_parameter_sha256=_parameter_hash(parameters),
     )
 
 

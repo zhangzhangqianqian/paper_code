@@ -203,6 +203,11 @@ class SameInformationTeacherOverlay:
     state_hashes: np.ndarray
     stage_p_checkpoint_sha256: str
     split: str
+    train_archive_sha256: str = ""
+    capacity_receipt_sha256: str = ""
+    normalization_sha256: str = ""
+    solver_sha256: str = ""
+    implementation_sha256: str = ""
 
     def __post_init__(self) -> None:
         dispatch = _array(self.dispatch, "dispatch", 3)
@@ -217,6 +222,32 @@ class SameInformationTeacherOverlay:
         object.__setattr__(self, "dispatch", dispatch.astype(np.float64))
         object.__setattr__(self, "target_times", target_times)
         object.__setattr__(self, "state_hashes", state_hashes)
+
+    def validate_formal_v4_1(self) -> None:
+        required = {
+            "train_archive_sha256": self.train_archive_sha256,
+            "capacity_receipt_sha256": self.capacity_receipt_sha256,
+            "normalization_sha256": self.normalization_sha256,
+            "solver_sha256": self.solver_sha256,
+            "implementation_sha256": self.implementation_sha256,
+        }
+        missing = [name for name, value in required.items() if not isinstance(value, str) or len(value) != 64]
+        if missing:
+            raise ValueError(f"teacher overlay is missing formal-v4.1 hashes: {missing}")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": "formal-v4.1-same-information-teacher-v1",
+            "split": self.split,
+            "stage_p_checkpoint_sha256": self.stage_p_checkpoint_sha256,
+            "train_archive_sha256": self.train_archive_sha256,
+            "capacity_receipt_sha256": self.capacity_receipt_sha256,
+            "normalization_sha256": self.normalization_sha256,
+            "solver_sha256": self.solver_sha256,
+            "implementation_sha256": self.implementation_sha256,
+            "target_times": [str(value) for value in self.target_times],
+            "state_hashes": self.state_hashes.tolist(),
+        }
 
 
 def _capacity_receipt(value: Mapping[str, Any] | str | Path | None) -> Mapping[str, Any]:
@@ -239,7 +270,7 @@ def _capacity_receipt(value: Mapping[str, Any] | str | Path | None) -> Mapping[s
         selected = audit.get("selected")
         if not isinstance(selected, Mapping) or not np.isfinite(float(selected.get("multiplier", np.nan))) or float(selected.get("multiplier", 0.0)) <= 0.0:
             raise PermissionError("capacity receipt has no valid selected multiplier")
-        for name in ("origin_manifest_sha256", "source_base_sha256", "capacity_scenario_hash"):
+        for name in ("origin_manifest_sha256", "source_base_sha256", "resolved_parameter_sha256", "capacity_scenario_hash"):
             candidate = audit.get(name) if name != "capacity_scenario_hash" else payload.get(name)
             if not isinstance(candidate, str) or not candidate:
                 raise PermissionError(f"capacity receipt is missing {name}")
@@ -336,6 +367,11 @@ def build_same_information_teacher(
     teacher_dispatch: np.ndarray,
     *,
     stage_p_checkpoint_sha256: str,
+    train_archive_sha256: str = "",
+    capacity_receipt_sha256: str = "",
+    normalization_sha256: str = "",
+    solver_sha256: str = "",
+    implementation_sha256: str = "",
 ) -> SameInformationTeacherOverlay:
     """Bind Stage-S labels to the exact deployment state, timestamps and hash."""
 
@@ -345,6 +381,9 @@ def build_same_information_teacher(
     return SameInformationTeacherOverlay(
         dispatch=dispatch, target_times=split.target_times, state_hashes=split.state_hashes,
         stage_p_checkpoint_sha256=stage_p_checkpoint_sha256, split=split.split,
+        train_archive_sha256=train_archive_sha256, capacity_receipt_sha256=capacity_receipt_sha256,
+        normalization_sha256=normalization_sha256, solver_sha256=solver_sha256,
+        implementation_sha256=implementation_sha256,
     )
 
 

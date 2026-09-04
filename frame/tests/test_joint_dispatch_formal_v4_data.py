@@ -60,6 +60,21 @@ def test_teacher_uses_deployment_information_not_realized_future():
     np.testing.assert_array_equal(a.dispatch, b.dispatch)
 
 
+def test_formal_v4_1_teacher_overlay_requires_complete_provenance():
+    base = _base()
+    dispatch = np.zeros((len(base.timestamps), len(DISPATCH_ORDER)), dtype=np.float64)
+    split = materialize_state_windows(base, dispatch, capacity_receipt=_receipt())
+    teacher = build_same_information_teacher(split, np.ones((len(split), 4, len(DISPATCH_ORDER))), stage_p_checkpoint_sha256="p")
+    with pytest.raises(ValueError, match="hashes"):
+        teacher.validate_formal_v4_1()
+    strict = build_same_information_teacher(
+        split, np.ones((len(split), 4, len(DISPATCH_ORDER))), stage_p_checkpoint_sha256="p",
+        train_archive_sha256="a" * 64, capacity_receipt_sha256="b" * 64,
+        normalization_sha256="c" * 64, solver_sha256="d" * 64, implementation_sha256="e" * 64,
+    )
+    strict.validate_formal_v4_1()
+
+
 def test_renewable_persistence_repeats_only_last_available_value():
     base = _base()
     dispatch = np.zeros((len(base.timestamps), len(DISPATCH_ORDER)), dtype=np.float64)

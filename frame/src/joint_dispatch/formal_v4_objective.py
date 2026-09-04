@@ -164,7 +164,7 @@ def formal_v4_curriculum_weights(
     decision_start: float = 0.05,
     decision_final: float = 1.0,
     imitation_start: float = 1.0,
-    imitation_final: float = 0.25,
+    imitation_final: float = 0.0,
     forecast: float = 1.0,
 ) -> Any:
     """Return finite curriculum weights with decision learning active at epoch 0."""

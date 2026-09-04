@@ -55,6 +55,12 @@
     "model_history_fraction": 0.50,
     "rollin_refresh_epochs": 5,
     "imitation_end_epoch": 18,
+    "forecast_weight": 1.0,
+    "imitation_start_weight": 1.0,
+    "imitation_final_weight": 0.0,
+    "decision_start_weight": 0.05,
+    "decision_final_weight": 1.0,
+    "curriculum_ramp_epochs": 18,
     "first_step_weights": [0.5, 0.16666666666666666, 0.16666666666666666, 0.16666666666666666],
     "forecast_task_weights": [1.0, 1.0, 1.0, 0.25]
   },

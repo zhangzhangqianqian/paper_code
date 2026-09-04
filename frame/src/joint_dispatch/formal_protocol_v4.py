@@ -302,11 +302,18 @@ def validate_formal_v4_payload(payload: Mapping[str, Any], *, repo_root: Path | 
     training = payload["training"]
     if not isinstance(training, Mapping):
         raise ValueError("training must be an object")
-    _strict_keys(training, {"stage_p_max_epochs", "stage_s_max_epochs", "stage_j_max_epochs", "patience", "validation_interval", "rollin_start_fraction", "model_history_fraction", "rollin_refresh_epochs", "imitation_end_epoch", "first_step_weights", "forecast_task_weights"}, "training")
+    training_fields = {"stage_p_max_epochs", "stage_s_max_epochs", "stage_j_max_epochs", "patience", "validation_interval", "rollin_start_fraction", "model_history_fraction", "rollin_refresh_epochs", "imitation_end_epoch", "first_step_weights", "forecast_task_weights"}
+    if schema_version == SCHEMA_VERSION_V41:
+        training_fields |= {"forecast_weight", "imitation_start_weight", "imitation_final_weight", "decision_start_weight", "decision_final_weight", "curriculum_ramp_epochs"}
+    _strict_keys(training, training_fields, "training")
     for field in ("stage_p_max_epochs", "stage_s_max_epochs", "stage_j_max_epochs", "patience", "validation_interval", "rollin_refresh_epochs", "imitation_end_epoch"):
         _int(training[field], f"training.{field}", positive=True)
     if tuple(_int(training["stage_p_max_epochs"], "stage_p_max_epochs") for _ in (0,)) != (30,) or _int(training["stage_s_max_epochs"], "stage_s_max_epochs") != 30 or _int(training["stage_j_max_epochs"], "stage_j_max_epochs") != 30:
         raise ValueError("stage epoch ceilings are not frozen")
+    if schema_version == SCHEMA_VERSION_V41:
+        curriculum = {name: _float(training[name], f"training.{name}") for name in ("forecast_weight", "imitation_start_weight", "imitation_final_weight", "decision_start_weight", "decision_final_weight")}
+        if curriculum != {"forecast_weight": 1.0, "imitation_start_weight": 1.0, "imitation_final_weight": 0.0, "decision_start_weight": 0.05, "decision_final_weight": 1.0} or _int(training["curriculum_ramp_epochs"], "training.curriculum_ramp_epochs", positive=True) != 18 or _int(training["imitation_end_epoch"], "training.imitation_end_epoch", positive=True) != 18:
+            raise ValueError("formal-v4.1 curriculum is not frozen")
     for field in ("rollin_start_fraction", "model_history_fraction"):
         value = _float(training[field], f"training.{field}")
         if not 0.0 < value < 1.0:
