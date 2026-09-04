@@ -137,7 +137,7 @@ class _FormalV4Base(nn.Module):
 class RSCPFModel(_FormalV4Base):
     """RSC-PF: explicit four-task forecast bottleneck followed by scheduling."""
 
-    def forward(self, **inputs: Tensor) -> FormalV4ForwardOutput:
+    def forward(self, *, detach_forecast_for_dispatch: bool = False, **inputs: Tensor) -> FormalV4ForwardOutput:
         self._validate_common(inputs)
         state = self.state_encoder(inputs["device_history"], inputs["activity_history"])
         padded = _pad_device_history(inputs["device_history"])
@@ -149,7 +149,12 @@ class RSCPFModel(_FormalV4Base):
         # for the state encoder and preserves the explicit forecast bottleneck.
         forecast_normalized = forecast_normalized + self.forecast_state_fusion(state).unsqueeze(1)
         forecast_physical = self.core.forecast_to_physical(forecast_normalized)
-        physical_features = self.core._raw_physical_features(forecast_physical, inputs["scheduler_context"])
+        # Decoupled-RSC-PF uses the identical scheduler and initialization but
+        # cuts only the decision-loss edge at this bottleneck.  The reported
+        # forecast remains attached so its supervised loss still trains the
+        # forecaster.
+        forecast_for_dispatch = forecast_physical.detach() if detach_forecast_for_dispatch else forecast_physical
+        physical_features = self.core._raw_physical_features(forecast_for_dispatch, inputs["scheduler_context"])
         controls, dispatch = self._schedule(physical_features, state, inputs["previous_chp"])
         return FormalV4ForwardOutput(forecast_normalized, forecast_physical, None, controls, dispatch)
 
