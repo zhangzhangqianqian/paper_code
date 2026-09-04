@@ -71,8 +71,9 @@ def _batch_from_train(path: Path, *, batch_size: int = 2) -> dict[str, torch.Ten
             raise ValueError("train archive is too small for gradient probe")
         indices = slice(0, batch_size)
         def normalized(name: str) -> np.ndarray:
-            mean = payload[f"normalization_load_mean"] if name == "forecast_target" else payload[f"normalization_{name}_mean"]
-            scale = payload[f"normalization_load_scale"] if name == "forecast_target" else payload[f"normalization_{name}_scale"]
+            statistic_prefix = {"load_history": "load", "exog_history": "exog", "device_history": "device", "activity_history": "activity"}.get(name, name)
+            mean = payload["normalization_load_mean"] if name == "forecast_target" else payload[f"normalization_{statistic_prefix}_mean"]
+            scale = payload["normalization_load_scale"] if name == "forecast_target" else payload[f"normalization_{statistic_prefix}_scale"]
             return (payload[name][indices] - mean) / np.maximum(scale, 1.0e-6)
         context = np.concatenate((
             payload["renewable_forecast"][indices],
