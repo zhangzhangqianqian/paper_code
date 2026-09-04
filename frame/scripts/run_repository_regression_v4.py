@@ -15,6 +15,7 @@ import platform
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any, Mapping, Sequence
 
 
@@ -54,7 +55,11 @@ def run_regression(*, output_path: str | Path, python_executable: str | Path = D
     executable = Path(python_executable).resolve()
     if not executable.is_file():
         raise FileNotFoundError(executable)
-    basetemp = destination.parent / f"{destination.stem}_pytest_tmp"
+    # Keep pytest's temporary tree outside the repository.  Several regression
+    # tests copy the repository into a fixture; placing basetemp below the
+    # checkout would recursively copy this run's own temporary tree and can
+    # exceed Windows path limits.
+    basetemp = Path(tempfile.gettempdir()) / f"formal_v4_regression_{destination.stem}_pytest_tmp"
     command = [str(executable), "-B", "-m", "pytest", str(FRAME_ROOT / "tests"), "-q", "--basetemp", str(basetemp), "-p", "no:cacheprovider", *map(str, pytest_args)]
     env = dict(**__import__("os").environ)
     env["PYTHONPATH"] = str(FRAME_ROOT)
