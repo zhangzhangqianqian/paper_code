@@ -103,9 +103,13 @@ def build_gradient_receipt(
     source_commit: str | None = None,
 ) -> dict[str, Any]:
     torch.manual_seed(seed)
-    source = RSCPFModel(dropout=0.0)
-    joint = RSCPFModel(dropout=0.0)
-    decoupled = RSCPFModel(dropout=0.0)
+    # Bind every probe model to the exact benchmark decoder parameters used by
+    # the materialized train archive.  Leaving the default decoder parameters
+    # here can reject a valid archive trajectory at the previous-CHP capacity
+    # boundary (and would make the gradient receipt non-representative).
+    source = RSCPFModel(decoder_parameters=parameters, dropout=0.0)
+    joint = RSCPFModel(decoder_parameters=parameters, dropout=0.0)
+    decoupled = RSCPFModel(decoder_parameters=parameters, dropout=0.0)
     joint.load_state_dict(source.state_dict())
     decoupled.load_state_dict(source.state_dict())
     hashes = {"joint": _model_hash(joint), "decoupled": _model_hash(decoupled)}

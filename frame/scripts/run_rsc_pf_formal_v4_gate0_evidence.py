@@ -50,7 +50,9 @@ def _fresh_root(reports_root: Path) -> Path:
 
 
 def _run(command: Sequence[str], *, stage: str, root: Path) -> None:
-    log_path = root / "audit" / "ORCHESTRATOR_LOG.txt"
+    # The capacity producer requires the run-root path to be nonexistent on
+    # entry, so the first-stage log must live beside (not inside) that root.
+    log_path = root.parent / f"{root.name}.orchestrator.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log:
         log.write(f"[{stage}] {' '.join(command)}\n")
