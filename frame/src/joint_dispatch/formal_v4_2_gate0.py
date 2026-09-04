@@ -21,6 +21,7 @@ from .formal_v4_itransformer import (
     OFFICIAL_REPOSITORY,
     verify_itransformer_source_files,
 )
+from .formal_v4_diffopt import FROZEN_ENV_DISTRIBUTIONS
 from .formal_v4_provenance import build_source_manifest
 
 
@@ -33,6 +34,64 @@ CURRENT_GATE_SCHEMA = "formal-v4.2-current-gate-v1"
 
 class Gate0ReceiptError(ValueError):
     """Raised when prerequisite evidence cannot authorize formal-v4.2."""
+
+
+def project_gate2_resources(
+    contract: Any,
+    benchmarks: Mapping[str, Any],
+    manifest_counts: Any,
+    *,
+    disk_margin: float = 1.0,
+) -> dict[str, Any]:
+    """Project the complete frozen Gate 2 workload from measured p95 operations."""
+
+    payload = contract.payload if hasattr(contract, "payload") else contract
+    budget = payload["gate2_budget"]
+    train_windows = int(getattr(manifest_counts, "train_windows", manifest_counts["train_windows"] if isinstance(manifest_counts, Mapping) else 0))
+    evaluation_origins = int(getattr(manifest_counts, "evaluation_origins", manifest_counts["evaluation_origins"] if isinstance(manifest_counts, Mapping) else 0))
+    if train_windows <= 0 or evaluation_origins <= 0:
+        raise ValueError("Gate 2 resource projection requires positive manifest counts")
+    epochs = int(budget["max_epochs"]["J"])
+    effective_batch = int(budget["effective_batch_size"])
+    # Per seed: paired RSC P/S/J/J (4), Direct (1), Scheme2R (1),
+    # official iTransformer (1), and Differentiable-LP (1).
+    trained_stage_count = 8 * 3
+    training_sample_exposures = train_windows * epochs * trained_stage_count
+    training_updates = math.ceil(train_windows / effective_batch) * epochs * trained_stage_count
+    teacher_optimizer_calls = train_windows * 3
+    diff_lp_training_calls = train_windows * epochs * 3
+    rolling_optimizer_calls = evaluation_origins * (4 * 3 + 2)
+
+    def p95(name: str) -> float:
+        value = benchmarks.get(name, 0.0)
+        if isinstance(value, Mapping):
+            value = value.get("p95_seconds", value.get("timing", {}).get("p95_seconds", 0.0))
+        return max(float(value), 0.0)
+
+    components_seconds = {
+        "neural_training": training_updates * p95("rsc_backward"),
+        "teacher_and_rolling_highs": (teacher_optimizer_calls + rolling_optimizer_calls) * p95("highs_lp"),
+        "differentiable_lp_training": diff_lp_training_calls * p95("diff_lp"),
+    }
+    total_hours = float(sum(components_seconds.values()) / 3600.0)
+    maximum = float(budget["resource_envelope_hours"])
+    minimum_disk = float(payload["resource_gate"]["minimum_disk_margin_fraction"])
+    return {
+        "train_windows": train_windows,
+        "evaluation_origins": evaluation_origins,
+        "trained_stage_count": trained_stage_count,
+        "training_sample_exposures": training_sample_exposures,
+        "training_updates": training_updates,
+        "teacher_optimizer_calls": teacher_optimizer_calls,
+        "diff_lp_training_calls": diff_lp_training_calls,
+        "rolling_optimizer_calls": rolling_optimizer_calls,
+        "components_seconds": components_seconds,
+        "total_hours": total_hours,
+        "maximum_hours": maximum,
+        "disk_margin": float(disk_margin),
+        "minimum_disk_margin": minimum_disk,
+        "authorized": bool(total_hours <= maximum and float(disk_margin) >= minimum_disk),
+    }
 
 
 @dataclass(frozen=True)
@@ -358,7 +417,7 @@ def produce_diffopt_receipt(
     if not requirements.is_file() or requirements_hash != lock.get("requirements_sha256"):
         raise Gate0ReceiptError("DiffLP requirements hash mismatch")
     packages = {}
-    for package in ("numpy", "torch", "cvxpy", "cvxpylayers", "diffcp", "ecos"):
+    for package in FROZEN_ENV_DISTRIBUTIONS:
         try:
             packages[package] = torch.__version__ if package == "torch" else metadata.version(package)
         except metadata.PackageNotFoundError as exc:
@@ -503,6 +562,7 @@ __all__ = [
     "produce_diffopt_receipt",
     "produce_itransformer_receipt",
     "produce_source_manifest",
+    "project_gate2_resources",
     "run_native_diffopt_probe",
     "validate_capacity_receipt",
     "validate_diffopt_receipt",

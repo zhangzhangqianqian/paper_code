@@ -28,6 +28,7 @@ from src.joint_dispatch.formal_v4_2_gate0 import (  # noqa: E402
     produce_diffopt_receipt,
     produce_itransformer_receipt,
     produce_source_manifest,
+    project_gate2_resources,
     validate_prerequisites,
 )
 from scripts.run_rsc_pf_formal_v4_2_capacity_audit import build_capacity_evidence  # noqa: E402
@@ -118,6 +119,14 @@ def _measure(operation, warmup: int = 2, iterations: int = 5) -> dict[str, Any]:
         start = time.perf_counter(); operation(); samples.append(time.perf_counter() - start)
     values = np.asarray(samples, dtype=np.float64)
     return {"warmup": warmup, "iterations": iterations, "median_seconds": float(np.median(values)), "p95_seconds": float(np.quantile(values, 0.95)), "min_seconds": float(np.min(values)), "max_seconds": float(np.max(values))}
+
+
+def _eligible_window_count(path: Path) -> int:
+    with np.load(path, allow_pickle=False) as payload:
+        timestamps = np.asarray(payload["timestamps"], dtype="datetime64[ns]")
+    boundaries = np.flatnonzero(np.diff(timestamps) != np.timedelta64(1, "h")) + 1
+    starts = np.r_[0, boundaries]; stops = np.r_[boundaries, len(timestamps)]
+    return int(sum(max(int(stop - start) - 27, 0) for start, stop in zip(starts, stops)))
 
 
 def _run_real_operations(fixture: Any | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -278,13 +287,15 @@ def run_gate0_orchestrator(inputs: Gate0InputsV42) -> dict[str, Any]:
         disk_margin = float(disk.free / max(disk.total, 1))
         minimum_margin = float(contract.payload["resource_gate"]["minimum_disk_margin_fraction"])
         maximum_hours = float(contract.payload["resource_gate"]["max_projected_p95_hours"])
-        projected_hours = {
-            name: float(item.get("timing", {}).get("p95_seconds", 0.0) * 10000.0 / 3600.0)
-            for name, item in measurements.items()
+        manifest_counts = {
+            "train_windows": _eligible_window_count(root / "data" / "base_train.npz"),
+            "evaluation_origins": _eligible_window_count(root / "data" / "base_selection.npz"),
         }
+        workload = project_gate2_resources(contract, measurements, manifest_counts, disk_margin=disk_margin)
+        projected_hours = {name: float(value / 3600.0) for name, value in workload["components_seconds"].items()}
         resource_checks = {
             "disk_margin": {"passed": disk_margin >= minimum_margin, "actual": disk_margin, "minimum": minimum_margin},
-            "runtime_projection": {"passed": all(value <= maximum_hours for value in projected_hours.values()), "projected_hours": projected_hours, "maximum": maximum_hours},
+            "runtime_projection": {"passed": workload["authorized"], "projected_hours": projected_hours, "total_hours": workload["total_hours"], "maximum": maximum_hours},
             "no_evaluation_access": {"passed": True, "evaluation_year_accessed": False},
         }
         checks = {**prerequisite_checks, **operation_checks, **resource_checks}
@@ -298,6 +309,7 @@ def run_gate0_orchestrator(inputs: Gate0InputsV42) -> dict[str, Any]:
             "disk_margin_fraction": disk_margin,
             "minimum_disk_margin_fraction": minimum_margin,
             "maximum_projected_p95_hours": maximum_hours,
+            "workload": workload,
             "synthetic_probe": False,
             "evaluation_year_accessed": False,
             "authorized_pilot": authorized,

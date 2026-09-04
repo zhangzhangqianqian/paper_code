@@ -22,12 +22,27 @@ from src.joint_dispatch.formal_v4_2_gate0 import (
     Gate0ReceiptError,
     produce_diffopt_receipt,
     produce_itransformer_receipt,
+    project_gate2_resources,
     produce_source_manifest,
     validate_prerequisites,
 )
 
 
 PROBE = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "run_rsc_pf_formal_v4_2_gate0.py"))
+
+
+def test_gate0_projects_complete_gate2_workload():
+    contract = __import__("src.joint_dispatch.formal_v4_2_contract", fromlist=["load_formal_v4_2_contract"]).load_formal_v4_2_contract(
+        Path(__file__).parents[1] / "configs" / "joint_forecast_dispatch_formal_v4_2.json"
+    )
+    counts = {"train_windows": 34959, "evaluation_origins": 8733}
+    projection = project_gate2_resources(
+        contract, {"rsc_backward": 1.0e-5, "highs_lp": 1.0e-5, "diff_lp": 1.0e-5}, counts,
+        disk_margin=0.5,
+    )
+    assert projection["training_sample_exposures"] == counts["train_windows"] * 30 * projection["trained_stage_count"]
+    assert projection["rolling_optimizer_calls"] == counts["evaluation_origins"] * (4 * 3 + 2)
+    assert projection["authorized"] == (projection["total_hours"] <= 24.0 and projection["disk_margin"] >= 0.20)
 
 
 def test_git_probe_uses_command_scoped_safe_directory(tmp_path, monkeypatch):
@@ -248,6 +263,7 @@ def test_real_itransformer_and_diffopt_receipts_are_produced(tmp_path):
     assert itransformer["verified"] is True
     assert diffopt["eligible"] is True
     assert diffopt["gradient_norm"] > 0.0
+    assert diffopt["packages"]["reformer-pytorch"] == "1.4.4"
 
 
 def _orchestrator_inputs(tmp_path: Path) -> Gate0InputsV42:
@@ -309,6 +325,7 @@ def _install_orchestrator_fakes(monkeypatch, tmp_path: Path):
         },
         {name: {"passed": True, "identity": name} for name in ("rsc_forward", "rsc_backward", "highs_lp", "diff_lp")},
     ))
+    monkeypatch.setitem(globals_, "_eligible_window_count", lambda path: 100)
     monkeypatch.setattr(globals_["shutil"], "disk_usage", lambda path: SimpleNamespace(total=100, used=40, free=60))
 
 

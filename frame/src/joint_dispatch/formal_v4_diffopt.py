@@ -8,6 +8,7 @@ neural scheduler for the public differentiable-optimization baseline.
 from __future__ import annotations
 
 import hashlib
+from importlib import metadata
 import json
 import platform
 import sys
@@ -22,6 +23,22 @@ from torch import Tensor, nn
 DIFFOPT_METHOD_ID = "Differentiable-LP"
 HORIZON = 4
 RIGID_TASKS = ("electricity", "cooling", "heating")
+FROZEN_ENV_DISTRIBUTIONS = (
+    "numpy",
+    "torch",
+    "cvxpy",
+    "cvxpylayers",
+    "diffcp",
+    "ecos",
+    "reformer-pytorch",
+    "axial-positional-embedding",
+    "einops",
+    "local-attention",
+    "product-key-memory",
+    "hyper-connections",
+    "torch-einops-utils",
+    "colt5-attention",
+)
 
 
 @dataclass(frozen=True)
@@ -243,6 +260,13 @@ class DifferentiableIESLayer(nn.Module):
         for b in range(rigid_demand.shape[0]):
             soc = initial_soc[b] if initial_soc.ndim else initial_soc
             chp = previous_chp[b] if previous_chp.ndim else previous_chp
+            if soc.numel() != 1 or chp.numel() != 1:
+                raise ValueError("initial_soc and previous_chp must provide one scalar per window")
+            # Gate-2 datasets store state as [B,1].  CVXPYlayers interprets a
+            # length-one tensor as an additional batch axis, so collapse each
+            # state value to a scalar before solving the per-window problem.
+            soc = soc.reshape(())
+            chp = chp.reshape(())
             # SCS is the explicitly pinned differentiable backend for the
             # Windows reference environment.  ECOS has produced native
             # access-violation crashes on some CPU builds; silently falling
@@ -281,6 +305,8 @@ class DifferentiableLPForecasterAdapter(nn.Module):
 def write_diffopt_lock(output: str | Path, requirements: str | Path) -> dict[str, Any]:
     """Record exact package versions when run inside the isolated environment."""
     output_path = Path(output)
+    requirements_path = Path(requirements)
+    canonical_requirements = requirements_path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
     previous_probe: dict[str, Any] = {"status": "not_run", "eligible_for_gate0": False}
     if output_path.exists():
         try:
@@ -291,15 +317,16 @@ def write_diffopt_lock(output: str | Path, requirements: str | Path) -> dict[str
             pass
     payload: dict[str, Any] = {
         "status": "resolved", "python": sys.version, "python_executable": sys.executable,
-        "platform": platform.platform(), "requirements_sha256": hashlib.sha256(Path(requirements).read_bytes()).hexdigest(),
+        "platform": platform.platform(),
+        "requirements_sha256": hashlib.sha256(canonical_requirements.encode("utf-8")).hexdigest(),
+        "requirements_hash_mode": "utf8_lf_v1",
         "packages": {},
         "native_layer_probe": previous_probe,
     }
-    for name in ("numpy", "torch", "cvxpy", "cvxpylayers", "diffcp", "ecos"):
+    for name in FROZEN_ENV_DISTRIBUTIONS:
         try:
-            module = __import__(name)
-            payload["packages"][name] = getattr(module, "__version__", "unknown")
-        except Exception:
+            payload["packages"][name] = torch.__version__ if name == "torch" else metadata.version(name)
+        except metadata.PackageNotFoundError:
             payload["packages"][name] = None
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
@@ -307,5 +334,6 @@ def write_diffopt_lock(output: str | Path, requirements: str | Path) -> dict[str
 
 __all__ = [
     "DIFFOPT_METHOD_ID", "DifferentiableIESLayer", "DifferentiableLPForecasterAdapter",
-    "DifferentiableLPGateReceipt", "DifferentiableLPProblemSpec", "validate_diffopt_gate_receipt", "write_diffopt_lock",
+    "DifferentiableLPGateReceipt", "DifferentiableLPProblemSpec", "FROZEN_ENV_DISTRIBUTIONS",
+    "validate_diffopt_gate_receipt", "write_diffopt_lock",
 ]

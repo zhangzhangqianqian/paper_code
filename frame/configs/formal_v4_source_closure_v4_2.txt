@@ -44,6 +44,9 @@ frame/src/joint_dispatch/formal_v4_2_rollout.py
 frame/src/joint_dispatch/formal_v4_2_metrics.py
 frame/src/joint_dispatch/formal_v4_2_methods.py
 frame/src/joint_dispatch/formal_v4_2_gate0.py
+frame/src/joint_dispatch/formal_v4_2_gate2_artifacts.py
+frame/src/joint_dispatch/formal_v4_2_gate2_training.py
+frame/src/joint_dispatch/formal_v4_2_gate2_execution.py
 frame/src/scheduling/__init__.py
 frame/src/scheduling/benchmark_parameters.py
 frame/src/scheduling/contracts.py
@@ -66,6 +69,7 @@ frame/scripts/run_rsc_pf_formal_v4_2_pilot.py
 frame/scripts/run_rsc_pf_formal_v4_2_gate1.py
 frame/scripts/run_rsc_pf_formal_v4_2_gate2.py
 frame/scripts/audit_rsc_pf_formal_v4_2_gate2.py
+frame/scripts/smoke_rsc_pf_formal_v4_2_gate2.py
 frame/scripts/extend_rsc_pf_formal_v4_2_seeds.py
 frame/scripts/run_rsc_pf_formal_v4_2_gate3.py
 frame/scripts/summarize_rsc_pf_formal_v4_2.py
@@ -84,5 +88,10 @@ frame/tests/test_joint_dispatch_formal_v4_2_capacity.py
 frame/tests/test_joint_dispatch_formal_v4_2_pilot.py
 frame/tests/test_joint_dispatch_formal_v4_2_gate1.py
 frame/tests/test_joint_dispatch_formal_v4_2_gate2.py
+frame/tests/test_joint_dispatch_formal_v4_2_gate2_artifacts.py
+frame/tests/test_joint_dispatch_formal_v4_2_gate2_training.py
+frame/tests/test_joint_dispatch_formal_v4_2_gate2_execution.py
+frame/tests/test_joint_dispatch_formal_v4_2_gate2_audit.py
+frame/tests/test_joint_dispatch_formal_v4_2_gate2_smoke.py
 frame/tests/test_joint_dispatch_formal_v4_2_seed_extension.py
 frame/tests/test_joint_dispatch_formal_v4_2_gate3.py
