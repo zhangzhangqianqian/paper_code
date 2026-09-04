@@ -23,6 +23,8 @@ from src.joint_dispatch.formal_v4_capacity import run_capacity_audit, select_cap
 from src.joint_dispatch.formal_v4_data import FormalV4BaseSeries
 from src.joint_dispatch.formal_v4_itransformer import validate_itransformer_receipt
 from src.joint_dispatch.formal_v4_diffopt import DifferentiableLPGateReceipt
+from src.joint_dispatch.formal_v4_access import scan_runtime_access
+from src.joint_dispatch.formal_v4_resources import ResourceProjection
 from src.kitakyushu_pipeline import clean_kitakyushu_dataframe, read_kitakyushu_canonical
 from src.scheduling.dispatch_lp import DispatchInputs, solve_dispatch_lp
 from src.scheduling.renewables import pv_available, wt_available
@@ -32,7 +34,7 @@ MANDATORY_FAILURES = (
     "protocol_freeze", "capacity_audit",
     "future_leakage", "balance_residual", "state_hash_mismatch", "stale_teacher",
     "missing_itransformer_receipt", "diffopt_ineligible", "test_artifact_present",
-    "search_budget_missing", "gradient_boundary_failure",
+    "search_budget_missing", "gradient_boundary_failure", "source_closure", "data_access", "resource_projection",
 )
 
 
@@ -146,6 +148,30 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     checks["state_hash_mismatch"] = {"passed": True, "reason": "state receipts are checked by materializer"}
     checks["stale_teacher"] = {"passed": True, "reason": "teacher alignment contract is present"}
     checks["balance_residual"] = {"passed": True, "reason": "physical regression suite passed"}
+    closure = FRAME_ROOT / str(getattr(spec, "source_closure_file", "configs/formal_v4_source_closure_v4_1.txt"))
+    checks["source_closure"] = {"passed": closure.exists(), "path": str(closure)}
+    if closure.exists():
+        declared = []
+        for line in closure.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                candidate = FRAME_ROOT / line
+                if candidate.exists():
+                    declared.append(candidate)
+        scan = scan_runtime_access(declared, allowlisted_paths=(FRAME_ROOT / "src" / "kitakyushu_pipeline.py",))
+        checks["data_access"] = {"passed": scan["status"] == "pass", "scan": scan}
+    else:
+        checks["data_access"] = {"passed": False, "reason": "source closure is absent"}
+    try:
+        import psutil
+        memory = psutil.virtual_memory()
+        memory_margin = float(memory.available / max(memory.total, 1))
+        disk = psutil.disk_usage(str(FRAME_ROOT))
+        disk_margin = float(disk.free / max(disk.total, 1))
+    except Exception:
+        memory_margin = disk_margin = 0.0
+    projection = ResourceProjection({}, float("inf"), disk_margin, memory_margin)
+    checks["resource_projection"] = {"passed": False, "reason": "bounded resource benchmark receipt is required", "disk_margin_fraction": disk_margin, "memory_margin_fraction": memory_margin, "projected_p95_hours": projection.projected_p95_hours}
     return checks
 
 
