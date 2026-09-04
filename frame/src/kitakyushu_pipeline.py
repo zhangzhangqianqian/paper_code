@@ -14,8 +14,9 @@ from __future__ import annotations
 import re
 import hashlib
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Tuple
 from zipfile import ZipFile
 
 import numpy as np
@@ -186,16 +187,37 @@ def _find_year_member(zip_file: ZipFile, year: int) -> str:
     return candidates[0]
 
 
-def _read_yearly_excel(zip_path: Path, year: int, source_name: str) -> pd.DataFrame:
+def _read_yearly_excel(
+    zip_path: Path,
+    year: int,
+    source_name: str,
+    *,
+    audit_sink: Callable[[Mapping[str, Any]], None] | None = None,
+    access_guard: Callable[[str, int, Path, str], None] | None = None,
+) -> pd.DataFrame:
     with ZipFile(zip_path) as archive:
         member = _find_year_member(archive, year)
-        with archive.open(member) as handle:
-            try:
-                frame = pd.read_excel(handle)
-            except ImportError as exc:
-                raise ImportError(
-                    "读取 Kitakyushu Excel 需要 openpyxl，请安装 frame/requirements.txt 中的依赖"
-                ) from exc
+        if access_guard is not None:
+            # The guard runs after locating the member but before reading its
+            # bytes.  This lets the formal-v4 controller deny 2020 without
+            # materializing or hashing the sealed member.
+            access_guard(source_name, int(year), zip_path, member)
+        member_bytes = archive.read(member)
+        if audit_sink is not None:
+            audit_sink({
+                "source_kind": str(source_name),
+                "container_path": str(zip_path.resolve()),
+                "container_sha256": _sha256_file(zip_path),
+                "member_name": str(member),
+                "member_sha256": hashlib.sha256(member_bytes).hexdigest(),
+                "year": int(year),
+            })
+        try:
+            frame = pd.read_excel(BytesIO(member_bytes))
+        except ImportError as exc:
+            raise ImportError(
+                "读取 Kitakyushu Excel 需要 openpyxl，请安装 frame/requirements.txt 中的依赖"
+            ) from exc
     if frame.empty:
         raise ValueError(f"Kitakyushu {source_name} 文件为空：{member}")
     frame.attrs["source_member"] = member
@@ -221,8 +243,14 @@ def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce")
 
 
-def _read_load_year(year: int, paths: KitakyushuPaths) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    raw = _read_yearly_excel(paths.load_zip, year, "load")
+def _read_load_year(
+    year: int,
+    paths: KitakyushuPaths,
+    *,
+    audit_sink: Callable[[Mapping[str, Any]], None] | None = None,
+    access_guard: Callable[[str, int, Path, str], None] | None = None,
+) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    raw = _read_yearly_excel(paths.load_zip, year, "load", audit_sink=audit_sink, access_guard=access_guard)
     timestamp = _parse_timestamp(raw, "load")
     resolved = {
         "timestamp": _resolve_column(raw.columns, ("Date", "datetime", "timestamp")),
@@ -249,9 +277,13 @@ def _read_load_year(year: int, paths: KitakyushuPaths) -> Tuple[pd.DataFrame, Di
 
 
 def _read_gas_components_year(
-    year: int, paths: KitakyushuPaths
+    year: int,
+    paths: KitakyushuPaths,
+    *,
+    audit_sink: Callable[[Mapping[str, Any]], None] | None = None,
+    access_guard: Callable[[str, int, Path, str], None] | None = None,
 ) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    raw = _read_yearly_excel(paths.gas_zip, year, "gas")
+    raw = _read_yearly_excel(paths.gas_zip, year, "gas", audit_sink=audit_sink, access_guard=access_guard)
     timestamp = _parse_timestamp(raw, "gas")
     resolved = {
         "timestamp": _resolve_column(raw.columns, ("Date", "datetime", "timestamp"))
@@ -268,8 +300,14 @@ def _read_gas_components_year(
     return result, resolved
 
 
-def _read_gas_year(year: int, paths: KitakyushuPaths) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    components, resolved = _read_gas_components_year(year, paths)
+def _read_gas_year(
+    year: int,
+    paths: KitakyushuPaths,
+    *,
+    audit_sink: Callable[[Mapping[str, Any]], None] | None = None,
+    access_guard: Callable[[str, int, Path, str], None] | None = None,
+) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    components, resolved = _read_gas_components_year(year, paths, audit_sink=audit_sink, access_guard=access_guard)
     # Preserve the original aggregation semantics: a row is usable only when
     # all six source columns are present.  Partial component missingness must
     # remain missing rather than being silently ignored.
@@ -282,9 +320,13 @@ def _read_gas_year(year: int, paths: KitakyushuPaths) -> Tuple[pd.DataFrame, Dic
 
 
 def _read_weather_year(
-    year: int, paths: KitakyushuPaths
+    year: int,
+    paths: KitakyushuPaths,
+    *,
+    audit_sink: Callable[[Mapping[str, Any]], None] | None = None,
+    access_guard: Callable[[str, int, Path, str], None] | None = None,
 ) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    raw = _read_yearly_excel(paths.weather_zip, year, "weather")
+    raw = _read_yearly_excel(paths.weather_zip, year, "weather", audit_sink=audit_sink, access_guard=access_guard)
     timestamp = _parse_timestamp(raw, "weather")
     aliases = {
         "solar_irradiance": (
@@ -325,6 +367,9 @@ def read_kitakyushu_canonical(
     data_dir: str | Path,
     years: Sequence[int] = KITAKYUSHU_YEARS,
     add_calendar: bool = True,
+    *,
+    audit_sink: Callable[[Mapping[str, Any]], None] | None = None,
+    access_guard: Callable[[str, int, Path, str], None] | None = None,
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
     """读取年度压缩包并生成四任务小时级规范表。
 
@@ -341,9 +386,9 @@ def read_kitakyushu_canonical(
     pieces = []
     mappings: Dict[str, Dict[str, str]] = {}
     for year in selected_years:
-        load, load_map = _read_load_year(year, paths)
-        gas, gas_map = _read_gas_year(year, paths)
-        weather, weather_map = _read_weather_year(year, paths)
+        load, load_map = _read_load_year(year, paths, audit_sink=audit_sink, access_guard=access_guard)
+        gas, gas_map = _read_gas_year(year, paths, audit_sink=audit_sink, access_guard=access_guard)
+        weather, weather_map = _read_weather_year(year, paths, audit_sink=audit_sink, access_guard=access_guard)
         for name, frame in (("load", load), ("gas", gas), ("weather", weather)):
             if frame["timestamp"].duplicated().any():
                 raise ValueError(f"{year} 年 {name} 文件存在重复时间戳")

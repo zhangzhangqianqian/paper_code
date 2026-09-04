@@ -71,10 +71,102 @@ class FormalV4AccessController:
         self.allow_evaluation = bool(allow_evaluation)
         self.receipt = receipt or DataAccessReceipt()
 
-    def request(self, path: str | Path, *, split: str, purpose: str, caller: str, years: Iterable[int] | None = None, materialize: bool = False) -> Path:
+    @staticmethod
+    def _requested_years(split: str, years: Iterable[int] | None) -> tuple[int, ...]:
         if split not in SPLIT_YEARS:
             raise ValueError("unknown formal-v4 split")
-        requested_years = tuple(sorted(set(int(value) for value in (years if years is not None else SPLIT_YEARS[split]))))
+        return tuple(sorted(set(int(value) for value in (years if years is not None else SPLIT_YEARS[split]))))
+
+    def request_years(self, split: str, years: Iterable[int]) -> tuple[int, ...]:
+        """Check a split/year request before a canonical loader opens a member."""
+
+        requested_years = self._requested_years(split, years)
+        expected = set(SPLIT_YEARS[split])
+        allowed = set(requested_years).issubset(expected) and (split != "evaluation" or self.allow_evaluation)
+        if not allowed:
+            raise PermissionError(f"formal-v4 access denied for {split} years {requested_years}")
+        return requested_years
+
+    def guard_archive_member(
+        self,
+        archive: str | Path,
+        member: str,
+        *,
+        split: str,
+        purpose: str,
+        caller: str,
+        years: Iterable[int] | None = None,
+    ) -> None:
+        """Deny forbidden members before their bytes are read.
+
+        The guard intentionally does not hash or open the member.  Allowed
+        reads are recorded by :meth:`record_archive_event` after the canonical
+        loader has obtained the exact member bytes.
+        """
+
+        requested_years = self._requested_years(split, years)
+        expected = set(SPLIT_YEARS[split])
+        path_obj = Path(archive).resolve()
+        allowed = set(requested_years).issubset(expected) and (split != "evaluation" or self.allow_evaluation)
+        if not allowed:
+            self.receipt.events.append(
+                AccessEvent(split, requested_years, purpose, str(path_obj), "", caller, "deny", member=str(member))
+            )
+            raise PermissionError(f"formal-v4 access denied for {split} years {requested_years}")
+
+    def record_archive_event(
+        self,
+        archive: str | Path,
+        member: str,
+        *,
+        split: str,
+        purpose: str,
+        caller: str,
+        years: Iterable[int] | None = None,
+        container_sha256: str,
+        member_sha256: str,
+        materialize: bool = False,
+    ) -> None:
+        """Record hashes for bytes that were actually returned by a loader."""
+
+        requested_years = self.request_years(split, years if years is not None else ())
+        path_obj = Path(archive).resolve()
+        actual_container_hash = _hash_file(path_obj)
+        if str(container_sha256) != actual_container_hash:
+            raise ValueError("archive container hash does not match the bytes that were read")
+        if len(str(member_sha256)) != 64:
+            raise ValueError("archive member hash must be a SHA-256 digest")
+        self.receipt.events.append(
+            AccessEvent(
+                split, requested_years, purpose, str(path_obj), actual_container_hash, caller,
+                "allow", str(container_sha256), str(member), str(member_sha256), bool(materialize),
+            )
+        )
+
+    def build_data_access_receipt(self) -> dict[str, Any]:
+        return self.receipt.to_payload()
+
+    def build_archive_access_receipt(self) -> dict[str, Any]:
+        events = []
+        for event in self.receipt.events:
+            if event.decision != "allow" or not event.member:
+                continue
+            events.append({
+                "split": event.split,
+                "years": list(event.years),
+                "container_path": event.path,
+                "container_sha256": event.container_sha256,
+                "member_name": event.member,
+                "member_sha256": event.member_sha256,
+            })
+        return {
+            "schema_version": "formal-v4.1-archive-access-v1",
+            "events": events,
+            "test_set_accessed": self.receipt.test_set_accessed,
+        }
+
+    def request(self, path: str | Path, *, split: str, purpose: str, caller: str, years: Iterable[int] | None = None, materialize: bool = False) -> Path:
+        requested_years = self._requested_years(split, years)
         expected = set(SPLIT_YEARS[split])
         path_obj = Path(path).resolve()
         path_hash = _hash_file(path_obj) if path_obj.is_file() else ""

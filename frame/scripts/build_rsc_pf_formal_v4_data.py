@@ -27,6 +27,8 @@ from src.joint_dispatch.formal_v4_capacity import select_capacity_origins  # noq
 from src.joint_dispatch.formal_v4_data import FormalV4BaseSeries, FormalV4Normalization, materialize_state_windows  # noqa: E402
 from src.joint_dispatch.formal_v4_history import SettledTrajectory, generate_settled_device_trajectory  # noqa: E402
 from src.joint_dispatch.formal_v4_artifacts import build_artifact_manifest, build_normalization_receipt, sha256_file  # noqa: E402
+from src.joint_dispatch.formal_v4_access import FormalV4AccessController  # noqa: E402
+from src.joint_dispatch.formal_v4_gate0_evidence import write_immutable_json  # noqa: E402
 from src.joint_dispatch.contract import DISPATCH_ORDER  # noqa: E402
 from src.scheduling.dispatch_lp import DispatchInputs, solve_dispatch_lp  # noqa: E402
 from src.kitakyushu_pipeline import clean_kitakyushu_dataframe, read_kitakyushu_canonical  # noqa: E402
@@ -64,6 +66,32 @@ def _parser() -> argparse.ArgumentParser:
 
 def _years_for_split(split: str) -> tuple[int, ...]:
     return {"train": (2015, 2016, 2017, 2018), "selection": (2019,), "evaluation": (2020,)}[split]
+
+
+def _access_callbacks(controller: FormalV4AccessController, split: str):
+    def guard(source_kind: str, year: int, archive: Path, member: str) -> None:
+        controller.guard_archive_member(
+            archive,
+            member,
+            split=split,
+            purpose=f"formal-v4.1-{split}-canonical-read",
+            caller="build_rsc_pf_formal_v4_data",
+            years=(year,),
+        )
+
+    def record(event: dict[str, object]) -> None:
+        controller.record_archive_event(
+            str(event["container_path"]),
+            str(event["member_name"]),
+            split=split,
+            purpose=f"formal-v4.1-{split}-canonical-read",
+            caller="build_rsc_pf_formal_v4_data",
+            years=(int(event["year"]),),
+            container_sha256=str(event["container_sha256"]),
+            member_sha256=str(event["member_sha256"]),
+        )
+
+    return guard, record
 
 
 def _build_base(frame: pd.DataFrame, split: str, parameters: dict[str, float]) -> FormalV4BaseSeries:
@@ -238,9 +266,6 @@ def main() -> int:
             artifact_manifest.save(run_root / "ARTIFACT_MANIFEST.json")
         print(json.dumps({"status": "pass", "mode": args.mode, "splits": list(by_split), "rows": {key: len(value) for key, value in by_split.items()}, "output_root": str(output_root)}, ensure_ascii=False))
         return 0
-    years = tuple(sorted({year for split in args.splits for year in _years_for_split(split)}))
-    raw, source_metadata = read_kitakyushu_canonical(args.kitakyushu_data_dir, years=years)
-    frame, cleaning = clean_kitakyushu_dataframe(raw)
     benchmark = yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))
     parameters = dict(benchmark["values"])
     # The ledger records both final constants and derivation ratios (for
@@ -250,12 +275,45 @@ def main() -> int:
     # supplies auxiliary profile constants absent from the benchmark.
     for key, value in _ledger(FRAME_ROOT / "configs" / "scheduling_parameter_ledger_v2.csv").items():
         parameters.setdefault(key, value)
-    hashes = {str(key): str(value.get("sha256", "")) for key, value in source_metadata.get("source_files", {}).items() if isinstance(value, dict)}
+    controller = FormalV4AccessController()
+    frames: dict[str, pd.DataFrame] = {}
+    cleanings: dict[str, dict[str, object]] = {}
+    source_metadata_by_split: dict[str, dict[str, object]] = {}
+    hashes_by_split: dict[str, dict[str, str]] = {}
+    for split in args.splits:
+        guard, record = _access_callbacks(controller, split)
+        raw, source_metadata = read_kitakyushu_canonical(
+            args.kitakyushu_data_dir,
+            years=_years_for_split(split),
+            audit_sink=record,
+            access_guard=guard,
+        )
+        frame, cleaning = clean_kitakyushu_dataframe(raw)
+        frames[split] = frame
+        cleanings[split] = cleaning
+        source_metadata_by_split[split] = source_metadata
+        hashes_by_split[split] = {
+            str(key): str(value.get("sha256", ""))
+            for key, value in source_metadata.get("source_files", {}).items()
+            if isinstance(value, dict)
+        }
+    # Record a denied evaluation probe without opening the sealed member.
+    try:
+        controller.guard_archive_member(
+            args.kitakyushu_data_dir / "evaluation.zip",
+            "__2020.xlsx",
+            split="evaluation",
+            purpose="formal-v4.1-gate0-denial-probe",
+            caller="build_rsc_pf_formal_v4_data",
+            years=(2020,),
+        )
+    except PermissionError:
+        pass
     output_root = run_root / "data" if run_root is not None else Path(spec.paths["data_root"])
     train_base: FormalV4BaseSeries | None = None
     for split in args.splits:
-        base = _build_base(frame, split, parameters)
-        _save_base(base, output_root / f"base_{split}.npz", hashes)
+        base = _build_base(frames[split], split, parameters)
+        _save_base(base, output_root / f"base_{split}.npz", hashes_by_split[split])
         if split == "train":
             train_base = base
     audit_root = run_root / "audit" if run_root is not None else Path(spec.paths["audit_root"])
@@ -268,7 +326,24 @@ def main() -> int:
         manifest.save(origin_manifest_path)
         origin_count = len(manifest.origin_indices)
     np.savez_compressed(audit_root / "capacity_inputs.npz", split=np.asarray(args.splits), rows=np.asarray([len(frame)]), audit_origins=np.asarray(origin_count))
-    (audit_root / "base_input_receipt.json").write_text(json.dumps({"source_metadata": source_metadata, "cleaning": cleaning, "source_hashes": hashes, "capacity_origin_manifest": str(origin_manifest_path) if origin_manifest_path else None, "capacity_origin_count": origin_count}, indent=2), encoding="utf-8")
+    if run_root is not None:
+        protocol_root = run_root / "protocol"
+        write_immutable_json(protocol_root / "DATA_ACCESS_RECEIPT.json", controller.build_data_access_receipt())
+        write_immutable_json(protocol_root / "ARCHIVE_ACCESS_RECEIPT.json", controller.build_archive_access_receipt())
+    (audit_root / "base_input_receipt.json").write_text(
+        json.dumps(
+            {
+                "source_metadata_by_split": source_metadata_by_split,
+                "cleaning_by_split": cleanings,
+                "source_hashes_by_split": hashes_by_split,
+                "capacity_origin_manifest": str(origin_manifest_path) if origin_manifest_path else None,
+                "capacity_origin_count": origin_count,
+                "access_event_count": len(controller.receipt.events),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print(json.dumps({"status": "pass", "mode": "base", "splits": list(args.splits), "output_root": str(output_root)}, ensure_ascii=False))
     return 0
 

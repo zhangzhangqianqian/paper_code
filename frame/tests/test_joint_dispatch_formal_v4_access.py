@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import zipfile
 
 import pytest
@@ -34,3 +35,51 @@ def test_static_access_scan_respects_loader_allowlist(tmp_path):
     result = scan_runtime_access([source])
     assert result["status"] == "fail"
     assert result["findings"]
+
+
+def test_guard_archive_member_denies_before_member_read(tmp_path):
+    archive = tmp_path / "evaluation.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("2020.xlsx", "sealed")
+    controller = FormalV4AccessController()
+    with pytest.raises(PermissionError):
+        controller.guard_archive_member(
+            archive,
+            "2020.xlsx",
+            split="evaluation",
+            purpose="gate0",
+            caller="loader",
+            years=(2020,),
+        )
+    event = controller.receipt.events[-1]
+    assert event.decision == "deny"
+    assert event.member == "2020.xlsx"
+    assert event.member_sha256 == ""
+
+
+def test_archive_receipt_contains_only_actual_allowed_member_reads(tmp_path):
+    archive = tmp_path / "train.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("2018.xlsx", "value")
+    controller = FormalV4AccessController()
+    controller.guard_archive_member(
+        archive,
+        "2018.xlsx",
+        split="train",
+        purpose="base",
+        caller="loader",
+        years=(2018,),
+    )
+    controller.record_archive_event(
+        archive,
+        "2018.xlsx",
+        split="train",
+        purpose="base",
+        caller="loader",
+        years=(2018,),
+        container_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        member_sha256=hashlib.sha256(b"value").hexdigest(),
+    )
+    payload = controller.build_archive_access_receipt()
+    assert payload["schema_version"] == "formal-v4.1-archive-access-v1"
+    assert payload["events"][0]["member_name"] == "2018.xlsx"

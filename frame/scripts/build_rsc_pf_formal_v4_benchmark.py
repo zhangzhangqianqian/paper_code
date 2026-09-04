@@ -22,6 +22,7 @@ from src.joint_dispatch.formal_v4_benchmark import (  # noqa: E402
     write_formal_v4_benchmark_artifacts,
 )
 from src.kitakyushu_pipeline import clean_kitakyushu_dataframe, read_kitakyushu_canonical  # noqa: E402
+from src.joint_dispatch.formal_v4_access import FormalV4AccessController  # noqa: E402
 from src.scheduling.parameter_audit import read_parameter_ledger  # noqa: E402
 
 
@@ -47,8 +48,39 @@ def build_from_data(
     rules_path: Path,
     ledger_path: Path,
     run_root: Path,
+    access_controller: FormalV4AccessController | None = None,
 ) -> dict[str, Any]:
-    raw, metadata = read_kitakyushu_canonical(data_dir, years=FORMAL_V4_TRAIN_YEARS)
+    guard = None
+    record = None
+    if access_controller is not None:
+        def guard(source_kind: str, year: int, archive: Path, member: str) -> None:
+            access_controller.guard_archive_member(
+                archive,
+                member,
+                split="train",
+                purpose="formal-v4.1-benchmark-source-read",
+                caller="build_rsc_pf_formal_v4_benchmark",
+                years=(year,),
+            )
+
+        def record(event: dict[str, object]) -> None:
+            access_controller.record_archive_event(
+                str(event["container_path"]),
+                str(event["member_name"]),
+                split="train",
+                purpose="formal-v4.1-benchmark-source-read",
+                caller="build_rsc_pf_formal_v4_benchmark",
+                years=(int(event["year"]),),
+                container_sha256=str(event["container_sha256"]),
+                member_sha256=str(event["member_sha256"]),
+            )
+
+    raw, metadata = read_kitakyushu_canonical(
+        data_dir,
+        years=FORMAL_V4_TRAIN_YEARS,
+        audit_sink=record,
+        access_guard=guard,
+    )
     frame, cleaning_report = clean_kitakyushu_dataframe(raw)
     rules = _load_rules(rules_path, ledger_path)
     benchmark = build_formal_v4_benchmark(frame, rules, _sha256(ledger_path))

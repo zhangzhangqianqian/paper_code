@@ -34,6 +34,8 @@ from src.joint_dispatch.formal_v4_capacity import (  # noqa: E402
     select_capacity_origins,
 )
 from src.joint_dispatch.formal_v4_artifacts import sha256_file  # noqa: E402
+from src.joint_dispatch.formal_v4_access import FormalV4AccessController  # noqa: E402
+from src.joint_dispatch.formal_v4_gate0_evidence import write_immutable_json  # noqa: E402
 from src.kitakyushu_pipeline import clean_kitakyushu_dataframe, read_kitakyushu_canonical  # noqa: E402
 
 
@@ -163,31 +165,84 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileExistsError(f"capacity certification run root is not fresh: {run_root}")
     run_root.mkdir(parents=True, exist_ok=False)
 
+    controller = FormalV4AccessController()
     benchmark_receipt = build_from_data(
         args.data_dir.resolve(),
         spec.benchmark_rule_config or (FRAME_ROOT / "configs" / "standard_ies_formal_v4_rules.yaml"),
         FRAME_ROOT / "configs" / "scheduling_parameter_ledger_v2.csv",
         run_root,
+        access_controller=controller,
     )
     benchmark_path = run_root / "gate0" / "benchmark" / "STANDARD_IES_BENCHMARK.yaml"
     parameters = dict(yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))["values"])
     for key, value in _ledger(FRAME_ROOT / "configs" / "scheduling_parameter_ledger_v2.csv").items():
         parameters.setdefault(key, value)
 
-    raw, source_metadata = read_kitakyushu_canonical(args.data_dir.resolve(), years=(2015, 2016, 2017, 2018, 2019))
-    frame, cleaning = clean_kitakyushu_dataframe(raw)
     data_root = run_root / "data"
     audit_root = run_root / "audit"
     data_root.mkdir(parents=True, exist_ok=True)
     audit_root.mkdir(parents=True, exist_ok=True)
+    frames: dict[str, object] = {}
+    cleanings: dict[str, object] = {}
+    source_metadata_by_split: dict[str, dict[str, object]] = {}
+    hashes_by_split: dict[str, dict[str, str]] = {}
+
+    def read_split(split: str):
+        def guard(source_kind: str, year: int, archive: Path, member: str) -> None:
+            controller.guard_archive_member(
+                archive,
+                member,
+                split=split,
+                purpose=f"formal-v4.1-{split}-capacity-read",
+                caller="run_rsc_pf_formal_v4_capacity_audit",
+                years=(year,),
+            )
+
+        def record(event: dict[str, object]) -> None:
+            controller.record_archive_event(
+                str(event["container_path"]),
+                str(event["member_name"]),
+                split=split,
+                purpose=f"formal-v4.1-{split}-capacity-read",
+                caller="run_rsc_pf_formal_v4_capacity_audit",
+                years=(int(event["year"]),),
+                container_sha256=str(event["container_sha256"]),
+                member_sha256=str(event["member_sha256"]),
+            )
+
+        raw, metadata = read_kitakyushu_canonical(
+            args.data_dir.resolve(),
+            years=(2015, 2016, 2017, 2018) if split == "train" else (2019,),
+            audit_sink=record,
+            access_guard=guard,
+        )
+        frame, cleaning = clean_kitakyushu_dataframe(raw)
+        frames[split] = frame
+        cleanings[split] = cleaning
+        source_metadata_by_split[split] = metadata
+        hashes_by_split[split] = {
+            str(key): str(value.get("sha256", ""))
+            for key, value in metadata.get("source_files", {}).items()
+            if isinstance(value, dict)
+        }
+
+    read_split("train")
+    read_split("selection")
+    try:
+        controller.guard_archive_member(
+            args.data_dir.resolve() / "evaluation.zip",
+            "__2020.xlsx",
+            split="evaluation",
+            purpose="formal-v4.1-gate0-denial-probe",
+            caller="run_rsc_pf_formal_v4_capacity_audit",
+            years=(2020,),
+        )
+    except PermissionError:
+        pass
     train_base = None
     for split in ("train", "selection"):
-        base = _build_base(frame, split, parameters)
-        _save_base(base, data_root / f"base_{split}.npz", {
-            str(key): str(value.get("sha256", ""))
-            for key, value in source_metadata.get("source_files", {}).items()
-            if isinstance(value, dict)
-        })
+        base = _build_base(frames[split], split, parameters)
+        _save_base(base, data_root / f"base_{split}.npz", hashes_by_split[split])
         if split == "train":
             train_base = base
     if train_base is None:
@@ -196,9 +251,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     origin_path = audit_root / "capacity_origins_v4_1.json"
     origin_manifest.save(origin_path)
     (audit_root / "base_input_receipt.json").write_text(
-        json.dumps({"source_metadata": source_metadata, "cleaning": cleaning, "capacity_origin_manifest": str(origin_path), "capacity_origin_count": 500}, ensure_ascii=False, indent=2),
+        json.dumps({
+            "source_metadata_by_split": source_metadata_by_split,
+            "cleaning_by_split": cleanings,
+            "source_hashes_by_split": hashes_by_split,
+            "capacity_origin_manifest": str(origin_path),
+            "capacity_origin_count": 500,
+            "access_event_count": len(controller.receipt.events),
+        }, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    write_immutable_json(run_root / "protocol" / "DATA_ACCESS_RECEIPT.json", controller.build_data_access_receipt())
+    write_immutable_json(run_root / "protocol" / "ARCHIVE_ACCESS_RECEIPT.json", controller.build_archive_access_receipt())
 
     audit = run_capacity_audit(
         train_base,
