@@ -57,6 +57,7 @@ frame/scripts/build_rsc_pf_formal_v4_adapter_evidence.py
 frame/scripts/run_rsc_pf_formal_v4_resource_gate.py
 frame/scripts/run_rsc_pf_formal_v4_gate0_evidence.py
 frame/scripts/run_rsc_pf_formal_v4_gate1.py
+frame/scripts/run_rsc_pf_formal_v4_gate2.py
 frame/scripts/audit_rsc_pf_formal_v4_gate0.py
 frame/scripts/run_repository_regression_v4.py
 frame/tests/test_joint_dispatch_formal_protocol_v4.py
