@@ -185,7 +185,9 @@ def _batch(split: FormalV4WindowSplit, normalization: NormalizationReceiptV42, i
         "initial_soc": torch.as_tensor(selected.initial_soc, dtype=torch.float64),
         "target_normalized": torch.from_numpy(normalized.target_normalized),
         "target_physical": torch.as_tensor(selected.forecast_target, dtype=torch.float64),
+        "renewable_forecast": torch.as_tensor(selected.renewable_forecast, dtype=torch.float64),
         "realized_renewables": torch.as_tensor(selected.renewable_realized, dtype=torch.float64),
+        "prices_and_weights": torch.as_tensor(selected.prices_and_weights, dtype=torch.float64),
     }
 
 
@@ -639,6 +641,119 @@ def train_official_itransformer_pto(
     )
 
 
+def train_differentiable_lp(
+    seed: int,
+    data: Gate2DataBundle,
+    freeze: Mapping[str, Any],
+    diffopt_receipt: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    output_dir: str | Path,
+    *,
+    budget: StageBudgetV42 | None = None,
+    model: nn.Module | None = None,
+    layer: nn.Module | None = None,
+    micro_batch_size: int = 1,
+) -> TrainedMethodArtifact:
+    """Train Scheme2R through the differentiable LP with exact exposure accounting."""
+
+    from .formal_v4_diffopt import DifferentiableIESLayer
+
+    if diffopt_receipt.get("eligible_for_gate0") is not True and diffopt_receipt.get("authorized") is not True:
+        raise ValueError("Differentiable-LP receipt is not authorized")
+    active_budget = _budget(freeze, budget)
+    if model is None:
+        model = Scheme2RModel(exog_dim=12, task_count=4, lookback=24, horizon=4, dropout=0.0)
+    if layer is None:
+        layer = DifferentiableIESLayer(parameters)
+    seed_everything(seed)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=active_budget.forecaster_lr, weight_decay=active_budget.weight_decay)
+    mean = torch.as_tensor(data.normalization.field_mean["load"], dtype=torch.float32)
+    scale = torch.as_tensor(data.normalization.field_scale["load"], dtype=torch.float32)
+    expected_exposures = len(data.train) * active_budget.max_epochs
+    sample_exposures = training_solver_calls = failed_solves = optimizer_steps = 0
+    maximum_gradient_norm = 0.0
+    history: list[float] = []
+    started = time.perf_counter()
+    for _epoch in range(active_budget.max_epochs):
+        epoch_losses: list[float] = []
+        current_effective = None
+        for part in iter_gate2_batches(
+            data.train, data.normalization, effective_batch_size=64,
+            micro_batch_size=micro_batch_size,
+        ):
+            if current_effective != part.effective_batch_index:
+                if current_effective is not None:
+                    grad_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), active_budget.max_grad_norm))
+                    if not np.isfinite(grad_norm) or grad_norm <= 0.0:
+                        raise RuntimeError("Differentiable-LP accumulated gradient is non-finite or zero")
+                    maximum_gradient_norm = max(maximum_gradient_norm, grad_norm)
+                    optimizer.step(); optimizer_steps += 1
+                optimizer.zero_grad(set_to_none=True)
+                current_effective = part.effective_batch_index
+            batch = part.batch
+            forecast_normalized = model(batch["load_history"], batch["exog_history"])
+            forecast_physical = torch.clamp(
+                mean.to(forecast_normalized) + scale.to(forecast_normalized) * forecast_normalized,
+                min=0.0,
+            )
+            prices = batch["prices_and_weights"].to(dtype=torch.float64)
+            lp_prices = torch.stack((
+                prices[..., 0], prices[..., 1],
+                torch.zeros_like(prices[..., 0]), prices[..., 2],
+            ), dim=-1)
+            try:
+                dispatch = layer(
+                    forecast_physical[..., :3], batch["renewable_forecast"], lp_prices,
+                    batch["initial_soc"], batch["previous_chp"],
+                )
+            except Exception:
+                failed_solves += len(part.indices)
+                raise
+            training_solver_calls += len(part.indices)
+            sample_exposures += len(part.indices)
+            target_normalized = batch["target_normalized"].to(forecast_normalized)
+            forecast_loss = F.smooth_l1_loss(forecast_normalized, target_normalized)
+            settled = settle_formal_v4_four_hour(
+                dispatch, batch["target_physical"].to(dispatch)[..., :3],
+                batch["realized_renewables"].to(dispatch), batch["initial_soc"].to(dispatch),
+                batch["previous_chp"].to(dispatch), parameters,
+            )
+            c_ref = max(float(freeze.get("c_ref", 1.0)), 1.0)
+            decision_loss = settled.per_step_penalized_objective.mean() / c_ref + settled.constraint_penalty.mean()
+            loss = (forecast_loss + decision_loss) * float(part.accumulation_weight)
+            loss.backward()
+            epoch_losses.append(float(loss.detach()) / max(float(part.accumulation_weight), 1.0e-12))
+        if current_effective is not None:
+            grad_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), active_budget.max_grad_norm))
+            if not np.isfinite(grad_norm) or grad_norm <= 0.0:
+                raise RuntimeError("Differentiable-LP accumulated gradient is non-finite or zero")
+            maximum_gradient_norm = max(maximum_gradient_norm, grad_norm)
+            optimizer.step(); optimizer_steps += 1
+        history.append(float(np.mean(epoch_losses)))
+    if failed_solves or sample_exposures != expected_exposures:
+        raise RuntimeError("Differentiable-LP did not complete the frozen sample exposures")
+    return _save_artifact(
+        method_id="Differentiable-LP", seed=seed, model=model, optimizer=optimizer,
+        epochs=active_budget.max_epochs, output_dir=Path(output_dir), lineage=_lineage(data, freeze),
+        decision_forecaster_gradient_norm=maximum_gradient_norm,
+        receipt={
+            "optimizer_steps": optimizer_steps,
+            "forecast_loss_applicable": True,
+            "stage_order": ["joint_differentiable_lp"],
+            "loss_history": history,
+            "gradient_norm": maximum_gradient_norm,
+            "sample_exposures": sample_exposures,
+            "expected_sample_exposures": expected_exposures,
+            "failed_solves": failed_solves,
+            "effective_batch_size": 64,
+            "micro_batch_size": int(micro_batch_size),
+            "training_solver_calls": training_solver_calls,
+            "runtime_seconds": time.perf_counter() - started,
+            "test_set_accessed": False,
+        },
+    )
+
+
 __all__ = [
     "Gate2BatchPart",
     "Gate2DataBundle",
@@ -651,6 +766,7 @@ __all__ = [
     "load_gate2_data",
     "load_window_split",
     "train_direct_policy",
+    "train_differentiable_lp",
     "train_official_itransformer_pto",
     "train_rsc_family",
     "train_scheme2r_pto",

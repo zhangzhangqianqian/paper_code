@@ -15,11 +15,13 @@ from src.joint_dispatch.formal_v4_2_gate2_training import (
     iter_gate2_batches,
     load_gate2_data,
     train_direct_policy,
+    train_differentiable_lp,
     train_official_itransformer_pto,
     train_rsc_family,
 )
 from src.joint_dispatch.formal_v4_2_training import StageBudgetV42
 from src.joint_dispatch.formal_v4_data import FormalV4WindowSplit
+from src.models import Scheme2RModel
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -199,3 +201,39 @@ def test_itransformer_records_upstream_adaptation(tmp_path: Path) -> None:
     )
     assert row.training_receipt["upstream_commit"] == receipt["commit"]
     assert row.training_receipt["method_label"] == "official_backbone_adaptation"
+
+
+class _TinyDiffLayer(nn.Module):
+    def forward(
+        self,
+        demand: torch.Tensor,
+        renewable: torch.Tensor,
+        prices: torch.Tensor,
+        initial_soc: torch.Tensor,
+        previous_chp: torch.Tensor,
+    ) -> torch.Tensor:
+        zero = demand[..., 0] * 0.0
+        fields = [zero for _ in range(21)]
+        fields[0] = demand[..., 0]
+        fields[2] = renewable[..., 0]
+        fields[4] = renewable[..., 1]
+        fields[18] = demand[..., 1]
+        fields[19] = demand[..., 2]
+        return torch.stack(fields, dim=-1).to(torch.float64)
+
+
+def test_diff_lp_training_is_real_and_complete(tmp_path: Path) -> None:
+    data, freeze = _tiny_bundle(tmp_path)
+    row = train_differentiable_lp(
+        2026, data, freeze, {"eligible_for_gate0": True}, _parameters(),
+        tmp_path / "difflp", budget=_tiny_budget(),
+        model=Scheme2RModel(exog_dim=12, task_count=4, lookback=24, horizon=4, dropout=0.0),
+        layer=_TinyDiffLayer(), micro_batch_size=1,
+    )
+    evidence = row.training_receipt
+    assert evidence["gradient_norm"] > 0.0
+    assert evidence["optimizer_steps"] > 0
+    assert evidence["sample_exposures"] == evidence["expected_sample_exposures"]
+    assert evidence["failed_solves"] == 0
+    assert evidence["effective_batch_size"] == 64
+    assert evidence["training_solver_calls"] > 0
