@@ -15,6 +15,7 @@ from src.joint_dispatch.formal_v4_2_gate0 import (
     DIFFOPT_SCHEMA,
     ITRANSFORMER_SCHEMA,
     SOURCE_SCHEMA,
+    Gate0InputsV42,
     Gate0PrerequisitePaths,
     Gate0ReceiptError,
     produce_diffopt_receipt,
@@ -195,3 +196,91 @@ def test_real_itransformer_and_diffopt_receipts_are_produced(tmp_path):
     assert itransformer["verified"] is True
     assert diffopt["eligible"] is True
     assert diffopt["gradient_norm"] > 0.0
+
+
+def _orchestrator_inputs(tmp_path: Path) -> Gate0InputsV42:
+    frame = Path(__file__).parents[1]
+    return Gate0InputsV42(
+        contract_path=frame / "configs" / "joint_forecast_dispatch_formal_v4_2.json",
+        output_root=tmp_path,
+        run_id="formal_v4_2_gate0_orchestrator_test",
+        data_dir=tmp_path / "data",
+        diffopt_python=Path(__import__("sys").executable),
+        itransformer_source=tmp_path / "iTransformer",
+    )
+
+
+def _install_orchestrator_fakes(monkeypatch, tmp_path: Path):
+    globals_ = PROBE["run_gate0_orchestrator"].__globals__
+
+    def source(repo_root, closure_path, destination, **kwargs):
+        return _write_json(Path(destination), {"schema": SOURCE_SCHEMA, **kwargs, "evaluation_year_accessed": False})
+
+    def itransformer(source_root, destination, **kwargs):
+        return _write_json(Path(destination), {"schema": ITRANSFORMER_SCHEMA, **{k: v for k, v in kwargs.items() if k != "repo_root"}, "evaluation_year_accessed": False})
+
+    def diffopt(lock_path, destination, **kwargs):
+        return _write_json(Path(destination), {"schema": DIFFOPT_SCHEMA, **kwargs, "evaluation_year_accessed": False})
+
+    def capacity(contract, root, data_dir, source_manifest_sha256):
+        payload = {
+            "schema": CAPACITY_SCHEMA,
+            "run_id": Path(root).name,
+            "contract_sha256": contract.contract_sha256,
+            "source_manifest_sha256": source_manifest_sha256,
+            "status": "pass",
+            "fit_years": [2015, 2016, 2017, 2018],
+            "selection_influenced_capacity": False,
+            "evaluation_year_accessed": False,
+            "selected": {"multiplier": 2.7},
+            "candidate_multipliers": [2.7],
+            "thresholds": {"cooling_shortage_energy_ratio_max": 0.005},
+            "capacity_scenario_hash": "1" * 64,
+        }
+        _write_json(Path(root) / "gate0" / "CAPACITY_FREEZE.json", payload)
+        return payload
+
+    monkeypatch.setitem(globals_, "produce_source_manifest", source)
+    monkeypatch.setitem(globals_, "produce_itransformer_receipt", itransformer)
+    monkeypatch.setitem(globals_, "produce_diffopt_receipt", diffopt)
+    monkeypatch.setitem(globals_, "build_capacity_evidence", capacity)
+    monkeypatch.setitem(globals_, "validate_prerequisites", lambda *args, **kwargs: {
+        "source_manifest": {"passed": True},
+        "itransformer_receipt": {"passed": True},
+        "diffopt_receipt": {"passed": True},
+        "capacity_receipt": {"passed": True},
+    })
+    monkeypatch.setitem(globals_, "_run_real_operations", lambda *args, **kwargs: (
+        {
+            name: {"timing": {"p95_seconds": 0.01}, "details": {"identity": name}, "real_operation": True}
+            for name in ("rsc_forward", "rsc_backward", "highs_lp", "diff_lp")
+        },
+        {name: {"passed": True, "identity": name} for name in ("rsc_forward", "rsc_backward", "highs_lp", "diff_lp")},
+    ))
+    monkeypatch.setattr(globals_["shutil"], "disk_usage", lambda path: SimpleNamespace(total=100, used=40, free=60))
+
+
+def test_gate0_orchestrator_writes_authorization_only_after_checks(tmp_path, monkeypatch):
+    _install_orchestrator_fakes(monkeypatch, tmp_path)
+    inputs = _orchestrator_inputs(tmp_path)
+    receipt = PROBE["run_gate0_orchestrator"](inputs)
+    root = tmp_path / inputs.run_id
+    assert receipt["authorized_pilot"] is True
+    current = json.loads((root / "protocol" / "CURRENT_GATE.json").read_text(encoding="utf-8"))
+    assert current["next_gate"] == "pilot"
+    assert current["authorized_pilot"] is True
+    assert not (root / "pilot").exists()
+
+
+def test_gate0_orchestrator_writes_failure_and_returns_no_authorization(tmp_path, monkeypatch):
+    _install_orchestrator_fakes(monkeypatch, tmp_path)
+    inputs = _orchestrator_inputs(tmp_path)
+    globals_ = PROBE["run_gate0_orchestrator"].__globals__
+    monkeypatch.setitem(globals_, "build_capacity_evidence", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("capacity failed")))
+    with pytest.raises(PROBE["Gate0ExecutionError"], match="capacity_receipt"):
+        PROBE["run_gate0_orchestrator"](inputs)
+    root = tmp_path / inputs.run_id
+    failure = json.loads((root / "gate0" / "GATE0_FAILURE.json").read_text(encoding="utf-8"))
+    assert failure["authorized_pilot"] is False
+    assert not (root / "protocol" / "CURRENT_GATE.json").exists()
+    assert not (root / "pilot").exists()
