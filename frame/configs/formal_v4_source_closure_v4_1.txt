@@ -36,6 +36,9 @@ frame/src/joint_dispatch/formal_v4_provenance.py
 frame/src/joint_dispatch/formal_v4_recourse.py
 frame/src/joint_dispatch/formal_v4_state.py
 frame/src/joint_dispatch/formal_v4_training.py
+frame/src/joint_dispatch/formal_v4_gate0_evidence.py
+frame/src/joint_dispatch/formal_v4_method_adapter.py
+frame/src/kitakyushu_pipeline.py
 frame/src/scheduling/dispatch_lp.py
 frame/src/scheduling/proxy_decoder.py
 frame/src/scheduling/proxy_model.py
@@ -48,6 +51,11 @@ frame/scripts/run_rsc_pf_formal_v4_baseline.py
 frame/scripts/run_rsc_pf_formal_v4_diffopt_gate.py
 frame/scripts/prepare_rsc_pf_official_itransformer_v4.py
 frame/scripts/prepare_rsc_pf_diffopt_env_v4.py
+frame/scripts/build_rsc_pf_formal_v4_objective_evidence.py
+frame/scripts/build_rsc_pf_formal_v4_training_evidence.py
+frame/scripts/build_rsc_pf_formal_v4_adapter_evidence.py
+frame/scripts/run_rsc_pf_formal_v4_resource_gate.py
+frame/scripts/run_rsc_pf_formal_v4_gate0_evidence.py
 frame/scripts/audit_rsc_pf_formal_v4_gate0.py
 frame/scripts/run_repository_regression_v4.py
 frame/tests/test_joint_dispatch_formal_protocol_v4.py
