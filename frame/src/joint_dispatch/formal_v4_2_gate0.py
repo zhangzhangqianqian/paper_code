@@ -101,14 +101,17 @@ def _require_lineage(
 
 
 def _git(repo_root: Path, *args: str) -> str:
+    safe_root = repo_root.resolve().as_posix()
     try:
         return subprocess.check_output(
-            ["git", "-C", str(repo_root), *args],
+            ["git", "-c", f"safe.directory={safe_root}", "-C", str(repo_root), *args],
             text=True,
             stderr=subprocess.STDOUT,
         ).strip()
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise Gate0ReceiptError(f"git command failed: {' '.join(args)}") from exc
+        detail = str(getattr(exc, "output", "")).strip()
+        suffix = f": {detail}" if detail else ""
+        raise Gate0ReceiptError(f"git command failed: {' '.join(args)}{suffix}") from exc
 
 
 def _closure_entries(closure_path: Path) -> list[str]:

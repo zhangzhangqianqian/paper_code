@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import runpy
 import pytest
 
+from src.joint_dispatch import formal_v4_2_gate0 as gate0_module
 from src.joint_dispatch.formal_v4_2_artifacts import canonical_sha256, sha256_file
 from src.joint_dispatch.formal_v4_2_gate0 import (
     CAPACITY_SCHEMA,
@@ -27,6 +28,22 @@ from src.joint_dispatch.formal_v4_2_gate0 import (
 
 
 PROBE = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "run_rsc_pf_formal_v4_2_gate0.py"))
+
+
+def test_git_probe_uses_command_scoped_safe_directory(tmp_path, monkeypatch):
+    observed = {}
+
+    def fake_check_output(command, **kwargs):
+        observed["command"] = command
+        return "deadbeef\n"
+
+    monkeypatch.setattr(gate0_module.subprocess, "check_output", fake_check_output)
+    assert gate0_module._git(tmp_path, "rev-parse", "HEAD") == "deadbeef"
+    assert observed["command"][:3] == [
+        "git",
+        "-c",
+        f"safe.directory={tmp_path.resolve().as_posix()}",
+    ]
 
 
 def test_versioned_gate0_import_does_not_require_legacy_modules():
