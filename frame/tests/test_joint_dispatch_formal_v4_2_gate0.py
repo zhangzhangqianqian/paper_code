@@ -46,6 +46,14 @@ def test_git_probe_uses_command_scoped_safe_directory(tmp_path, monkeypatch):
     ]
 
 
+def test_diffopt_requirements_hash_is_line_ending_independent(tmp_path):
+    lf = tmp_path / "lf.in"
+    crlf = tmp_path / "crlf.in"
+    lf.write_bytes(b"numpy==1.26.4\ncvxpy==1.7.5\n")
+    crlf.write_bytes(b"numpy==1.26.4\r\ncvxpy==1.7.5\r\n")
+    assert gate0_module._canonical_text_sha256(lf) == gate0_module._canonical_text_sha256(crlf)
+
+
 def test_versioned_gate0_import_does_not_require_legacy_modules():
     frame_root = Path(__file__).parents[1]
     code = r"""

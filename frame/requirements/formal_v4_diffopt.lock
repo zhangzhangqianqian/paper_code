@@ -4,6 +4,7 @@
   "python_executable": "D:\\Paper\\envs\\rsc_pf_diffopt_v4\\python.exe",
   "platform": "Windows-10-10.0.26200-SP0",
   "requirements_sha256": "2bdd4de07b899c90373429a8e1c8bdcebb7f46f4cabf05c01a8cbecfc9e04913",
+  "requirements_hash_mode": "utf8_lf_v1",
   "packages": {
     "numpy": "1.26.4",
     "torch": "2.8.0+cpu",

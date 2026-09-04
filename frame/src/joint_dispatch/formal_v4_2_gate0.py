@@ -114,6 +114,18 @@ def _git(repo_root: Path, *args: str) -> str:
         raise Gate0ReceiptError(f"git command failed: {' '.join(args)}{suffix}") from exc
 
 
+def _canonical_text_sha256(path: str | Path) -> str:
+    """Hash UTF-8 text after normalizing platform line endings to LF."""
+
+    raw = Path(path).read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Gate0ReceiptError(f"expected UTF-8 text file: {path}") from exc
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _closure_entries(closure_path: Path) -> list[str]:
     if not closure_path.is_file():
         raise Gate0ReceiptError(f"source closure is missing: {closure_path}")
@@ -340,7 +352,10 @@ def produce_diffopt_receipt(
     if actual_python != expected_python:
         raise Gate0ReceiptError(f"DiffLP interpreter mismatch: {actual_python} != {expected_python}")
     requirements = lock_target.with_suffix(".in")
-    if not requirements.is_file() or sha256_file(requirements) != lock.get("requirements_sha256"):
+    if lock.get("requirements_hash_mode") != "utf8_lf_v1":
+        raise Gate0ReceiptError("DiffLP requirements hash mode mismatch")
+    requirements_hash = _canonical_text_sha256(requirements) if requirements.is_file() else ""
+    if not requirements.is_file() or requirements_hash != lock.get("requirements_sha256"):
         raise Gate0ReceiptError("DiffLP requirements hash mismatch")
     packages = {}
     for package in ("numpy", "torch", "cvxpy", "cvxpylayers", "diffcp", "ecos"):
@@ -371,7 +386,8 @@ def produce_diffopt_receipt(
         "python_executable": str(actual_python),
         "packages": packages,
         "lock_sha256": sha256_file(lock_target),
-        "requirements_sha256": sha256_file(requirements),
+        "requirements_sha256": requirements_hash,
+        "requirements_hash_mode": "utf8_lf_v1",
         "evaluation_year_accessed": False,
     }
     write_once_json(destination, payload)
