@@ -21,6 +21,7 @@ class Scheme2RPTOMetadata:
     forecaster_class: str = "Scheme2RModel"
     uses_device_history: bool = False
     online_lp_calls_per_window: int = 1
+    online_optimizer_calls_per_window: int = 1
     method_id: str = "Scheme2R-PTO"
     forecast_metrics_applicable: bool = True
 
@@ -41,6 +42,7 @@ class StateConditionedPTO:
     forecaster_class: str = "StateConditionedScheme2R"
     uses_device_history: bool = True
     online_lp_calls_per_window: int = 1
+    online_optimizer_calls_per_window: int = 1
     method_id: str = "State-Conditioned-PTO"
     forecast_metrics_applicable: bool = True
 
@@ -63,6 +65,7 @@ class DirectPolicyAdapter:
     forecast_metrics_applicable = False
     uses_realized_future = False
     online_lp_calls_per_window = 0
+    online_optimizer_calls_per_window = 0
 
     def __init__(self, *, decoder_parameters: Mapping[str, Any] | None = None, dropout: float = 0.0) -> None:
         self.model = DirectPolicyModel(decoder_parameters=decoder_parameters, dropout=dropout)
@@ -79,6 +82,7 @@ class SeasonalNaivePTO:
     forecast_metrics_applicable = True
     uses_realized_future = False
     online_lp_calls_per_window = 1
+    online_optimizer_calls_per_window = 1
 
     @staticmethod
     def forecast(task_values: np.ndarray, *, origin_index: int, horizon: int = 4) -> np.ndarray:
@@ -96,6 +100,7 @@ class PerfectInformationMPC:
     deployable = False
     reference_only = True
     online_lp_calls_per_window = 1
+    online_optimizer_calls_per_window = 1
     forecast_metrics_applicable = False
 
     @staticmethod
@@ -122,6 +127,7 @@ class OfficialITransformerPTOMetadata:
     method_id: str = "Official iTransformer-PTO"
     forecaster_class: str = "model.iTransformer.Model"
     online_lp_calls_per_window: int = 1
+    online_optimizer_calls_per_window: int = 1
     reproduction_level: str = "official_backbone_adaptation"
     forecast_metrics_applicable: bool = True
 
@@ -138,6 +144,7 @@ class DifferentiableLPMetadata:
     method_id: str = "Differentiable-LP"
     forecaster_class: str = "forecast-to-CVXPYlayers"
     online_lp_calls_per_window: int = 1
+    online_optimizer_calls_per_window: int = 1
     optimizer_at_inference: bool = True
     reproduction_level: str = "cvxpylayers_method_adaptation"
     forecast_metrics_applicable: bool = True

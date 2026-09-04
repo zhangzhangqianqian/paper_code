@@ -48,9 +48,14 @@ class MethodAdapterResult:
         }
 
 
+# Protocol name used by the formal-v4 evaluation contract.
+MethodStepResult = MethodAdapterResult
+
+
 class _BaseAdapter:
     method_id = ""
     online_exact_lp = False
+    online_optimizer_calls_per_window = 0
     forecast_metrics_applicable = True
 
     def __init__(self, parameters: Mapping[str, Any], *, task_mean: np.ndarray | None = None, task_scale: np.ndarray | None = None) -> None:
@@ -90,6 +95,7 @@ class _BaseAdapter:
 class Scheme2RPTOAdapter(_BaseAdapter):
     method_id = "Scheme2R-PTO"
     online_exact_lp = True
+    online_optimizer_calls_per_window = 1
 
     def __init__(self, parameters: Mapping[str, Any], **kwargs: Any) -> None:
         super().__init__(parameters, **kwargs)
@@ -140,6 +146,7 @@ class StateConditionedPTOAdapter(Scheme2RPTOAdapter):
 class SeasonalNaivePTOAdapter(_BaseAdapter):
     method_id = "Seasonal-Naive-PTO"
     online_exact_lp = True
+    online_optimizer_calls_per_window = 1
 
     def predict_and_dispatch(self, window: Mapping[str, Any], rolling_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         started = time.perf_counter()
@@ -157,6 +164,7 @@ class SeasonalNaivePTOAdapter(_BaseAdapter):
 class DirectPolicyAdapter(_BaseAdapter):
     method_id = "Direct-Policy"
     online_exact_lp = False
+    online_optimizer_calls_per_window = 0
     forecast_metrics_applicable = False
 
     def __init__(self, parameters: Mapping[str, Any], **kwargs: Any) -> None:
@@ -212,6 +220,7 @@ class DifferentiableLPAdapter(_BaseAdapter):
 
     method_id = "Differentiable-LP"
     online_exact_lp = True
+    online_optimizer_calls_per_window = 1
 
     def __init__(self, parameters: Mapping[str, Any], *, forecaster: torch.nn.Module | None = None, layer: DifferentiableIESLayer | None = None, **kwargs: Any) -> None:
         super().__init__(parameters, **kwargs)
@@ -248,6 +257,6 @@ def build_formal_v4_method_adapter(method_id: str, parameters: Mapping[str, Any]
 
 
 __all__ = [
-    "DirectPolicyAdapter", "MethodAdapterResult", "Scheme2RPTOAdapter", "SeasonalNaivePTOAdapter",
+    "DirectPolicyAdapter", "MethodAdapterResult", "MethodStepResult", "Scheme2RPTOAdapter", "SeasonalNaivePTOAdapter",
     "StateConditionedPTOAdapter", "build_formal_v4_method_adapter",
 ]
