@@ -1,4 +1,11 @@
-"""End-to-end joint forecasting and physics-feasible dispatch package."""
+"""End-to-end joint forecasting and physics-feasible dispatch package.
+
+Public symbols are loaded lazily so a versioned submodule can be imported from
+an otherwise clean source checkout without pulling in unrelated legacy
+experiment modules.
+"""
+
+from importlib import import_module
 
 from .contract import (
     CurriculumSpec,
@@ -19,15 +26,26 @@ from .data import (
     load_joint_split,
     save_joint_split,
 )
-from .formal_protocol import (
-    AblationSpec,
-    FormalExperimentSpec,
-    MethodSpec,
-    TrainingBudget,
-    load_formal_experiment_spec,
-    validate_formal_experiment_payload,
-)
-from .pto import PTOForecasts, PTODispatchCache, load_pto_cache, save_pto_cache, seasonal_naive_forecasts, solve_pto_windows
+
+_LAZY_EXPORTS = {
+    "AblationSpec": ("formal_protocol", "AblationSpec"),
+    "FormalExperimentSpec": ("formal_protocol", "FormalExperimentSpec"),
+    "MethodSpec": ("formal_protocol", "MethodSpec"),
+    "TrainingBudget": ("formal_protocol", "TrainingBudget"),
+    "load_formal_experiment_spec": ("formal_protocol", "load_formal_experiment_spec"),
+    "validate_formal_experiment_payload": ("formal_protocol", "validate_formal_experiment_payload"),
+    "PTOForecasts": ("pto", "PTOForecasts"),
+    "PTODispatchCache": ("pto", "PTODispatchCache"),
+    "load_pto_cache": ("pto", "load_pto_cache"),
+    "save_pto_cache": ("pto", "save_pto_cache"),
+    "seasonal_naive_forecasts": ("pto", "seasonal_naive_forecasts"),
+    "solve_pto_windows": ("pto", "solve_pto_windows"),
+    "DeviceHistoryEncoder": ("model", "DeviceHistoryEncoder"),
+    "JointForecastDispatchModel": ("model", "JointForecastDispatchModel"),
+    "JointForwardOutput": ("model", "JointForwardOutput"),
+    "JointSchedulingProxy": ("model", "JointSchedulingProxy"),
+    "StateConditionedScheme2R": ("model", "StateConditionedScheme2R"),
+}
 
 __all__ = [
     "CurriculumSpec",
@@ -72,11 +90,10 @@ def __getattr__(name: str):
     environments where the optional PyTorch dependency is not installed.
     """
 
-    if name in {
-        "DeviceHistoryEncoder", "JointForecastDispatchModel", "JointForwardOutput",
-        "JointSchedulingProxy", "StateConditionedScheme2R",
-    }:
-        from . import model
-
-        return getattr(model, name)
-    raise AttributeError(name)
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(name)
+    module_name, attribute = target
+    value = getattr(import_module(f".{module_name}", __name__), attribute)
+    globals()[name] = value
+    return value

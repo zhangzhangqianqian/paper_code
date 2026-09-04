@@ -4,6 +4,7 @@ from collections import Counter
 import json
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import runpy
@@ -26,6 +27,32 @@ from src.joint_dispatch.formal_v4_2_gate0 import (
 
 
 PROBE = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "run_rsc_pf_formal_v4_2_gate0.py"))
+
+
+def test_versioned_gate0_import_does_not_require_legacy_modules():
+    frame_root = Path(__file__).parents[1]
+    code = r"""
+import importlib.abc
+import sys
+
+class BlockLegacy(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"src.joint_dispatch.formal_protocol", "src.joint_dispatch.pto"}:
+            raise ModuleNotFoundError(fullname)
+        return None
+
+sys.meta_path.insert(0, BlockLegacy())
+from src.joint_dispatch.formal_v4_2_artifacts import canonical_sha256
+assert callable(canonical_sha256)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=frame_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _receipts(tmp_path: Path) -> SimpleNamespace:

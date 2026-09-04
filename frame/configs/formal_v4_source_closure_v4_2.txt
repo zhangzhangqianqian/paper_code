@@ -13,6 +13,7 @@ frame/requirements/formal_v4_diffopt.lock
 frame/src/data_pipeline.py
 frame/src/kitakyushu_pipeline.py
 frame/src/models.py
+frame/src/joint_dispatch/__init__.py
 frame/src/joint_dispatch/contract.py
 frame/src/joint_dispatch/data.py
 frame/src/joint_dispatch/losses.py
@@ -43,13 +44,19 @@ frame/src/joint_dispatch/formal_v4_2_rollout.py
 frame/src/joint_dispatch/formal_v4_2_metrics.py
 frame/src/joint_dispatch/formal_v4_2_methods.py
 frame/src/joint_dispatch/formal_v4_2_gate0.py
+frame/src/scheduling/__init__.py
+frame/src/scheduling/benchmark_parameters.py
 frame/src/scheduling/contracts.py
+frame/src/scheduling/data.py
 frame/src/scheduling/dispatch_schema.py
 frame/src/scheduling/dispatch_lp.py
+frame/src/scheduling/imbalance_settlement.py
 frame/src/scheduling/parameter_audit.py
 frame/src/scheduling/proxy_contract.py
 frame/src/scheduling/proxy_decoder.py
 frame/src/scheduling/proxy_model.py
+frame/src/scheduling/real_replay.py
+frame/src/scheduling/renewable_forecasts.py
 frame/src/scheduling/renewables.py
 frame/scripts/build_rsc_pf_formal_v4_benchmark.py
 frame/scripts/build_rsc_pf_formal_v4_data.py
