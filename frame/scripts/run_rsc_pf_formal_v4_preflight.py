@@ -22,7 +22,7 @@ if str(FRAME_ROOT) not in sys.path:
 
 from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec  # noqa: E402
 from src.joint_dispatch.formal_v4_access import DataAccessReceipt, scan_runtime_access  # noqa: E402
-from src.joint_dispatch.formal_v4_diffopt import DifferentiableLPGateReceipt  # noqa: E402
+from src.joint_dispatch.formal_v4_diffopt import DifferentiableLPGateReceipt, validate_diffopt_gate_receipt  # noqa: E402
 from src.joint_dispatch.formal_v4_gate0_evidence import validate_c_ref_gate0_receipt, validate_gate0_receipt  # noqa: E402
 from src.joint_dispatch.formal_v4_gate0 import (  # noqa: E402
     MANDATORY_CHECK_IDS,
@@ -205,6 +205,7 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
 
     def diffopt():
         payload = _read_json(protocol / "DIFFERENTIABLE_LP_GATE.json")
+        validate_diffopt_gate_receipt(payload, run_root=root)
         fields = ("method_id", "eligible", "dpp_passed", "finite_solves", "parity_passed", "physical_residual_passed", "gradient_passed", "native_probe_passed", "memory_margin_fraction", "projected_p95_hours", "source_environment", "reason")
         receipt = DifferentiableLPGateReceipt(**{key: payload[key] for key in fields if key in payload})
         receipt.validate()

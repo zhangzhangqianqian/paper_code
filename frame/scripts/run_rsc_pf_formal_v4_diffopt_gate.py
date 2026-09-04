@@ -26,15 +26,13 @@ if str(FRAME_ROOT) not in sys.path:
     sys.path.insert(0, str(FRAME_ROOT))
 
 from src.joint_dispatch.common_evaluation import evaluate_four_hour_plan
-from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec
 from src.joint_dispatch.formal_v4_diffopt import (
     DifferentiableIESLayer,
     DifferentiableLPGateReceipt,
     DifferentiableLPForecasterAdapter,
 )
-from src.kitakyushu_pipeline import clean_kitakyushu_dataframe, read_kitakyushu_canonical
 from src.scheduling.dispatch_lp import DispatchInputs, solve_dispatch_lp
-from src.scheduling.renewables import pv_available, wt_available
+from src.joint_dispatch.formal_v4_gate0_evidence import write_immutable_json
 
 
 def _sha256(path: Path) -> str:
@@ -45,56 +43,46 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _parameters(spec: Any) -> dict[str, float]:
-    benchmark = yaml.safe_load(Path(spec.paths["benchmark_path"]).read_text(encoding="utf-8"))
+def _parameters(benchmark_path: Path) -> dict[str, float]:
+    benchmark = yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))
     values = dict(benchmark["values"])
-    with Path(spec.paths["parameter_ledger_path"]).open("r", encoding="utf-8-sig", newline="") as handle:
-        for row in csv.DictReader(handle):
-            if row.get("parameter_id") and row.get("value") not in (None, ""):
-                # The benchmark stores resolved capacities; ledger capacity
-                # entries are derivation ratios and must not overwrite them.
-                values.setdefault(str(row["parameter_id"]), float(row["value"]))
     return {str(key): float(value) for key, value in values.items() if isinstance(value, (int, float))}
 
 
-def _fixed_training_windows(spec: Any, parameters: Mapping[str, float], count: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    raw, _ = read_kitakyushu_canonical(Path(r"D:\Paper\Kitakyushu dataset"), years=list(spec.train_years))
-    frame, _ = clean_kitakyushu_dataframe(raw)
-    frame = frame.sort_values("timestamp").reset_index(drop=True)
-    loads = frame[["electricity", "cooling", "heating"]].to_numpy(dtype=np.float64)
-    profile = {
-        "pv_rated_capacity": float(parameters.get("pv_capacity", 1.0)),
-        "pv_reference_irradiance": float(parameters.get("pv_reference_irradiance", 1000.0)),
-        "pv_conversion_efficiency": float(parameters.get("pv_conversion_efficiency", 0.2)),
-        "pv_reference_temperature": float(parameters.get("pv_reference_temperature", 25.0)),
-        "pv_temperature_coefficient": float(parameters.get("pv_temperature_coefficient", 0.0)),
-        "wt_rated_capacity": float(parameters.get("wt_capacity", 1.0)),
-        "wt_cut_in_speed": float(parameters.get("wt_cut_in_speed", 3.0)),
-        "wt_rated_speed": float(parameters.get("wt_rated_speed", 12.0)),
-        "wt_cut_out_speed": float(parameters.get("wt_cut_out_speed", 25.0)),
-    }
-    renewable = np.column_stack((pv_available(frame, profile), wt_available(frame, profile)))
-    timestamps = np.asarray(frame["timestamp"], dtype="datetime64[ns]")
-    origins: list[int] = []
-    for origin in range(24, len(frame) - 3):
-        if np.all(np.diff(timestamps[origin - 24:origin + 4]) == np.timedelta64(1, "h")):
-            origins.append(origin)
-            if len(origins) >= count:
-                break
-    if len(origins) < count:
-        raise ValueError(f"only {len(origins)} fixed training windows available; need {count}")
-    ix = np.asarray(origins, dtype=int)
-    demand = np.stack([loads[i:i + 4] for i in ix])
-    renew = np.stack([renewable[i:i + 4] for i in ix])
-    grid = float(parameters.get("grid_energy_price", 1.0))
-    gas = float(parameters.get("gas_energy_price", 0.6))
-    carbon = float(parameters.get("carbon_price_default", 0.0))
-    grid_ef = float(parameters.get("grid_emission_factor", 0.0))
-    gas_ef = float(parameters.get("gas_emission_factor", 0.0))
-    prices = np.tile(np.asarray([grid, gas, carbon * grid_ef, carbon * gas_ef], dtype=np.float64), (count, 4, 1))
-    initial_soc = np.full(count, 0.5, dtype=np.float64)
-    previous_chp = np.zeros(count, dtype=np.float64)
-    return demand, renew, prices, initial_soc, previous_chp, ix
+def _resolve_inside(run_root: Path, path: Path, name: str) -> Path:
+    root = run_root.resolve()
+    resolved = (path if path.is_absolute() else root / path).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be inside the supplied run root") from exc
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    return resolved
+
+
+def _fixed_training_windows(archive_path: Path, parameters: Mapping[str, float], count: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load deterministic train-only windows from a materialized NPZ archive."""
+
+    with np.load(archive_path, allow_pickle=False) as payload:
+        split = np.asarray(payload["split"]).astype(str)
+        if split.ndim == 0:
+            split = np.repeat(split.reshape(1), payload["rigid_demand"].shape[0])
+        if split.shape[0] < count or not np.all(split[:count] == "train"):
+            raise ValueError("DiffLP gate requires at least window-count train-only rows")
+        demand = np.asarray(payload["rigid_demand"][:count], dtype=np.float64)
+        renew = np.asarray(payload["renewable_forecast"][:count], dtype=np.float64)
+        prices3 = np.asarray(payload["prices_and_weights"][:count], dtype=np.float64)
+        initial_soc = np.asarray(payload["initial_soc"][:count], dtype=np.float64).reshape(count)
+        previous_chp = np.asarray(payload["previous_chp"][:count], dtype=np.float64).reshape(count)
+        target_times = np.asarray(payload["target_times"][:count])
+    if demand.shape != (count, 4, 3) or renew.shape != (count, 4, 2) or prices3.shape != (count, 4, 3):
+        raise ValueError("materialized train archive has an unexpected DiffLP shape")
+    carbon_weight = prices3[..., 2]
+    prices = np.stack((prices3[..., 0], prices3[..., 1], carbon_weight * float(parameters.get("grid_emission_factor", 0.0)), carbon_weight * float(parameters.get("gas_emission_factor", 0.0))), axis=-1)
+    if not np.isfinite(demand).all() or not np.isfinite(renew).all() or not np.isfinite(prices).all():
+        raise ValueError("materialized train archive contains non-finite values")
+    return demand, renew, prices, initial_soc, previous_chp, np.arange(count, dtype=np.int64)
 
 
 def _residual(ev: Any) -> float:
@@ -131,19 +119,44 @@ def _gradient_probe(layer: DifferentiableIESLayer, parameters: Mapping[str, floa
     return float(sum(float(g.abs().sum()) for g in gradient if g is not None))
 
 
-def main() -> int:
+def _require_isolated_environment(lock_path: Path) -> Mapping[str, Any]:
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    expected = Path(str(lock.get("python_executable", ""))).resolve()
+    actual = Path(sys.executable).resolve()
+    if not expected or actual != expected:
+        raise RuntimeError(f"DiffLP gate must run in isolated environment {expected}; current interpreter is {actual}")
+    if lock.get("native_layer_probe", {}).get("eligible_for_gate0") is not True:
+        raise RuntimeError("isolated environment has no eligible native cvxpylayers probe")
+    return lock
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--contract", type=Path, default=FRAME_ROOT / "configs" / "joint_forecast_dispatch_formal_v4.json")
-    parser.add_argument("--output", type=Path, default=FRAME_ROOT / "reports" / "joint_forecast_dispatch_formal_v4" / "protocol" / "DIFFERENTIABLE_LP_GATE.json")
-    parser.add_argument("--windows", type=int, default=100)
-    args = parser.parse_args()
-    if args.output.exists():
-        raise FileExistsError(f"refusing to overwrite DiffLP gate receipt: {args.output}")
-    spec = load_formal_v4_spec(args.contract)
-    parameters = _parameters(spec)
-    demand, renew, prices, initial_soc, previous_chp, origins = _fixed_training_windows(spec, parameters, args.windows)
-    source_lock = FRAME_ROOT / "requirements" / "formal_v4_diffopt.lock"
-    lock = json.loads(source_lock.read_text(encoding="utf-8"))
+    parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--benchmark-path", type=Path, required=True)
+    parser.add_argument("--train-archive", type=Path, required=True)
+    parser.add_argument("--output-receipt", type=Path, required=True)
+    parser.add_argument("--window-count", type=int, default=100)
+    parser.add_argument("--lock-path", type=Path, default=FRAME_ROOT / "requirements" / "formal_v4_diffopt.lock")
+    args = parser.parse_args(argv)
+    if args.window_count < 100:
+        raise ValueError("window-count must be at least 100")
+    run_root = args.run_root.resolve()
+    if not run_root.is_dir():
+        raise FileNotFoundError(run_root)
+    benchmark_path = _resolve_inside(run_root, args.benchmark_path, "benchmark-path")
+    train_archive = _resolve_inside(run_root, args.train_archive, "train-archive")
+    output_path = (args.output_receipt if args.output_receipt.is_absolute() else run_root / args.output_receipt).resolve()
+    try:
+        output_path.relative_to(run_root)
+    except ValueError as exc:
+        raise ValueError("output-receipt must be inside the supplied run root") from exc
+    if output_path.exists():
+        raise FileExistsError(f"refusing to overwrite DiffLP gate receipt: {output_path}")
+    lock = _require_isolated_environment(args.lock_path.resolve())
+    parameters = _parameters(benchmark_path)
+    demand, renew, prices, initial_soc, previous_chp, origins = _fixed_training_windows(train_archive, parameters, args.window_count)
+    source_lock = args.lock_path.resolve()
     native_probe_passed = bool(lock.get("native_layer_probe", {}).get("eligible_for_gate0") is True)
     started = time.perf_counter()
     dpp_passed = True
@@ -153,7 +166,7 @@ def main() -> int:
     reason = "pass"
     try:
         layer = DifferentiableIESLayer(parameters, tie_break_throughput_cost=1.0e-5)
-        for i in range(args.windows):
+        for i in range(args.window_count):
             output = layer(
                 torch.as_tensor(demand[i], dtype=torch.float64),
                 torch.as_tensor(renew[i], dtype=torch.float64),
@@ -191,9 +204,9 @@ def main() -> int:
         memory_margin = 0.0
     # The complete formal run is conservatively projected as 10,000 windows
     # with a 2x timing margin; no evaluation data is read for this estimate.
-    projected_hours = (elapsed / max(args.windows, 1)) * 10000.0 * 2.0 / 3600.0
+    projected_hours = (elapsed / max(args.window_count, 1)) * 10000.0 * 2.0 / 3600.0
     eligible = all((
-        dpp_passed, finite_solves >= args.windows, args.windows >= 100,
+        dpp_passed, finite_solves >= args.window_count, args.window_count >= 100,
         parity_passed, physical_residual_passed, gradient_passed,
         native_probe_passed, memory_margin >= 0.20, projected_hours <= 24.0,
     ))
@@ -209,20 +222,22 @@ def main() -> int:
     receipt.validate()
     payload = receipt.to_dict()
     payload.update({
-        "schema_version": "formal-v4-diffopt-gate-v1",
+        "schema_version": "formal-v4.1-differentiable-lp-gate-v1",
         "backend": {"solve_method": "SCS", "eps": 1.0e-10, "max_iters": 100000, "dtype": "float64", "tie_break_throughput_cost": 1.0e-5},
-        "windows": args.windows, "training_years": list(spec.train_years),
+        "windows": args.window_count, "training_years": [2015, 2016, 2017, 2018],
         "fixed_origin_indices_sha256": hashlib.sha256(origins.tobytes()).hexdigest(),
         "max_relative_objective_gap": float(max(objective_gaps, default=float("inf"))),
         "p95_relative_objective_gap": float(np.quantile(objective_gaps, 0.95)) if objective_gaps else float("inf"),
         "max_physical_residual": float(max(residuals, default=float("inf"))),
         "p95_physical_residual": float(np.quantile(residuals, 0.95)) if residuals else float("inf"),
         "gradient_norm": gradient_norm, "elapsed_seconds": elapsed,
-        "lock_sha256": _sha256(source_lock), "contract_sha256": _sha256(args.contract),
+        "lock_sha256": _sha256(source_lock), "benchmark_path": benchmark_path.relative_to(run_root).as_posix(),
+        "train_archive_path": train_archive.relative_to(run_root).as_posix(),
+        "benchmark_sha256": _sha256(benchmark_path), "train_archive_sha256": _sha256(train_archive),
         "test_set_accessed": False,
     })
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    write_immutable_json(output_path, payload)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0 if eligible else 2
 

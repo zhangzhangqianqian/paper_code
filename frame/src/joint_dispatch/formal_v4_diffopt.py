@@ -84,6 +84,37 @@ class DifferentiableLPGateReceipt:
         return asdict(self)
 
 
+def validate_diffopt_gate_receipt(payload: Mapping[str, Any], *, run_root: str | Path) -> None:
+    """Validate the Gate 0 receipt and bind its artifacts to one run root."""
+
+    if payload.get("schema_version") != "formal-v4.1-differentiable-lp-gate-v1":
+        raise ValueError("DiffLP receipt schema must be formal-v4.1")
+    if payload.get("test_set_accessed") is not False:
+        raise ValueError("DiffLP receipt reports test-set access")
+    if int(payload.get("windows", 0)) < 100 or list(payload.get("training_years", ())) != [2015, 2016, 2017, 2018]:
+        raise ValueError("DiffLP receipt is not a 100-window 2015-2018 train-only probe")
+    root = Path(run_root).resolve()
+    for field in ("benchmark_path", "train_archive_path"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"DiffLP receipt is missing {field}")
+        path = (root / value).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"DiffLP {field} escapes run root") from exc
+        if not path.is_file() or _sha256_file(path) != payload.get(field.replace("_path", "_sha256")):
+            raise ValueError(f"DiffLP {field} hash does not match run root")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _require_backend() -> tuple[Any, Any]:
     try:
         import cvxpy as cp
@@ -276,5 +307,5 @@ def write_diffopt_lock(output: str | Path, requirements: str | Path) -> dict[str
 
 __all__ = [
     "DIFFOPT_METHOD_ID", "DifferentiableIESLayer", "DifferentiableLPForecasterAdapter",
-    "DifferentiableLPGateReceipt", "DifferentiableLPProblemSpec", "write_diffopt_lock",
+    "DifferentiableLPGateReceipt", "DifferentiableLPProblemSpec", "validate_diffopt_gate_receipt", "write_diffopt_lock",
 ]
