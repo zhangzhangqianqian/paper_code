@@ -88,7 +88,15 @@
     "cooling_shortage_energy_ratio_max": 0.005,
     "cooling_shortage_hour_rate_max": 0.01,
     "main_scenario_name": "capacity_adequate_main",
-    "stress_scenario_name": "benchmark_capacity_stress"
+    "stress_scenario_name": "benchmark_capacity_stress",
+    "origin_selection": {
+      "total": 500,
+      "year_season": 320,
+      "cooling_top_decile": 60,
+      "heating_top_decile": 40,
+      "electricity_top_decile": 40,
+      "uniform_remaining": 40
+    }
   },
   "renewable_forecast": {
     "method": "last_value_persistence",

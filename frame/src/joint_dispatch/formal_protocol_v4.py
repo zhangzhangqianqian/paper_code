@@ -348,11 +348,24 @@ def validate_formal_v4_payload(payload: Mapping[str, Any], *, repo_root: Path | 
     capacity = payload["capacity"]
     if not isinstance(capacity, Mapping):
         raise ValueError("capacity must be an object")
-    _strict_keys(capacity, {"candidate_multipliers", "cooling_shortage_energy_ratio_max", "cooling_shortage_hour_rate_max", "main_scenario_name", "stress_scenario_name"}, "capacity")
+    capacity_fields = {"candidate_multipliers", "cooling_shortage_energy_ratio_max", "cooling_shortage_hour_rate_max", "main_scenario_name", "stress_scenario_name"}
+    if schema_version == SCHEMA_VERSION_V41:
+        capacity_fields.add("origin_selection")
+    _strict_keys(capacity, capacity_fields, "capacity")
     multipliers = tuple(_float(x, "capacity.candidate_multipliers[]", positive=True) for x in _sequence(capacity["candidate_multipliers"], "capacity.candidate_multipliers"))
     expected_multipliers = tuple(1.0 + 0.1 * i for i in range(11))
     if len(multipliers) != len(expected_multipliers) or any(abs(a - b) > 1e-12 for a, b in zip(multipliers, expected_multipliers)) or _float(capacity["cooling_shortage_energy_ratio_max"], "capacity.cooling_shortage_energy_ratio_max") != 0.005 or _float(capacity["cooling_shortage_hour_rate_max"], "capacity.cooling_shortage_hour_rate_max") != 0.01:
         raise ValueError("capacity audit settings are not frozen")
+    if schema_version == SCHEMA_VERSION_V41:
+        origin_selection = capacity["origin_selection"]
+        if not isinstance(origin_selection, Mapping):
+            raise ValueError("capacity.origin_selection must be an object")
+        _strict_keys(origin_selection, {"total", "year_season", "cooling_top_decile", "heating_top_decile", "electricity_top_decile", "uniform_remaining"}, "capacity.origin_selection")
+        quotas = {key: _int(origin_selection[key], f"capacity.origin_selection.{key}", positive=True) for key in ("total", "year_season", "cooling_top_decile", "heating_top_decile", "electricity_top_decile", "uniform_remaining")}
+        if quotas != {"total": 500, "year_season": 320, "cooling_top_decile": 60, "heating_top_decile": 40, "electricity_top_decile": 40, "uniform_remaining": 40}:
+            raise ValueError("capacity origin quotas are not frozen")
+        if quotas["year_season"] + quotas["cooling_top_decile"] + quotas["heating_top_decile"] + quotas["electricity_top_decile"] + quotas["uniform_remaining"] != quotas["total"]:
+            raise ValueError("capacity origin quotas do not sum to total")
 
     renewable = payload["renewable_forecast"]
     if not isinstance(renewable, Mapping):
