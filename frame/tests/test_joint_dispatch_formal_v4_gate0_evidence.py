@@ -167,17 +167,23 @@ def _archive_access() -> dict:
     }
 
 
-def _resources() -> dict:
+def _resources(root: Path) -> dict:
+    train_hash = _write(root, "data/train.npz", b"train")
+    rows = [
+        {"method_id": method_id, "sample_count": 500, "p50_seconds": 0.1, "p95_seconds": 0.2, "projected_hours": 1.0 if method_id != "Differentiable-LP" else 2.0, "peak_memory_bytes": 100}
+        for method_id in FORMAL_V4_METHOD_IDS
+    ]
     return {
         "schema_version": "formal-v4.1-resource-projection-v1",
-        "rows": [
-            {"method_id": "RSC-PF", "sample_count": 500, "p50_seconds": 0.1, "p95_seconds": 0.2, "projected_hours": 1.0, "peak_memory_bytes": 100},
-            {"method_id": "Differentiable-LP", "sample_count": 500, "p50_seconds": 0.2, "p95_seconds": 0.3, "projected_hours": 2.0, "peak_memory_bytes": 200},
-        ],
+        "rows": rows,
         "worst_case_method_id": "Differentiable-LP",
         "worst_case_projected_hours": 2.0,
         "free_memory_fraction": 0.5,
         "free_disk_fraction": 0.5,
+        "probe_only": True,
+        "test_set_accessed": False,
+        "train_archive_path": "data/train.npz",
+        "train_archive_sha256": train_hash,
     }
 
 
@@ -189,7 +195,7 @@ def test_valid_typed_receipts_are_accepted(tmp_path: Path) -> None:
     validate_gate0_receipt("method_adapter", _methods(), run_root=tmp_path)
     validate_gate0_receipt("data_access", _data_access(), run_root=tmp_path)
     validate_gate0_receipt("archive_access", _archive_access(), run_root=tmp_path)
-    validate_gate0_receipt("resource_projection", _resources(), run_root=tmp_path)
+    validate_gate0_receipt("resource_projection", _resources(tmp_path), run_root=tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -212,7 +218,7 @@ def test_materially_invalid_receipt_is_rejected(tmp_path: Path, name: str, mutat
         "gradient": lambda root: _gradient(),
         "data_access": lambda root: _data_access(),
         "archive_access": lambda root: _archive_access(),
-        "resource_projection": lambda root: _resources(),
+        "resource_projection": _resources,
     }[name](tmp_path)
     mutator(payload)
     with pytest.raises(ValueError, match=message):

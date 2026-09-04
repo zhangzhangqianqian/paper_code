@@ -406,9 +406,14 @@ def _validate_archive_access(payload: Mapping[str, Any]) -> None:
         _fail("archive receipt does not contain train and selection members")
 
 
-def _validate_resource_projection(payload: Mapping[str, Any]) -> None:
+def _validate_resource_projection(payload: Mapping[str, Any], root: Path) -> None:
     _validate_schema(payload, "resource_projection")
-    _require(payload, "rows", "worst_case_method_id", "worst_case_projected_hours", "free_memory_fraction", "free_disk_fraction")
+    _require(payload, "rows", "worst_case_method_id", "worst_case_projected_hours", "free_memory_fraction", "free_disk_fraction", "probe_only", "test_set_accessed", "train_archive_path", "train_archive_sha256")
+    if _bool(payload["probe_only"], "resource_projection.probe_only") is not True or _bool(payload["test_set_accessed"], "resource_projection.test_set_accessed") is not False:
+        _fail("resource projection must be a train-only probe")
+    train_path = _resolve_inside(str(payload["train_archive_path"]), root, "resource_projection.train_archive_path")
+    if _sha256(train_path) != str(payload["train_archive_sha256"]):
+        _fail("resource projection train archive hash does not match run root")
     rows = _list(payload["rows"], "resource_projection.rows")
     if not rows:
         _fail("resource projection must contain method rows")
@@ -429,6 +434,8 @@ def _validate_resource_projection(payload: Mapping[str, Any]) -> None:
         _finite(row["p95_seconds"], f"resource_projection.{method_id}.p95_seconds")
         if int(row["peak_memory_bytes"]) < 0:
             _fail(f"resource projection peak memory is negative for {method_id}")
+    if method_ids != set(FORMAL_V4_METHOD_IDS):
+        _fail("resource projection must contain exactly the nine formal-v4 methods")
     worst_method = _string(payload["worst_case_method_id"], "resource_projection.worst_case_method_id")
     if worst_method not in method_ids:
         _fail("resource projection worst-case method is not present in rows")
@@ -464,7 +471,7 @@ def validate_gate0_receipt(
         "method_adapter": lambda: _validate_method_adapter(payload),
         "data_access": lambda: _validate_data_access(payload),
         "archive_access": lambda: _validate_archive_access(payload),
-        "resource_projection": lambda: _validate_resource_projection(payload),
+        "resource_projection": lambda: _validate_resource_projection(payload, root),
     }
     try:
         validators[receipt_name]()

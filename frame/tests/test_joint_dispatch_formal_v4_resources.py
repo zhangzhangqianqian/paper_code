@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.joint_dispatch.formal_v4_resources import ResourceProjection, benchmark_callable, project_resource_budget
+from src.joint_dispatch.formal_v4_resources import MethodResourceProjection, ResourceProjection, ResourceProjectionReceipt, benchmark_callable, project_resource_budget
 
 
 def test_resource_projection_enforces_runtime_and_margin_thresholds():
@@ -18,3 +18,13 @@ def test_callable_benchmark_reports_percentiles():
     stats = benchmark_callable("noop", lambda: None, warmup=1, iterations=3)
     assert stats["samples"] == 3.0
     assert stats["p95"] >= stats["p50"] >= 0.0
+
+
+def test_method_resource_receipt_requires_500_rows_and_maximum_consistency():
+    rows = [MethodResourceProjection("RSC-PF", 500, 0.01, 0.02, 1.0, 100)]
+    receipt = ResourceProjectionReceipt(rows, "RSC-PF", 1.0, 0.5, 0.5)
+    receipt.validate()
+    with pytest.raises(ValueError, match="500"):
+        MethodResourceProjection("bad", 499, 0.01, 0.02, 1.0, 100).validate()
+    with pytest.raises(ValueError, match="maximum"):
+        ResourceProjectionReceipt(rows, "RSC-PF", 0.5, 0.5, 0.5).validate()
