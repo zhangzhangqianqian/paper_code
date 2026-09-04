@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from pathlib import Path
+import re
 import time
 from typing import Any, Callable, Mapping, Protocol
 
@@ -22,6 +24,7 @@ DEPLOYABLE_METHODS = (
 )
 STOCHASTIC_METHODS = DEPLOYABLE_METHODS
 DETERMINISTIC_METHODS = ("Perfect-Information-MPC", "Seasonal-Naive-PTO")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -139,7 +142,7 @@ class _RegisteredMethod:
         elif self.adapter is not None:
             result = self.adapter.predict_and_dispatch(mapped, rolling_state)
         else:
-            result = {"dispatch": _safe_zero_plan(), "forecast": None}
+            raise RuntimeError(f"{self.method_id} has no executable planner or adapter")
         plan, forecast, metadata = _as_plan(result)
         metadata.update({"method_id": self.method_id, "deployable": self.deployable, "seed": self.seed, "state_sha256": state_hash})
         return MethodStepV42(forecast, plan, state_hash, self.optimizer_calls, time.perf_counter() - started, metadata)
@@ -160,6 +163,29 @@ def build_v42_method(
 
     if method_id not in METHODS:
         raise ValueError(f"unknown formal-v4.2 method: {method_id}")
+    if method_id in STOCHASTIC_METHODS:
+        if checkpoint is None:
+            raise ValueError(f"{method_id} requires a trained checkpoint")
+        checkpoint_hash = (
+            checkpoint.get("model_sha256", checkpoint.get("checkpoint_sha256", ""))
+            if isinstance(checkpoint, Mapping)
+            else getattr(checkpoint, "model_sha256", "")
+        )
+        if not _SHA256.fullmatch(str(checkpoint_hash)):
+            raise ValueError(f"{method_id} requires a trained checkpoint SHA-256")
+        checkpoint_path = (
+            checkpoint.get("path") if isinstance(checkpoint, Mapping)
+            else getattr(checkpoint, "path", None)
+        )
+        optimizer_steps = (
+            int(checkpoint.get("optimizer_steps", 0))
+            if isinstance(checkpoint, Mapping)
+            else None
+        )
+        if checkpoint_path is not None and not Path(checkpoint_path).is_file():
+            raise ValueError(f"{method_id} trained checkpoint file is missing")
+        if checkpoint_path is None and optimizer_steps is not None and optimizer_steps <= 0:
+            raise ValueError(f"{method_id} checkpoint is not marked as trained")
     if method_id == "Perfect-Information-MPC":
         return _RegisteredMethod(method_id, seed=None, parameters=parameters, planner=planner, adapter=adapter, checkpoint=checkpoint, normalization=normalization, deployable=False)
     if method_id == "Official iTransformer-PTO" and adapter is None and kwargs.get("forecaster") is not None:
