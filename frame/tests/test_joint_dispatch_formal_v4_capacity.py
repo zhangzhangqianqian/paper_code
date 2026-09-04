@@ -5,7 +5,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.joint_dispatch.formal_v4_capacity import DEFAULT_QUOTAS, select_capacity_origins
+from src.joint_dispatch.formal_v4_capacity import (
+    DEFAULT_QUOTAS,
+    run_capacity_audit,
+    select_capacity_origins,
+)
 from src.joint_dispatch.formal_v4_data import FormalV4BaseSeries
 
 
@@ -27,6 +31,28 @@ def _base() -> FormalV4BaseSeries:
 
 def _config() -> dict[str, object]:
     return {"capacity": {"origin_selection": dict(DEFAULT_QUOTAS)}}
+
+
+class _FakeResult:
+    success = True
+    message = "fake optimal"
+
+    def __init__(self, horizon: int = 4, shortage: float = 0.0) -> None:
+        self.values = {
+            "slack_c": np.full(horizon, shortage, dtype=np.float64),
+            "soc": np.full(horizon, 5.0, dtype=np.float64),
+            "p_chp": np.full(horizon, 0.1, dtype=np.float64),
+        }
+
+
+class _RecordingSolver:
+    def __init__(self, shortage: float = 0.0) -> None:
+        self.calls = []
+        self.shortage = shortage
+
+    def __call__(self, inputs):
+        self.calls.append(inputs)
+        return _FakeResult(shortage=self.shortage)
 
 
 def test_select_capacity_origins_is_deterministic_and_exactly_500() -> None:
@@ -94,3 +120,37 @@ def test_capacity_origins_reject_selection_or_evaluation_timestamps() -> None:
         assert "2015-2018" in str(exc)
     else:
         raise AssertionError("selection-year timestamps must be rejected")
+
+
+def test_capacity_audit_uses_rated_renewables_and_two_stage_state_rules() -> None:
+    base = _base()
+    manifest = select_capacity_origins(base, _config())
+    solver = _RecordingSolver()
+    parameters = {
+        "electric_chiller_capacity": 10.0,
+        "absorption_chiller_capacity": 10.0,
+        "bess_energy_capacity": 10.0,
+    }
+    receipt = run_capacity_audit(base, parameters, manifest, [1.0], solver=solver)
+    assert receipt.status == "pass"
+    assert receipt.selected is not None
+    assert receipt.stage_one[0]["by_stratum"]
+    assert len(solver.calls) == 500 + len(base.timestamps) - 27
+    assert solver.calls[0].initial_soc == 0.5
+    assert solver.calls[0].previous_chp == 0.0
+    np.testing.assert_array_equal(solver.calls[0].pv_available, base.renewable_realized[manifest.origin_indices[0] : manifest.origin_indices[0] + 4, 0])
+    assert solver.calls[501].previous_chp == 0.1
+
+
+def test_capacity_audit_fails_when_no_multiplier_passes_both_stages() -> None:
+    base = _base()
+    manifest = select_capacity_origins(base, _config())
+    receipt = run_capacity_audit(
+        base,
+        {"electric_chiller_capacity": 10.0, "absorption_chiller_capacity": 10.0, "bess_energy_capacity": 10.0},
+        manifest,
+        [1.0],
+        solver=_RecordingSolver(shortage=1.0),
+    )
+    assert receipt.status == "fail"
+    assert receipt.selected is None
