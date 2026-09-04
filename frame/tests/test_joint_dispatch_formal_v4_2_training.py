@@ -10,6 +10,7 @@ from src.joint_dispatch.formal_v4_2_training import (
     StageBudgetV42,
     refresh_rollin_sample,
     run_stage_j_pair,
+    run_stage_j,
     run_training_seed_v42,
 )
 
@@ -80,3 +81,16 @@ def test_stage_runner_persists_optimizer_across_batches_and_order():
     assert receipt.optimizer_final_steps["P"] > 1
     assert receipt.optimizer_final_steps["S"] > 1
     assert receipt.optimizer_final_steps["J_joint"] > 1
+
+
+def test_stage_results_record_epoch_loss_history():
+    model = ToyModel()
+    budget = StageBudgetV42(max_epochs=2, minimum_epochs=1, ramp_epochs=1)
+    from src.joint_dispatch.formal_v4_2_training import run_stage_p, run_stage_s
+    p = run_stage_p(model, {"train": [_batch(), _batch()]}, budget=budget)
+    assert len(p.loss_history) == 2
+    s = run_stage_s(p.model, {"train": [_batch(), _batch()]}, budget=budget)
+    assert len(s.loss_history) == 2
+    j = run_stage_j(s.model, {"train": [_batch()]}, mode="joint", budget=budget)
+    assert len(j.loss_history) == 2
+    assert j.optimizer_steps > 1

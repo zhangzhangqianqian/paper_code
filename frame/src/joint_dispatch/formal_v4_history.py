@@ -47,7 +47,11 @@ def _receipt_payload(value: Mapping[str, Any] | str | Path) -> Mapping[str, Any]
         if not path.exists():
             raise PermissionError("causal trajectory requires an existing capacity receipt")
         value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, Mapping) or value.get("gate0_authorized") is not True:
+    if not isinstance(value, Mapping):
+        raise PermissionError("causal trajectory requires a Gate 0 authorized capacity receipt")
+    legacy_authorized = value.get("gate0_authorized") is True
+    v42_authorized = value.get("schema") == "formal-v4.2-capacity-freeze-v1" and value.get("status") == "pass"
+    if not (legacy_authorized or v42_authorized):
         raise PermissionError("causal trajectory requires a Gate 0 authorized capacity receipt")
     return value
 

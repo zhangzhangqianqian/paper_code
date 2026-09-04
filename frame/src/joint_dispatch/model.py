@@ -183,7 +183,11 @@ class JointForecastDispatchModel(nn.Module):
         self.register_buffer("physical_feature_scale", self._positive_vector(physical_feature_scale, 10, 1.0))
         self.register_buffer("scheduler_context_mean", self._vector(scheduler_context_mean, 6, 0.0))
         self.register_buffer("scheduler_context_scale", self._positive_vector(scheduler_context_scale, 6, 1.0))
-        self.decoder_parameters = MappingProxyType(dict(decoder_parameters or self._test_parameters()))
+        # Keep an owned copy: Stage S must be byte-identically cloned into the
+        # joint and decoupled Stage-J branches, and MappingProxyType cannot be
+        # deep-copied by Python.  The experiment contract supplies and hashes
+        # this mapping, so ownership here does not weaken provenance.
+        self.decoder_parameters = dict(decoder_parameters or self._test_parameters())
 
     @staticmethod
     def _vector(value: Tensor | None, size: int, fill: float) -> Tensor:

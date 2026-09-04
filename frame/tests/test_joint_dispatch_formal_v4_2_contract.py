@@ -31,6 +31,9 @@ def test_v42_contract_freezes_information_and_budget_boundaries() -> None:
     assert contract.gate3_seeds == (2026, 2027, 2028, 2029, 2030)
     assert contract.gas_semantics == "station_side_auxiliary_prior"
     assert contract.training["stage_order"] == ["P", "teacher", "S", "clone", "J"]
+    assert contract.pilot["seed"] == 2026
+    assert contract.pilot["windows"] == 128
+    assert contract.pilot["rollout_windows"] == 24
     assert contract.latent_control_dim == 15
     assert len(contract.dispatch_order) == 21
     assert contract.allow_future_binary_decisions is False

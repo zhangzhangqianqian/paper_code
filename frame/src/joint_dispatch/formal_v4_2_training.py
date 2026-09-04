@@ -87,6 +87,7 @@ class StageResultV42:
     loss: float
     decision_forecaster_gradient_norm: float = 0.0
     scheduler_gradient_norm: float = 0.0
+    loss_history: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,13 @@ def _dispatch_targets(batch: Mapping[str, Any], reference: Tensor) -> Tensor | N
     return _to_tensor(value, dtype=reference.dtype).to(device=reference.device, dtype=reference.dtype)
 
 
+def _imitation_loss(dispatch: Tensor, teacher: Tensor) -> Tensor:
+    if teacher.shape != dispatch.shape or not bool(torch.isfinite(teacher).all()):
+        raise ValueError("teacher_dispatch must match dispatch and be finite")
+    scale = teacher.detach().abs().mean(dim=(0, 1)).clamp_min(1.0)
+    return F.smooth_l1_loss(dispatch / scale, teacher.to(dispatch) / scale)
+
+
 def _run_model(model: nn.Module, batch: Mapping[str, Any], *, decouple_decision: bool = False) -> Any:
     inputs = _forward_inputs(batch)
     signature = inspect.signature(model.forward)
@@ -222,18 +230,22 @@ def run_stage_p(model: nn.Module, loaders: Any, budget: StageBudgetV42 | None = 
     for parameter in scheduler: parameter.requires_grad_(False)
     optimizer = torch.optim.AdamW(list(forecaster), lr=budget.forecaster_lr, weight_decay=budget.weight_decay)
     last_loss = 0.0
+    history: list[float] = []
     completed = 0
     for epoch in range(budget.max_epochs):
         model.train()
+        epoch_losses: list[float] = []
         for batch in train:
             output = _run_model(model, batch)
             loss = _forecast_loss(output, batch)
-            last_loss = float(loss.detach()); _optimizer_step(optimizer, model, forecaster, loss, budget.max_grad_norm)
+            last_loss = float(loss.detach()); epoch_losses.append(last_loss)
+            _optimizer_step(optimizer, model, forecaster, loss, budget.max_grad_norm)
+        history.append(float(np.mean(epoch_losses)))
         completed = epoch + 1
         # Selection is read-only and never the test/evaluation split.
         if budget.can_stop(epoch) and len(train) == 0:
             break
-    return StageResultV42("P", "forecast_pretrain", model, optimizer, completed, _optimizer_steps(optimizer), last_loss)
+    return StageResultV42("P", "forecast_pretrain", model, optimizer, completed, _optimizer_steps(optimizer), last_loss, loss_history=tuple(history))
 
 
 def run_stage_s(model: nn.Module, loaders: Any, budget: StageBudgetV42 | None = None, lineage: Mapping[str, Any] | None = None, seed: int = 2026, **_: Any) -> StageResultV42:
@@ -246,18 +258,75 @@ def run_stage_s(model: nn.Module, loaders: Any, budget: StageBudgetV42 | None = 
     for parameter in forecaster: parameter.requires_grad_(False)
     for parameter in scheduler: parameter.requires_grad_(True)
     optimizer = torch.optim.AdamW(list(scheduler), lr=budget.scheduler_lr, weight_decay=budget.weight_decay)
-    last_loss = 0.0; completed = 0
+    last_loss = 0.0; completed = 0; history: list[float] = []
     for epoch in range(budget.max_epochs):
         model.train()
+        epoch_losses: list[float] = []
         for batch in train:
             output = _run_model(model, batch, decouple_decision=True)
             teacher = _dispatch_targets(batch, output.dispatch)
             if teacher is None:
                 raise ValueError("Stage S requires teacher_dispatch")
-            loss = F.smooth_l1_loss(output.dispatch, teacher)
-            last_loss = float(loss.detach()); _optimizer_step(optimizer, model, scheduler, loss, budget.max_grad_norm)
+            loss = _imitation_loss(output.dispatch, teacher)
+            last_loss = float(loss.detach()); epoch_losses.append(last_loss)
+            _optimizer_step(optimizer, model, scheduler, loss, budget.max_grad_norm)
+        history.append(float(np.mean(epoch_losses)))
         completed = epoch + 1
-    return StageResultV42("S", "scheduler_pretrain", model, optimizer, completed, _optimizer_steps(optimizer), last_loss)
+    return StageResultV42("S", "scheduler_pretrain", model, optimizer, completed, _optimizer_steps(optimizer), last_loss, loss_history=tuple(history))
+
+
+def run_stage_j(
+    model: nn.Module,
+    loaders: Any,
+    *,
+    mode: Literal["joint", "decoupled"],
+    budget: StageBudgetV42 | None = None,
+    c_ref: float = 1.0,
+    parameters: Mapping[str, Any] | None = None,
+    seed: int = 2026,
+) -> StageResultV42:
+    """Train one Stage-J branch with one persistent optimizer."""
+
+    if mode not in {"joint", "decoupled"}:
+        raise ValueError("Stage J mode must be joint or decoupled")
+    budget = budget or StageBudgetV42()
+    seed_everything(seed)
+    train = _batches(loaders.get("train") if isinstance(loaders, Mapping) else loaders)
+    if not train:
+        raise ValueError("Stage J requires non-empty train batches")
+    forecast_params, scheduler_params = _model_groups(model)
+    for parameter in forecast_params:
+        parameter.requires_grad_(mode == "joint")
+    for parameter in scheduler_params:
+        parameter.requires_grad_(True)
+    active_forecast = [p for p in forecast_params if p.requires_grad]
+    active_scheduler = [p for p in scheduler_params if p.requires_grad]
+    groups = []
+    if active_forecast:
+        groups.append({"params": active_forecast, "lr": budget.forecaster_lr})
+    groups.append({"params": active_scheduler, "lr": budget.scheduler_lr})
+    optimizer = torch.optim.AdamW(groups, weight_decay=budget.weight_decay)
+    history: list[float] = []
+    last = fg_norm = sg_norm = 0.0
+    decoder_parameters = _decoder_parameters(model, parameters)
+    for epoch in range(budget.max_epochs):
+        model.train()
+        epoch_losses: list[float] = []
+        for batch in train:
+            loss, fg_norm, sg_norm, last = _joint_loss(
+                model, batch, mode=mode, epoch=epoch, budget=budget,
+                c_ref=c_ref, parameters=decoder_parameters,
+            )
+            epoch_losses.append(last)
+            _optimizer_step(
+                optimizer, model, tuple((*active_forecast, *active_scheduler)),
+                loss, budget.max_grad_norm,
+            )
+        history.append(float(np.mean(epoch_losses)))
+    return StageResultV42(
+        "J", mode, model, optimizer, budget.max_epochs, _optimizer_steps(optimizer),
+        last, fg_norm, sg_norm, tuple(history),
+    )
 
 
 def _joint_loss(model: nn.Module, batch: Mapping[str, Any], *, mode: Literal["joint", "decoupled"], epoch: int, budget: StageBudgetV42, c_ref: float, parameters: Mapping[str, Any]) -> tuple[Tensor, float, float, float]:
@@ -272,7 +341,7 @@ def _joint_loss(model: nn.Module, batch: Mapping[str, Any], *, mode: Literal["jo
         # A minimal fallback is useful for isolated unit tests; production
         # formal runs always provide realized renewable labels and state.
         forecast = _forecast_loss(output, batch)
-        imitation = F.smooth_l1_loss(output.dispatch, teacher) if teacher is not None else forecast.new_zeros(())
+        imitation = _imitation_loss(output.dispatch, teacher) if teacher is not None else forecast.new_zeros(())
         total = budget.weights(epoch).forecast * forecast + budget.weights(epoch).imitation * imitation
         return total, 0.0, 0.0, float(total.detach())
     realized_t = _to_tensor(realized, dtype=output.dispatch.dtype).to(output.dispatch)
@@ -302,7 +371,11 @@ def run_stage_j_pair(stage_s: Any, batch: Mapping[str, Any], budget: StageBudget
     receipts: list[GradientBoundaryReceiptV42] = []
     for mode, model in (("joint", joint), ("decoupled", decoupled)):
         seed_everything(seed)
-        for parameter in model.parameters(): parameter.requires_grad_(True)
+        forecasts, schedulers = _model_groups(model)
+        for parameter in forecasts:
+            parameter.requires_grad_(mode == "joint")
+        for parameter in schedulers:
+            parameter.requires_grad_(True)
         output = _run_model(model, batch, decouple_decision=mode == "decoupled")
         decision: Tensor
         if all(key in batch for key in ("realized_renewables", "initial_soc", "previous_chp", "target_physical")):
@@ -318,7 +391,6 @@ def run_stage_j_pair(stage_s: Any, batch: Mapping[str, Any], budget: StageBudget
             decision = breakdown.normalized_realized_objective + breakdown.constraint_penalty
         else:
             decision = output.dispatch.square().mean()
-        forecasts, schedulers = _model_groups(model)
         active_forecasts = tuple(parameter for parameter in forecasts if parameter.requires_grad)
         active_schedulers = tuple(parameter for parameter in schedulers if parameter.requires_grad)
         fg = torch.autograd.grad(decision, active_forecasts, allow_unused=True, retain_graph=True) if active_forecasts else tuple()
@@ -390,20 +462,12 @@ def run_training_seed_v42(
     j_steps: dict[str, int] = {}
     losses: dict[str, float] = {"P": p_result.loss, "S": s_result.loss}
     for mode, model_j, key in (("joint", joint_model, "J_joint"), ("decoupled", decoupled_model, "J_decoupled")):
-        forecast_params, scheduler_params = _model_groups(model_j)
-        for parameter in forecast_params: parameter.requires_grad_(mode == "joint")
-        for parameter in scheduler_params: parameter.requires_grad_(True)
-        optimizer = torch.optim.AdamW([
-            {"params": [p for p in forecast_params if p.requires_grad], "lr": budget.forecaster_lr},
-            {"params": [p for p in scheduler_params if p.requires_grad], "lr": budget.scheduler_lr},
-        ], weight_decay=budget.weight_decay)
-        last = 0.0; fg_norm = sg_norm = 0.0
-        for epoch in range(budget.max_epochs):
-            for batch in train:
-                loss, fg_norm, sg_norm, last = _joint_loss(model_j, batch, mode=mode, epoch=epoch, budget=budget, c_ref=c_ref, parameters=_decoder_parameters(model_j, parameters))
-                _optimizer_step(optimizer, model_j, tuple(p for p in (*forecast_params, *scheduler_params) if p.requires_grad), loss, budget.max_grad_norm)
-        j_steps[key] = _optimizer_steps(optimizer); losses[key] = last
-        boundaries.append(GradientBoundaryReceiptV42(mode, fg_norm, sg_norm))
+        result = run_stage_j(
+            model_j, data, mode=mode, budget=budget, c_ref=c_ref,
+            parameters=parameters, seed=seed,
+        )
+        j_steps[key] = result.optimizer_steps; losses[key] = result.loss
+        boundaries.append(GradientBoundaryReceiptV42(mode, result.decision_forecaster_gradient_norm, result.scheduler_gradient_norm))
     events.append("J_complete")
     return TrainingRunReceiptV42(int(seed), tuple(events), {"P": p_result.optimizer_steps, "S": s_result.optimizer_steps, **j_steps}, tuple(boundaries), losses, False)
 
@@ -418,6 +482,6 @@ def run_direct_policy_training(*args: Any, **kwargs: Any) -> TrainingRunReceiptV
 
 __all__ = [
     "GradientBoundaryReceiptV42", "StageBudgetV42", "StageResultV42", "TrainingRunReceiptV42",
-    "refresh_rollin_sample", "run_direct_policy_training", "run_stage_j_pair", "run_stage_j_pair",
+    "refresh_rollin_sample", "run_direct_policy_training", "run_stage_j", "run_stage_j_pair",
     "run_stage_p", "run_stage_s", "run_training_seed_v42", "seed_everything",
 ]

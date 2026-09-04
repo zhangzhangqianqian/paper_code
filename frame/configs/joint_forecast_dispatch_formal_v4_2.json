@@ -64,6 +64,18 @@
     "curriculum_ramp_epochs": 18,
     "forecast_task_weights": [1.0, 1.0, 1.0, 0.25]
   },
+  "pilot": {
+    "seed": 2026,
+    "segment_hours": 96,
+    "segments": 4,
+    "windows": 128,
+    "batch_size": 32,
+    "stage_epochs": 3,
+    "rollout_windows": 24,
+    "shortage_rate_max": 0.80,
+    "forecaster_learning_rate": 0.001,
+    "scheduler_learning_rate": 0.001
+  },
   "selection": {
     "selection_split": "selection",
     "checkpoint_score": "rolling_penalized_objective",

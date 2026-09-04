@@ -117,6 +117,7 @@ class NormalizedWindowV42:
     scheduler_context: np.ndarray
     forecast_target: np.ndarray
     target: np.ndarray
+    target_normalized: np.ndarray
 
 
 def fit_train_normalization(split: FormalV4WindowSplit, years: tuple[int, ...] = (2015, 2016, 2017, 2018)) -> NormalizationReceiptV42:
@@ -136,14 +137,24 @@ def _normalize(values: np.ndarray, mean: np.ndarray, scale: np.ndarray) -> np.nd
 def apply_normalization(split: FormalV4WindowSplit, receipt: NormalizationReceiptV42) -> NormalizedWindowV42:
     if receipt.train_years != (2015, 2016, 2017, 2018):
         raise ValueError("normalization receipt is not formal-v4.2 train-only")
+    scheduler_context = np.concatenate((
+        np.asarray(split.renewable_forecast, dtype=np.float32),
+        np.asarray(split.prices_and_weights, dtype=np.float32),
+        np.repeat(np.asarray(split.initial_soc, dtype=np.float32)[:, None, :], 4, axis=1),
+    ), axis=-1)
+    target = np.asarray(split.forecast_target, dtype=np.float32)
     return NormalizedWindowV42(
         load_history=_normalize(split.load_history, receipt.field_mean["load"], receipt.field_scale["load"]),
         exog_history=_normalize(split.exog_history, receipt.field_mean["exog"], receipt.field_scale["exog"]),
         device_history=_normalize(split.device_history, receipt.field_mean["device"], receipt.field_scale["device"]),
-        activity_history=_normalize(split.activity_history, receipt.field_mean["activity"], receipt.field_scale["activity"]),
-        scheduler_context=_normalize(split.prices_and_weights, receipt.field_mean["scheduler"], receipt.field_scale["scheduler"]),
-        forecast_target=np.asarray(split.forecast_target, dtype=np.float32),
-        target=np.asarray(split.forecast_target, dtype=np.float32),
+        # Activity indicators are semantic binary inputs.  Keep their 0/1
+        # identity instead of z-scoring them; the forecaster validates this
+        # contract before encoding the device state.
+        activity_history=np.asarray(split.activity_history, dtype=np.float32),
+        scheduler_context=scheduler_context,
+        forecast_target=target,
+        target=target,
+        target_normalized=_normalize(target, receipt.field_mean["load"], receipt.field_scale["load"]),
     )
 
 

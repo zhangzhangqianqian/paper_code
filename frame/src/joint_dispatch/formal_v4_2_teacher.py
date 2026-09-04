@@ -334,7 +334,13 @@ def build_same_information_teacher_v42(
         ))
         if not result.success:
             raise RuntimeError(f"same-information teacher LP failed at row {index}: {result.message}")
-        dispatch_rows.append(np.column_stack([result.values[name] for name in VARIABLES]))
+        dispatch = np.column_stack([result.values[name] for name in VARIABLES]).astype(np.float64)
+        minimum_dispatch = float(np.min(dispatch))
+        if minimum_dispatch < -1.0e-6:
+            raise RuntimeError(f"same-information teacher LP returned {minimum_dispatch} at row {index}")
+        # HiGHS can emit signed zero or sub-tolerance negatives at active
+        # lower bounds.  Canonicalize those numerical artifacts to physical 0.
+        dispatch_rows.append(np.maximum(dispatch, 0.0))
         objectives.append(float(result.objective))
         shortages.append([
             float(np.sum(result.values["slack_e"])),

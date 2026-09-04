@@ -10,7 +10,8 @@ from src.joint_dispatch.formal_v4_2_data import (
     fit_train_normalization,
     select_gate1_origins,
 )
-from src.joint_dispatch.formal_v4_data import FormalV4WindowSplit
+from src.joint_dispatch.formal_v4_data import FormalV4BaseSeries, FormalV4WindowSplit, materialize_state_windows
+from src.joint_dispatch.contract import DISPATCH_ORDER
 
 
 def _split(split: str = "train", n: int = 48) -> FormalV4WindowSplit:
@@ -62,11 +63,30 @@ def test_normalization_uses_train_only_and_handles_zero_scale() -> None:
     shifted = replace(train, forecast_target=train.forecast_target + 1.0e9)
     normalized = apply_normalization(shifted, receipt)
     assert np.isfinite(normalized.target).all()
+    assert normalized.scheduler_context.shape == (len(train), 4, 6)
+    np.testing.assert_array_equal(normalized.scheduler_context[..., :2], shifted.renewable_forecast.astype(np.float32))
+    np.testing.assert_array_equal(normalized.scheduler_context[..., 2:5], shifted.prices_and_weights.astype(np.float32))
+    np.testing.assert_array_equal(normalized.activity_history, shifted.activity_history.astype(np.float32))
+    assert normalized.target_normalized.shape == normalized.target.shape
 
 
 def test_normalization_rejects_selection_fit() -> None:
     with pytest.raises(ValueError, match="train split"):
         fit_train_normalization(_split("selection"))
+
+
+def test_v42_capacity_receipt_materializes_state_windows() -> None:
+    n = 40
+    times = np.datetime64("2015-01-01") + np.arange(n).astype("timedelta64[h]")
+    tasks_and_exog = np.ones((n, 16), dtype=np.float64)
+    renewable = np.ones((n, 2), dtype=np.float64)
+    base = FormalV4BaseSeries(tasks_and_exog, renewable, renewable, np.ones((n, 3)), times, "train")
+    receipt = {"schema": "formal-v4.2-capacity-freeze-v1", "status": "pass", "selected": {"multiplier": 1.0}}
+    materialized = materialize_state_windows(
+        base, np.zeros((n, len(DISPATCH_ORDER))), capacity_receipt=receipt,
+        bess_energy_capacity=1.0,
+    )
+    assert materialized.split == "train"
 
 
 def test_state_windows_keep_complete_24_hour_device_trajectory() -> None:

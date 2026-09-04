@@ -121,6 +121,24 @@ class FormalV42Contract:
             raise ValueError("Gate 3 seeds are not frozen")
         if self.payload["training"].get("stage_order") != ["P", "teacher", "S", "clone", "J"]:
             raise ValueError("training stages are not strictly sequential")
+        pilot = self.payload.get("pilot")
+        if not isinstance(pilot, Mapping):
+            raise ValueError("formal-v4.2 pilot budget is missing")
+        expected_pilot = {
+            "seed": 2026, "segment_hours": 96, "segments": 4, "windows": 128,
+            "batch_size": 32, "stage_epochs": 3, "rollout_windows": 24,
+            "shortage_rate_max": 0.80, "forecaster_learning_rate": 0.001,
+            "scheduler_learning_rate": 0.001,
+        }
+        if set(pilot) != set(expected_pilot):
+            raise ValueError("formal-v4.2 pilot fields are not frozen")
+        for name, expected in expected_pilot.items():
+            actual = pilot[name]
+            if isinstance(expected, float):
+                if float(actual) != expected:
+                    raise ValueError(f"formal-v4.2 pilot {name} is not frozen")
+            elif int(actual) != expected:
+                raise ValueError(f"formal-v4.2 pilot {name} is not frozen")
         if self.payload.get("allow_evaluation_access_before_gate3") is not False:
             raise ValueError("evaluation access must remain fail-closed")
 

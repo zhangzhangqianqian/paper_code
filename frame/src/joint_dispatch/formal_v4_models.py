@@ -88,9 +88,33 @@ def _pad_device_history(device_history: Tensor) -> Tensor:
 
 
 class _FormalV4Base(nn.Module):
-    def __init__(self, *, decoder_parameters: Mapping[str, Any] | None = None, dropout: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        decoder_parameters: Mapping[str, Any] | None = None,
+        task_mean: Tensor | None = None,
+        task_scale: Tensor | None = None,
+        physical_feature_mean: Tensor | None = None,
+        physical_feature_scale: Tensor | None = None,
+        previous_chp_mean: Tensor | float | None = None,
+        previous_chp_scale: Tensor | float | None = None,
+        dropout: float = 0.0,
+    ) -> None:
         super().__init__()
-        self.core = JointForecastDispatchModel(decoder_parameters=decoder_parameters, dropout=dropout)
+        self.core = JointForecastDispatchModel(
+            decoder_parameters=decoder_parameters,
+            task_mean=task_mean,
+            task_scale=task_scale,
+            physical_feature_mean=physical_feature_mean,
+            physical_feature_scale=physical_feature_scale,
+            dropout=dropout,
+        )
+        previous_mean = torch.as_tensor(0.0 if previous_chp_mean is None else previous_chp_mean, dtype=torch.float32).reshape(1)
+        previous_scale = torch.as_tensor(1.0 if previous_chp_scale is None else previous_chp_scale, dtype=torch.float32).reshape(1)
+        if not bool(torch.isfinite(previous_mean).all()) or not bool(torch.isfinite(previous_scale).all()) or bool((previous_scale <= 0.0).any()):
+            raise ValueError("previous CHP normalization must be finite with positive scale")
+        self.register_buffer("previous_chp_mean", previous_mean)
+        self.register_buffer("previous_chp_scale", previous_scale)
         self.state_encoder = CausalStateDSTCNEncoder(dropout=dropout)
         self.forecast_state_fusion = nn.Linear(32, 4)
         self.state_to_scheduler = nn.Sequential(nn.Linear(32, 16), nn.GELU())
@@ -124,7 +148,8 @@ class _FormalV4Base(nn.Module):
         normalized = (physical_features - self.core.physical_feature_mean) / self.core.physical_feature_scale
         normalized_for_scheduler = normalized.to(dtype=state.dtype)
         state16 = self.state_to_scheduler(state)
-        logits = self.core.scheduler(normalized_for_scheduler, state16, previous_chp.to(dtype=state.dtype))
+        normalized_previous = (previous_chp.to(dtype=state.dtype) - self.previous_chp_mean.to(dtype=state.dtype)) / self.previous_chp_scale.to(dtype=state.dtype)
+        logits = self.core.scheduler(normalized_for_scheduler, state16, normalized_previous)
         controls_flat = torch.sigmoid(logits / CONTROL_TEMPERATURE)
         dispatch = decode_feasible_controls(
             controls_flat, physical_features, self.core.decoder_parameters,
@@ -162,8 +187,8 @@ class RSCPFModel(_FormalV4Base):
 class DirectPolicyModel(_FormalV4Base):
     """Decision-only comparator with no supervised forecast output or loss."""
 
-    def __init__(self, *, decoder_parameters: Mapping[str, Any] | None = None, dropout: float = 0.0) -> None:
-        super().__init__(decoder_parameters=decoder_parameters, dropout=dropout)
+    def __init__(self, *, decoder_parameters: Mapping[str, Any] | None = None, dropout: float = 0.0, **normalization: Any) -> None:
+        super().__init__(decoder_parameters=decoder_parameters, dropout=dropout, **normalization)
         self.planning_head = nn.Sequential(nn.Linear(32 + 6, 64), nn.GELU(), nn.Linear(64, 3))
 
     def forward(self, **inputs: Tensor) -> FormalV4ForwardOutput:

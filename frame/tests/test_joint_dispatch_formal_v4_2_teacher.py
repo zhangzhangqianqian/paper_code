@@ -44,6 +44,12 @@ def _fake_solver(inputs):
     return DispatchResult("optimal", "fake", 7.0, values, {"electricity": 0.0, "cooling": 0.0, "heating": 0.0}, 0.0)
 
 
+def _signed_zero_solver(inputs):
+    result = _fake_solver(inputs)
+    result.values["pv_use"][:] = -1.0e-7
+    return result
+
+
 def _stage(window):
     # The gas component is intentionally different from the realised target.
     return np.full((4, 4), 5.0, dtype=np.float64)
@@ -77,6 +83,14 @@ def test_teacher_ignores_realized_future_when_prediction_is_fixed():
     np.testing.assert_array_equal(first.predicted_forecast, second.predicted_forecast)
     np.testing.assert_array_equal(first.renewable_plan, second.renewable_plan)
     np.testing.assert_array_equal(first.dispatch, second.dispatch)
+
+
+def test_teacher_canonicalizes_solver_bound_tolerance_to_zero():
+    overlay = build_same_information_teacher_v42(
+        _stage, _window(), seed=2026, solver=_signed_zero_solver,
+        stage_p_checkpoint_sha256="6" * 64,
+    )
+    assert np.min(overlay.dispatch) == 0.0
 
 
 def test_teacher_cache_rejects_checkpoint_or_state_hash_change(tmp_path: Path):

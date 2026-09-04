@@ -260,7 +260,11 @@ def _capacity_receipt(value: Mapping[str, Any] | str | Path | None) -> Mapping[s
         payload = json.loads(path.read_text(encoding="utf-8"))
     else:
         payload = value
-    if not isinstance(payload, Mapping) or payload.get("gate0_authorized") is not True:
+    if not isinstance(payload, Mapping):
+        raise PermissionError("state materialization requires a Gate 0 capacity receipt")
+    legacy_authorized = payload.get("gate0_authorized") is True
+    v42_authorized = payload.get("schema") == "formal-v4.2-capacity-freeze-v1" and payload.get("status") == "pass"
+    if not (legacy_authorized or v42_authorized):
         raise PermissionError("state materialization requires a Gate 0 capacity receipt")
     schema = str(payload.get("schema_version", ""))
     if schema == "formal-v4-capacity-freeze-v1":
