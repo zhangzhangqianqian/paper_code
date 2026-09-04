@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
+from torch import nn
 
 from src.joint_dispatch.formal_v4_2_artifacts import sha256_file, write_once_json
 from src.joint_dispatch.formal_v4_2_contract import load_formal_v4_2_contract
@@ -12,7 +14,11 @@ from src.joint_dispatch.formal_v4_2_data import fit_train_normalization
 from src.joint_dispatch.formal_v4_2_gate2_training import (
     iter_gate2_batches,
     load_gate2_data,
+    train_direct_policy,
+    train_official_itransformer_pto,
+    train_rsc_family,
 )
+from src.joint_dispatch.formal_v4_2_training import StageBudgetV42
 from src.joint_dispatch.formal_v4_data import FormalV4WindowSplit
 
 
@@ -119,3 +125,77 @@ def test_gate2_rejects_gate1_contract_mismatch(tmp_path: Path) -> None:
     with pytest.raises(PermissionError, match="contract lineage"):
         load_gate2_data(root, contract)
 
+
+def _parameters() -> dict[str, float]:
+    return {
+        "grid_import_capacity": 20.0, "chp_electric_capacity": 10.0,
+        "chp_heat_capacity": 12.0, "gas_boiler_capacity": 20.0,
+        "electric_chiller_capacity": 20.0, "absorption_chiller_capacity": 20.0,
+        "bess_power_capacity": 5.0, "bess_energy_capacity": 20.0,
+        "chp_electric_efficiency": 0.4, "chp_heat_efficiency": 0.45,
+        "gas_boiler_efficiency": 0.9, "electric_chiller_cop": 3.0,
+        "absorption_chiller_cop": 0.8, "bess_roundtrip_efficiency": 0.9,
+        "bess_throughput_cost": 1.0e-6, "unserved_penalty": 100.0,
+        "chp_ramp_fraction": 1.0, "surplus_penalty": 0.1,
+        "grid_energy_price": 1.0, "gas_energy_price": 1.0,
+        "carbon_price": 0.0,
+    }
+
+
+def _tiny_bundle(tmp_path: Path):
+    root, contract = _run_root(tmp_path)
+    data = load_gate2_data(root, contract)
+    # Four train examples are sufficient to prove the execution identities.
+    return data, {
+        "contract_sha256": contract.contract_sha256,
+        "source_manifest_sha256": "1" * 64,
+        "selected_candidate_value": 1.0,
+    }
+
+
+def _tiny_budget() -> StageBudgetV42:
+    return StageBudgetV42(max_epochs=1, minimum_epochs=1, ramp_epochs=1)
+
+
+def test_rsc_pair_has_identical_stage_s_parent(tmp_path: Path) -> None:
+    data, freeze = _tiny_bundle(tmp_path)
+    teacher = np.zeros((len(data.train), 4, 21), dtype=np.float64)
+    rows = train_rsc_family(
+        2026, data, freeze, _parameters(), tmp_path / "rsc",
+        budget=_tiny_budget(), teacher_dispatch=teacher,
+    )
+    assert rows["RSC-PF"].stage_s_parent_sha256 == rows["Decoupled-RSC-PF"].stage_s_parent_sha256
+    assert rows["RSC-PF"].decision_forecaster_gradient_norm > 0.0
+    assert rows["Decoupled-RSC-PF"].decision_forecaster_gradient_norm == 0.0
+    assert "State-Conditioned-PTO" in rows
+
+
+def test_direct_policy_has_no_forecast_training(tmp_path: Path) -> None:
+    data, freeze = _tiny_bundle(tmp_path)
+    teacher = np.zeros((len(data.train), 4, 21), dtype=np.float64)
+    row = train_direct_policy(
+        2026, data, freeze, _parameters(), tmp_path / "direct",
+        budget=_tiny_budget(), teacher_dispatch=teacher,
+    )
+    assert row.training_receipt["forecast_loss_applicable"] is False
+    assert row.training_receipt["optimizer_steps"] > 0
+
+
+class _TinyITransformer(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.projection = nn.Linear(4, 4)
+
+    def forward(self, history: torch.Tensor) -> torch.Tensor:
+        return self.projection(history[:, -4:, :])
+
+
+def test_itransformer_records_upstream_adaptation(tmp_path: Path) -> None:
+    data, freeze = _tiny_bundle(tmp_path)
+    receipt = {"commit": "c2426e68ca13f74aaec08045c5c724d8ad328124"}
+    row = train_official_itransformer_pto(
+        2026, data, freeze, receipt, tmp_path / "itransformer",
+        budget=_tiny_budget(), model=_TinyITransformer(),
+    )
+    assert row.training_receipt["upstream_commit"] == receipt["commit"]
+    assert row.training_receipt["method_label"] == "official_backbone_adaptation"
