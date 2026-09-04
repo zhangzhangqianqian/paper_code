@@ -23,6 +23,7 @@ if str(FRAME_ROOT) not in sys.path:
 from src.joint_dispatch.formal_protocol_v4 import load_formal_v4_spec  # noqa: E402
 from src.joint_dispatch.formal_v4_access import DataAccessReceipt, scan_runtime_access  # noqa: E402
 from src.joint_dispatch.formal_v4_diffopt import DifferentiableLPGateReceipt  # noqa: E402
+from src.joint_dispatch.formal_v4_gate0_evidence import validate_gate0_receipt  # noqa: E402
 from src.joint_dispatch.formal_v4_gate0 import (  # noqa: E402
     MANDATORY_CHECK_IDS,
     Gate0Context,
@@ -53,6 +54,19 @@ def _file_check(path: Path, *, schema: str | None = None) -> dict[str, Any]:
     if schema is not None and payload.get("schema_version") != schema:
         raise ValueError(f"{path.name} schema must equal {schema}")
     return {"passed": True, "path": str(path), "sha256": _sha256(path), "schema_version": payload.get("schema_version")}
+
+
+def _typed_file_check(path: Path, receipt_name: str, run_root: Path) -> dict[str, Any]:
+    """Read and content-validate one immutable formal-v4.1 receipt."""
+
+    payload = _read_json(path)
+    validate_gate0_receipt(receipt_name, payload, run_root=run_root)
+    return {
+        "passed": True,
+        "path": str(path),
+        "sha256": _sha256(path),
+        "schema_version": payload.get("schema_version"),
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -157,7 +171,7 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
     check("materialized_data", lambda: {"passed": train_archive.is_file() and selection_archive.is_file(), "train": str(train_archive), "selection": str(selection_archive)})
 
     trajectory_receipt = protocol / "TRAJECTORY_RECEIPT.json"
-    check("trajectory_physics", lambda: _file_check(trajectory_receipt, schema="formal-v4.1-trajectory-receipt-v1"))
+    check("trajectory_physics", lambda: _typed_file_check(trajectory_receipt, "trajectory", root))
 
     normalization = root / "NORMALIZATION_RECEIPT.json"
     check("normalization_receipt", lambda: _file_check(normalization, schema="formal-v4.1-normalization-receipt-v1"))
@@ -170,10 +184,10 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
         return {"passed": True, "path": str(c_ref), "sha256": _sha256(c_ref), "c_ref": payload.get("c_ref")}
 
     check("c_ref_receipt", objective)
-    check("teacher_alignment", lambda: _file_check(protocol / "TEACHER_ALIGNMENT_RECEIPT.json", schema="formal-v4.1-teacher-alignment-v1"))
-    check("curriculum", lambda: _file_check(protocol / "CURRICULUM_RECEIPT.json", schema="formal-v4.1-curriculum-receipt-v1"))
-    check("gradient_boundary", lambda: _file_check(protocol / "GRADIENT_RECEIPT.json", schema="formal-v4.1-gradient-receipt-v1"))
-    check("method_adapters", lambda: _file_check(protocol / "METHOD_ADAPTER_RECEIPT.json", schema="formal-v4.1-method-adapter-receipt-v1"))
+    check("teacher_alignment", lambda: _typed_file_check(protocol / "TEACHER_ALIGNMENT_RECEIPT.json", "teacher_alignment", root))
+    check("curriculum", lambda: _typed_file_check(protocol / "CURRICULUM_RECEIPT.json", "curriculum", root))
+    check("gradient_boundary", lambda: _typed_file_check(protocol / "GRADIENT_RECEIPT.json", "gradient", root))
+    check("method_adapters", lambda: _typed_file_check(protocol / "METHOD_ADAPTER_RECEIPT.json", "method_adapter", root))
 
     def itransformer():
         payload = _read_json(protocol / "ITRANSFORMER_SOURCE_RECEIPT.json")
@@ -209,21 +223,14 @@ def _receipt_checks(spec: Any, root: Path) -> dict[str, dict[str, Any]]:
 
     check("data_access", access_check)
     check("no_evaluation_access", access_check)
-    check("archive_receipts", lambda: _file_check(protocol / "ARCHIVE_ACCESS_RECEIPT.json", schema="formal-v4.1-archive-access-v1"))
+    check("archive_receipts", lambda: _typed_file_check(protocol / "ARCHIVE_ACCESS_RECEIPT.json", "archive_access", root))
     check("regression_tests", lambda: _file_check(root / "audit" / "REGRESSION_RECEIPT.json", schema="formal-v4.1-regression-receipt-v1"))
 
     def resources():
         path = protocol / "RESOURCE_PROJECTION.json"
         payload = _read_json(path)
-        projection = ResourceProjection(
-            payload.get("component_seconds", {}),
-            float(payload["projected_p95_hours"]),
-            float(payload["disk_margin_fraction"]),
-            float(payload["memory_margin_fraction"]),
-            str(payload.get("method_id", "formal-v4.1")),
-        )
-        projection.validate(max_projected_hours=float(spec.resource_gate["max_projected_p95_hours"]), minimum_margin=float(spec.resource_gate["minimum_disk_margin_fraction"]))
-        return {"passed": True, "path": str(path), "sha256": _sha256(path), "projected_p95_hours": projection.projected_p95_hours}
+        validate_gate0_receipt("resource_projection", payload, run_root=root)
+        return {"passed": True, "path": str(path), "sha256": _sha256(path), "projected_p95_hours": payload["worst_case_projected_hours"]}
 
     check("resource_projection", resources)
 
