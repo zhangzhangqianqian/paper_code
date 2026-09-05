@@ -1,6 +1,6 @@
 # RSC-PF Matched Closed-Loop Evaluation Implementation Plan
 
-**Goal:** Build and run a fail-closed 2019 chronological evaluation that compares the frozen single-seed RSC-PF pilot with five frozen seeds of each external baseline under one state-carry, settlement, metric, and optimizer-accounting protocol.
+**Goal:** Build and run a fail-closed 2019 chronological protocol diagnostic that compares the rejected single-seed RSC-PF v4.6-b checkpoint with five frozen seeds of each external baseline under one state-carry, settlement, metric, and optimizer-accounting protocol.
 
 **Architecture:** Add a small metric module and a common chronological runner driven by method-specific action providers. Every provider consumes the current carried state, returns a four-hour forecast/plan, and delegates the executed first action to the existing canonical recourse and state-transition code. A separate CLI writes immutable per-run artifacts, while an independent auditor verifies provenance, metric definitions, method roles, the separate RSC-PF legacy replay, corrected first-origin equivalence, and zero 2020 access.
 
@@ -11,11 +11,14 @@
 1. The legacy RSC-PF rollout carried SOC into settlement, but rebuilt the next scheduler context from each materialized row's original SOC. The corrected matched protocol uses carried SOC consistently; therefore full legacy equality is a separate checkpoint-reconstruction test, not a requirement for corrected results.
 2. The v4.6-b pilot receipt records a source-manifest SHA-256, but that exact manifest file is no longer present. This is disclosed as `receipt_hash_only`; checkpoint, contract, benchmark, capacity, and rollout artifacts remain independently hashable.
 3. Existing iTransformer evaluation receipts incorrectly label the complete PTO pathway as having no inference optimizer even though one LP is solved per origin. The plan corrects future metadata without rewriting historical receipts or weights.
-4. A per-method four-hour oracle first-step difference is not guaranteed to be non-negative regret. The plan instead runs one shared rolling Perfect-Information-MPC reference from the common initial state and reports signed cumulative objective gaps, final SOC, and terminal-stock-adjusted gaps.
+4. A per-method four-hour oracle first-step difference is not guaranteed to be non-negative regret. The plan instead runs one shared rolling Perfect-Information-MPC reference from the common initial state and reports signed cumulative objective gaps, final SOC, and a separately labeled terminal-stock valuation sensitivity.
+5. The v4.6-b pilot is not Gate-1-authorized: `PILOT_RECEIPT.json` records `authorized_gate1: false` because `electricity_wape_ratio = 1.0353263112927777` exceeds the frozen `1.02` limit. It is usable only as a reconstruction/protocol diagnostic; a successful 2019 matched run cannot convert it into an accepted formal candidate.
+6. The current materialized split combines causal inputs with future realized targets. The new provider boundary must make those labels structurally inaccessible to every deployable method, not merely rely on coding discipline.
 
 ## Global Constraints
 
 - This is a 2019 selection-year protocol diagnostic, not a final paper comparison.
+- This phase omits Fair Decoupled and other preregistered internal comparators, so it cannot establish that joint training is responsible for any observed advantage.
 - Use all 8,709 consecutive origins from `selection_full.npz`; never open the 2020 sealed evaluation split or any 2021 artifact.
 - Do not retrain or modify model weights, architectures, training losses, checkpoint selection, or manuscript text.
 - RSC-PF uses one diagnostic seed (2026); each external method uses seeds 2026–2030. Do not run inferential statistics on this asymmetric diagnostic table.
@@ -25,6 +28,7 @@
 - Planned physical feasibility is checked over all four planned hours, with a shadow SOC/CHP state advanced from one planned row to the next and without recourse. Settled feasibility is checked only for the executed first hour against realized demand/PV/WT.
 - Use physical-residual tolerance `1e-6`, shortage tolerance `1e-8`, and RSC-PF replay tolerance `atol=1e-5`, `rtol=1e-6`.
 - Existing independent-window receipts remain untouched and diagnostic-only.
+- A passing matched-protocol audit freezes evaluation machinery only. Before any 2020 access, RSC-PF must satisfy the unchanged Gate 1 criteria, five RSC-PF seeds and the full internal/external roster must be complete, and Gate 1 must be rerun and pass.
 
 ---
 
@@ -41,6 +45,7 @@
   - `physical_feasible(vector: np.ndarray, tolerance: float = 1e-6) -> bool`
   - `shortage_free(shortage: np.ndarray, tolerance: float = 1e-8) -> bool`
   - `recourse_distance(planned: np.ndarray, settled: np.ndarray, realized_demand: np.ndarray) -> tuple[float, float, np.ndarray]`
+  - `regime_aware_forecast_metrics(prediction: np.ndarray, target: np.ndarray, thermal_active_scales: Mapping[str, float], epsilon: float = 1e-9) -> dict[str, Any]`
   - `terminal_stock_adjustment(initial_soc: float, final_soc: float, energy_capacity: float, roundtrip_efficiency: float, final_grid_price: float, final_carbon_price: float, grid_emission_factor: float) -> float`
   - `summarize_closed_loop(arrays: Mapping[str, np.ndarray]) -> dict[str, Any]`
 
@@ -70,7 +75,9 @@ def test_summary_reports_planned_settled_and_shortage_separately():
     assert set(summary["recourse_adjustment"]) == {"absolute_mean", "absolute_median", "absolute_p95", "normalized_mean", "normalized_median", "normalized_p95"}
 ```
 
-Add tests for both terminal-stock directions: ending below the common initial SOC adds replenishment cost using charge efficiency; ending above it receives only the dischargeable-energy credit using discharge efficiency. Invalid efficiency, negative capacity, or non-finite inputs fail closed.
+Add forecast tests that require MAE/RMSE/WAPE for every task and horizon, plus truth-active MAE/RMSE/WAPE and normalized truth-inactive mean/P95 leakage for cooling and heating. The active mask is `target > 1e-9`; each normalization scale is the 2015–2018 training-only mean absolute target over active points. Divide both inactive mean absolute prediction and inactive P95 absolute prediction by that same frozen carrier scale. A missing/non-positive active scale fails closed, and changing selection targets must not refit these scales. Record active/inactive counts. Do not emit or compare architecture-specific regime-head F1.
+
+Add tests for both terminal-stock directions: ending below the common initial SOC adds replenishment cost using charge efficiency; ending above it receives only the deliverable-energy credit using discharge efficiency. Equality gives zero. Invalid round-trip efficiency outside `(0, 1]`, negative capacity, or non-finite inputs fail closed.
 
 - [ ] **Step 3: Run the focused tests and confirm the interfaces are absent**
 
@@ -118,9 +125,22 @@ def recourse_distance(planned: np.ndarray, settled: np.ndarray, realized_demand:
     absolute = float(by_channel.sum())
     denominator = max(float(np.asarray(realized_demand, dtype=np.float64).sum()), 1.0e-12)
     return absolute, absolute / denominator, by_channel
+
+def terminal_stock_adjustment(initial_soc, final_soc, energy_capacity,
+                              roundtrip_efficiency, final_grid_price,
+                              final_carbon_price, grid_emission_factor):
+    eta = np.sqrt(roundtrip_efficiency)
+    initial_energy = initial_soc * energy_capacity
+    final_energy = final_soc * energy_capacity
+    marginal_value = final_grid_price + final_carbon_price * grid_emission_factor
+    if final_energy < initial_energy:
+        return (initial_energy - final_energy) / eta * marginal_value
+    if final_energy > initial_energy:
+        return -(final_energy - initial_energy) * eta * marginal_value
+    return 0.0
 ```
 
-The nine channels are the non-derived operating decisions. Exclude fuel/conversion duplicates, curtailment complements, SOC, slack, and dump variables from the aggregate L1 distance; report shortage and dump separately. `summarize_closed_loop` must reject missing/non-finite arrays and compute means for forecast/cost/carbon/objective/shortage, cumulative raw objective, terminal SOC, terminal-stock adjustment, adjusted cumulative objective, three rates, mean/median/P95 aggregate recourse, per-channel recourse summaries, and median/P95 latency.
+The nine channels are the non-derived operating decisions. Exclude fuel/conversion duplicates, curtailment complements, SOC, slack, and dump variables from the aggregate L1 distance; report shortage and dump separately. `regime_aware_forecast_metrics` computes ordinary per-task/per-horizon metrics plus the common truth-active and normalized truth-inactive thermal metrics; it never consumes regime-head probabilities. `summarize_closed_loop` must reject missing/non-finite arrays and compute means for forecast/cost/carbon/objective/shortage, cumulative raw objective, initial/final SOC, battery throughput `sum_t((p_charge_t + p_discharge_t) * delta_t)`, terminal-stock adjustment, adjusted cumulative objective, three rates, mean/median/P95 aggregate recourse, per-channel recourse summaries, and median/P95 latency. The raw cumulative realized objective is primary; the adjusted value is labeled only as a terminal-stock valuation sensitivity.
 
 - [ ] **Step 5: Run the metric tests**
 
@@ -152,15 +172,22 @@ git commit -m "feat: separate closed-loop feasibility and adequacy metrics"
   - `calculate_all_residual_families`
   - Task 1 metric primitives.
 - Produces:
+  - `CausalOriginInput`
+  - `RealizedOriginLabels`
   - `PlannedStep`
   - `ActionProvider` protocol
   - `MatchedClosedLoopResult`
+  - `split_origin(selection: ExternalV46Split, index: int, state: FormalV4ClosedLoopState) -> tuple[CausalOriginInput, RealizedOriginLabels]`
   - `initial_state_from_selection(selection: ExternalV46Split) -> FormalV4ClosedLoopState`
   - `planned_horizon_residuals(plan: PlannedStep, state: FormalV4ClosedLoopState, parameters: Mapping[str, Any]) -> np.ndarray`
   - `run_matched_closed_loop(selection: ExternalV46Split, provider: ActionProvider, parameters: Mapping[str, Any], *, method_id: str, seed: int, warmup_origins: int = 100) -> MatchedClosedLoopResult`
   - `run_perfect_information_mpc_reference(selection: ExternalV46Split, parameters: Mapping[str, Any]) -> MatchedClosedLoopResult`
 
-- [ ] **Step 1: Write a failing chronology test**
+- [ ] **Step 1: Write failing structural label-isolation tests**
+
+Construct one origin with deliberately poisoned future targets and realized renewables. Assert that `CausalOriginInput` has no `forecast_target`, `target`, `renewable_realized`, or `realized_*` attribute, and that an access-spy provider receives only the causal dataclass. Run the same provider twice with identical causal inputs and different `RealizedOriginLabels`; its forecast and plan must be bitwise identical. Only settlement, forecast metrics, and the separate Perfect-Information-MPC reference may observe the changed labels. A provider or adapter that accepts `ExternalV46Split` directly fails the contract test.
+
+- [ ] **Step 2: Write a failing chronology test**
 
 ```python
 def test_runner_rejects_non_hourly_selection(make_selection, provider, parameters):
@@ -171,7 +198,7 @@ def test_runner_rejects_non_hourly_selection(make_selection, provider, parameter
         run_matched_closed_loop(replace(selection, target_times=bad_times), provider, parameters, method_id="stub", seed=2026)
 ```
 
-- [ ] **Step 2: Write a failing state-carry test**
+- [ ] **Step 3: Write a failing state-carry test**
 
 ```python
 def test_next_origin_receives_previous_settled_soc_and_chp(make_selection, recording_provider, parameters):
@@ -183,11 +210,11 @@ def test_next_origin_receives_previous_settled_soc_and_chp(make_selection, recor
 
 Add a second test that loads the real `selection_full.npz`, requires one unique `trajectory_id == "capacity_bound_causal"`, and verifies that the newly constructed first state hash equals the first hash in the saved RSC-PF rollout. This prevents an apparently harmless new trajectory label from invalidating exact replay.
 
-- [ ] **Step 3: Write a failing four-hour planned-feasibility test**
+- [ ] **Step 4: Write a failing four-hour planned-feasibility test**
 
 Construct a plan whose first row is feasible but whose third row violates the CHP ramp constraint. `planned_horizon_residuals` must return shape `[4,8]`, and the origin-level planned-feasibility flag must be false. The checker must inspect raw planned rows; it must not call recourse before computing planned residuals.
 
-- [ ] **Step 4: Write failing tests for inference and reference-optimizer accounting**
+- [ ] **Step 5: Write failing tests for inference and reference-optimizer accounting**
 
 ```python
 def test_pto_runner_counts_only_its_inference_lp_calls(make_selection, pto_provider, parameters):
@@ -204,17 +231,35 @@ def test_pi_mpc_is_one_separate_reference_trajectory(make_selection, parameters)
     assert result.inference_lp_calls == 0
 ```
 
-- [ ] **Step 5: Run the runner tests and confirm failure before implementation**
+- [ ] **Step 6: Run the runner tests and confirm failure before implementation**
 
 Run the new test file with the frozen Python environment. Expected: missing runner interfaces.
 
-- [ ] **Step 6: Preserve trajectory metadata in the external split**
+- [ ] **Step 7: Preserve trajectory metadata in the external split**
 
 Extend `ExternalV46Split` with optional `trajectory_ids` and `source_state_hashes` arrays, carry them through `take`, and populate them from the NPZ loader when present. The matched runner requires both fields and fails closed if the selected chronology has zero or multiple trajectory IDs. Existing synthetic fixtures may omit them unless they call the matched runner.
 
-- [ ] **Step 7: Implement the provider/result contracts**
+- [ ] **Step 8: Implement the causal/label split and provider/result contracts**
 
 ```python
+@dataclass(frozen=True)
+class CausalOriginInput:
+    load_history: np.ndarray          # carried [1,24,4]
+    exog_history: np.ndarray          # carried [1,24,E]
+    device_history: np.ndarray        # carried [1,24,D]
+    activity_history: np.ndarray      # carried [1,24,A]
+    scheduler_context: np.ndarray     # [1,4,C], carried SOC inserted
+    previous_chp: np.ndarray          # carried [1,1]
+    renewable_forecast: np.ndarray    # [4,2]
+    origin_time: np.datetime64
+    trajectory_id: str
+
+@dataclass(frozen=True)
+class RealizedOriginLabels:
+    forecast_target: np.ndarray       # [4,4], runner only
+    renewable_realized: np.ndarray    # [4,2], runner/reference only
+    next_observed_exog: np.ndarray    # [E], revealed after settlement
+
 @dataclass(frozen=True)
 class PlannedStep:
     forecast: np.ndarray             # [4,4]
@@ -226,7 +271,7 @@ class PlannedStep:
 class ActionProvider(Protocol):
     method_id: str
     optimizer_role: str
-    def plan(self, step: ExternalV46Split, state: FormalV4ClosedLoopState) -> PlannedStep: ...
+    def plan(self, origin: CausalOriginInput) -> PlannedStep: ...
 
 @dataclass(frozen=True)
 class MatchedClosedLoopResult:
@@ -238,7 +283,9 @@ class MatchedClosedLoopResult:
     reference_lp_calls: int
 ```
 
-- [ ] **Step 8: Implement chronological state construction and per-origin inputs**
+`split_origin` is the only function allowed to read both sides of `ExternalV46Split`. It copies carried histories/state into `CausalOriginInput` and realized future values into `RealizedOriginLabels`, then returns separate immutable objects. Provider factories and third-party inference adapters are typed and tested against the causal object only. If a third-party model API requires a batch object containing labels, the adapter constructs zero-filled internal dummy labels solely to satisfy shape checks; it must never receive or copy `RealizedOriginLabels`.
+
+- [ ] **Step 9: Implement chronological state construction and per-origin inputs**
 
 ```python
 def initial_state_from_selection(selection):
@@ -257,42 +304,50 @@ def initial_state_from_selection(selection):
         str(unique[0]),
     )
 
-def _step_view(selection, index, state):
+def split_origin(selection, index, state):
     row = selection.take(np.asarray([index], dtype=np.int64))
     context = row.scheduler_context.copy()
     context[:, :, 5] = float(state.initial_soc[0, 0])
-    return replace(
-        row,
+    causal = CausalOriginInput(
         load_history=state.load_history.detach().cpu().numpy(),
         exog_history=state.exog_history.detach().cpu().numpy(),
         device_history=state.device_history.detach().cpu().numpy(),
-        device_status=state.activity_history.detach().cpu().numpy(),
+        activity_history=state.activity_history.detach().cpu().numpy(),
         scheduler_context=context,
         previous_chp=state.previous_chp.detach().cpu().numpy(),
+        renewable_forecast=row.scheduler_context[0, :, :2].copy(),
+        origin_time=row.target_times[0],
+        trajectory_id=str(row.trajectory_ids[0]),
     )
+    labels = RealizedOriginLabels(
+        forecast_target=row.forecast_target[0].copy(),
+        renewable_realized=row.renewable_realized[0].copy(),
+        next_observed_exog=selection.exog_history[min(index + 1, len(selection) - 1), -1].copy(),
+    )
+    return causal, labels
 ```
 
-- [ ] **Step 9: Implement four-hour planned checks and one canonical realized transition**
+- [ ] **Step 10: Implement four-hour planned checks and one canonical realized transition**
 
-Inside `run_matched_closed_loop`, validate `np.diff(target_times) == np.timedelta64(1, "h")`, call `provider.plan`, and inspect all four raw planned rows against `scheduler_demand[:, :3]` and `renewable_forecast`. For the planned-only check, advance a shadow SOC/CHP state after every planned row with `advance_with_executed_first_hour`; never feed this shadow state into the real next origin. Then settle only `dispatch[0]` with `settle_first_step_v4`, compute settled residuals against realized first-hour demand/PV/WT, and advance the real state exactly once:
+Inside `run_matched_closed_loop`, validate `np.diff(target_times) == np.timedelta64(1, "h")`, call `origin, labels = split_origin(...)`, pass only `origin` to `provider.plan`, and inspect all four raw planned rows against `scheduler_demand[:, :3]` and `renewable_forecast`. For the planned-only check, advance a shadow SOC/CHP state after every planned row with `advance_with_executed_first_hour`; never feed this shadow state into the real next origin. Then settle only `dispatch[0]` with `settle_first_step_v4`, compute settled residuals against realized first-hour demand/PV/WT, and advance the real state exactly once:
 
 ```python
 outcome = settle_first_step_v4(
     torch.as_tensor(plan.dispatch[:1], dtype=torch.float64),
-    torch.as_tensor(step.forecast_target[:, 0, :3], dtype=torch.float64),
-    torch.as_tensor(step.renewable_realized[:, 0, :], dtype=torch.float64),
+    torch.as_tensor(labels.forecast_target[None, 0, :3], dtype=torch.float64),
+    torch.as_tensor(labels.renewable_realized[None, 0, :], dtype=torch.float64),
     parameters,
     initial_soc=state.initial_soc.to(torch.float64),
     previous_chp=state.previous_chp.to(torch.float64),
-    grid_price=torch.as_tensor(step.scheduler_context[:, 0, 2], dtype=torch.float64),
-    gas_price=torch.as_tensor(step.scheduler_context[:, 0, 3], dtype=torch.float64),
-    carbon_price=torch.as_tensor(step.scheduler_context[:, 0, 4], dtype=torch.float64),
+    grid_price=torch.as_tensor(origin.scheduler_context[:, 0, 2], dtype=torch.float64),
+    gas_price=torch.as_tensor(origin.scheduler_context[:, 0, 3], dtype=torch.float64),
+    carbon_price=torch.as_tensor(origin.scheduler_context[:, 0, 4], dtype=torch.float64),
 )
 state = advance_formal_v4_state(
     state,
     outcome,
-    realized_load=torch.as_tensor(step.forecast_target[:, 0, :], dtype=torch.float32),
-    realized_exog=torch.as_tensor(selection.exog_history[min(index + 1, len(selection) - 1), -1:, :], dtype=torch.float32),
+    realized_load=torch.as_tensor(labels.forecast_target[None, 0, :], dtype=torch.float32),
+    realized_exog=torch.as_tensor(labels.next_observed_exog[None, :], dtype=torch.float32),
 )
 ```
 
@@ -300,11 +355,11 @@ Time `provider.plan + settle_first_step_v4` with `time.perf_counter_ns`; if CUDA
 
 `run_perfect_information_mpc_reference` starts from the identical first state, solves one four-hour LP per origin with realized future three-carrier demand and PV/WT, executes only its first action through the same settlement, and carries its own state. It writes no forecast metric and is explicitly labeled `deployable: false` and `reference_only: true`.
 
-- [ ] **Step 10: Run the runner tests**
+- [ ] **Step 11: Run the runner tests**
 
-Expected: chronology, single transition, state carry, residual, recourse, LP-count, and gas-exclusion tests pass.
+Expected: causal/label isolation, chronology, single transition, state carry, residual, recourse, LP-count, and gas-exclusion tests pass.
 
-- [ ] **Step 11: Commit the common runner**
+- [ ] **Step 12: Commit the common runner**
 
 ```powershell
 git add src/joint_dispatch/matched_closed_loop.py src/joint_dispatch/external_v46_data.py tests/test_rsc_pf_matched_closed_loop.py tests/test_rsc_pf_external_v46_data.py
@@ -325,11 +380,11 @@ git commit -m "feat: add matched chronological closed-loop runner"
 - Test: `tests/test_rsc_pf_matched_closed_loop_providers.py`
 
 **Interfaces:**
-- Consumes: `PlannedStep`, `ActionProvider`, frozen v4.6 data normalization, external checkpoint loader, formal v4.6 checkpoint/risk-cap/contract artifacts.
+- Consumes: `CausalOriginInput`, `PlannedStep`, `ActionProvider`, frozen v4.6 data normalization, external checkpoint loader, formal v4.6 checkpoint/risk-cap/contract artifacts.
 - Produces:
   - `build_external_provider(method_id: str, seed: int, config: Mapping[str, Any]) -> ActionProvider`
   - `load_frozen_rsc_pf_provider(run_root: Path, contract_path: Path, benchmark_path: Path, capacity_receipt_path: Path) -> ActionProvider`
-  - `solve_pto_from_forecast(method_id: str, forecast: np.ndarray, step: ExternalV46Split, state: FormalV4ClosedLoopState, parameters: Mapping[str, Any]) -> PlannedStep`
+  - `solve_pto_from_forecast(method_id: str, forecast: np.ndarray, origin: CausalOriginInput, parameters: Mapping[str, Any]) -> PlannedStep`
   - `run_and_verify_rsc_pf_legacy_replay(provider: ActionProvider, materialized_root: Path, legacy_rollout: Path, artifact_root: Path, *, atol: float = 1e-5, rtol: float = 1e-6) -> dict[str, Any]`
   - `verify_rsc_pf_first_origin(result: MatchedClosedLoopResult, legacy_rollout: Path, *, atol: float = 1e-5, rtol: float = 1e-6) -> dict[str, Any]`
 
@@ -341,9 +396,9 @@ git commit -m "feat: add matched chronological closed-loop runner"
     ("DecisionFocused-Online", "exact optimizer at inference", 1),
     ("DigitalTwins-Policy", "none at inference", 0),
 ])
-def test_external_provider_roles(method, role, calls, provider_factory, state, step):
+def test_external_provider_roles(method, role, calls, provider_factory, origin):
     provider = provider_factory(method)
-    planned = provider.plan(step, state)
+    planned = provider.plan(origin)
     assert provider.optimizer_role == role
     assert planned.inference_lp_calls == calls
 ```
@@ -351,12 +406,12 @@ def test_external_provider_roles(method, role, calls, provider_factory, state, s
 - [ ] **Step 2: Write a failing gas-semantics test**
 
 ```python
-def test_predicted_gas_never_enters_pto_balance(step, state, parameters):
-    forecast = step.forecast_target[0].copy()
+def test_predicted_gas_never_enters_pto_balance(origin, parameters):
+    forecast = make_four_task_forecast()
     changed = forecast.copy()
     changed[:, 3] += 1.0e6
-    first = solve_pto_from_forecast("iTransformer-PTO", forecast, step, state, parameters)
-    second = solve_pto_from_forecast("iTransformer-PTO", changed, step, state, parameters)
+    first = solve_pto_from_forecast("iTransformer-PTO", forecast, origin, parameters)
+    second = solve_pto_from_forecast("iTransformer-PTO", changed, origin, parameters)
     assert first.scheduler_demand.shape == (4, 4)
     assert np.array_equal(first.dispatch, second.dispatch)
 ```
@@ -377,20 +432,20 @@ Set the complete deployed method role for `ExternalForecastPTO`/iTransformer-PTO
 
 - [ ] **Step 6: Implement external providers with corrected complete-method roles**
 
-For iTransformer-PTO and DecisionFocused-Online, normalize the one-row carried-state view from training statistics, denormalize the forecast, and call the canonical LP once using the current SOC and CHP state. For DigitalTwins-Policy, use the raw causal view and the shared decoder without an LP.
+For iTransformer-PTO and DecisionFocused-Online, normalize the one-row causal carried-state view from training statistics, denormalize the forecast, and call the canonical LP once using the SOC and CHP state contained in that causal view. For DigitalTwins-Policy, use the raw causal view and the shared decoder without an LP. Put every frozen model in evaluation mode and run its neural forward pass under `torch.inference_mode()`. No provider receives `RealizedOriginLabels`. Any internally required target-shaped tensor is a zero-filled placeholder constructed after entry to the provider and is never used in prediction or dispatch.
 
 ```python
 class PTOProvider:
     optimizer_role = "exact optimizer at inference"
-    def plan(self, step, state):
-        prediction = self.predict_physical(step)
-        solved = solve_pto_windows(PTOForecasts(self.method_id, prediction[None], step.forecast_target), step, self.parameters)
-        if solved.offline_exact_lp_calls != 1 or not bool(solved.success[0]):
+    def plan(self, origin):
+        prediction = self.predict_physical(origin)
+        planned = solve_pto_from_forecast(self.method_id, prediction, origin, self.parameters)
+        if planned.inference_lp_calls != 1:
             raise RuntimeError("PTO inference LP failed or call count is invalid")
-        return PlannedStep(prediction, prediction, step.scheduler_context[0, :, :2], solved.dispatch[0], 1)
+        return planned
 ```
 
-Before the LP call, rebuild the row's scheduler context from the carried `state.initial_soc` and `state.previous_chp`; never use the materialized row's stale SOC/CHP. The provider receipt must describe iTransformer as an official-source adaptation rather than an untouched reproduction.
+`solve_pto_from_forecast` passes only `prediction[:, :3]`, `origin.renewable_forecast`, prices/carbon, carried SOC, and previous CHP directly to the canonical LP; it must not construct `PTOForecasts` with a real target or accept a complete `ExternalV46Split`. The provider receipt must describe iTransformer as an official-source adaptation rather than an untouched reproduction.
 
 - [ ] **Step 7: Implement strict RSC-PF reconstruction**
 
@@ -420,7 +475,7 @@ def _compare_legacy_arrays(result, legacy_rollout, *, atol=1e-5, rtol=1e-6):
 
 - [ ] **Step 9: Run provider and replay tests**
 
-Expected: all provider roles, one-step outputs, gas boundary, strict checkpoint load, and RSC-PF replay checks pass.
+Expected: all provider roles, causal-label isolation, one-step outputs, gas boundary, strict checkpoint load, and RSC-PF replay checks pass.
 
 - [ ] **Step 10: Commit provider adapters**
 
@@ -477,6 +532,8 @@ def test_audit_rejects_wrong_itransformer_optimizer_role(valid_manifest):
         audit_manifest(broken)
 ```
 
+Also require the manifest to preserve the v4.6-b status exactly: `gate1_authorized: false`, failed criterion `electricity_wape_ratio`, observed value `1.0353263112927777`, frozen limit `1.02`, and `formal_candidate: false`. The auditor must reject any receipt or review that calls this checkpoint accepted, Gate-1-passing, or Gate-2-authorizing.
+
 - [ ] **Step 3: Write failing access and artifact-integrity tests**
 
 Test that any path containing the 2020 evaluation role, `sealed_test`, `test-set`, or excluded 2021 role is rejected before it is opened; mutate one NPZ byte and require the auditor to reject its hash. Add a provenance test requiring the receipt to distinguish `verified_file` from `receipt_hash_only`; the latter is the honest status for the v4.6-b source manifest, whose hash is recorded in `PILOT_RECEIPT.json` but whose manifest file is no longer present.
@@ -513,27 +570,41 @@ Expected: CLI/config/auditor interfaces are absent.
   "shortage_tolerance": 1e-8,
   "replay_atol": 1e-5,
   "replay_rtol": 1e-6,
-  "checkpoint_interval": 256
+  "checkpoint_interval": 256,
+  "thermal_active_epsilon": 1e-9,
+  "latency": {
+    "device": "cpu",
+    "neural_dtype": "float32",
+    "lp_and_settlement_dtype": "float64",
+    "batch_size": 1,
+    "torch_num_threads": 1,
+    "torch_num_interop_threads": 1,
+    "omp_num_threads": 1,
+    "mkl_num_threads": 1,
+    "method_order": ["RSC-PF", "iTransformer-PTO", "DecisionFocused-Online", "DigitalTwins-Policy"],
+    "solver_method": "highs",
+    "solver_options": {}
+  }
 }
 ```
 
-At config load, resolve every path relative to the repository root, verify it exists, record its SHA-256 before evaluation, and check the recorded v4.6 contract/capacity hashes against `PILOT_RECEIPT.json`. The absent v4.6-b source-manifest file is recorded as `receipt_hash_only`, never as independently verified; this limits the run to a protocol diagnostic and is repeated in the review.
+At config load, resolve every path relative to the repository root, verify it exists, record its SHA-256 before evaluation, and check the recorded v4.6 contract/capacity hashes against `PILOT_RECEIPT.json`. Fit cooling/heating active scales once from the 2015–2018 training file using only targets greater than `thermal_active_epsilon`; store the scales and their source hash in the generated frozen manifest before loading 2019 arrays. The absent v4.6-b source-manifest file is recorded as `receipt_hash_only`, never as independently verified; this limits the run to a protocol diagnostic and is repeated in the review.
 
 - [ ] **Step 6: Implement resumable chunks and atomic finalization**
 
-During each model row and the separate reference trajectory, save a `.partial` checkpoint every 256 origins containing the next index, complete carried-state tensors, trajectory ID/hash, accumulated arrays, timing samples, LP counters, and immutable input/checkpoint hashes. On `--resume`, verify every hash and the cursor/state hash before continuing; otherwise fail closed. Build the final NPZ and receipt inside a sibling `.writing` directory, close both, and atomically rename the directory into place. A valid completed row is skipped under `--resume`; an incomplete or hash-invalid completed row fails closed and is never overwritten automatically. Every receipt must contain both `test_set_accessed: false` and `evaluation_year_accessed: false`.
+During each model row and the separate reference trajectory, save a `.partial` checkpoint every 256 origins containing the next index, complete carried-state tensors, trajectory ID/hash, accumulated arrays, timing samples, LP counters, and immutable input/checkpoint hashes. On `--resume`, verify every hash and the cursor/state hash before continuing; otherwise fail closed. Build the final NPZ and receipt inside a sibling `.writing` directory, close both, and atomically rename the directory into place. A valid completed row is skipped under `--resume`; an incomplete or hash-invalid completed row fails closed and is never overwritten automatically. Every receipt must contain both `test_set_accessed: false` and `evaluation_year_accessed: false`. Add a smoke-only `--stop-after` option that deliberately exits after an exact origin count; reject it unless one normalized output-path segment is exactly `smoke`.
 
 - [ ] **Step 7: Implement the CLI row matrix and smoke limit**
 
-The CLI accepts `--config`, `--method`, `--seed`, `--all-methods`, `--all-seeds`, `--limit`, `--warmup-origins`, `--output-root`, `--resume`, and the mutually exclusive provenance mode `--verify-rsc-pf-legacy-only`. `--limit` and a warm-up override are allowed only when one normalized output-path segment is exactly `smoke`; the full run uses the frozen 100-origin warm-up. `--all-methods --all-seeds` expands to RSC-PF seed 2026 once plus the three external methods at seeds 2026–2030, exactly 16 model rows, and runs the Perfect-Information-MPC reference exactly once. Full execution requires exactly 8,709 origins. The loader additionally inspects `target_times` and refuses any year other than 2019, regardless of the file name.
+The CLI accepts `--config`, `--method`, `--seed`, `--all-methods`, `--all-seeds`, `--limit`, `--warmup-origins`, `--stop-after`, `--output-root`, `--resume`, and the mutually exclusive provenance mode `--verify-rsc-pf-legacy-only`. `--limit`, `--stop-after`, and a warm-up override are allowed only when one normalized output-path segment is exactly `smoke`; the full run uses the frozen 100-origin warm-up. `--all-methods --all-seeds` expands to RSC-PF seed 2026 once plus the three external methods at seeds 2026–2030, exactly 16 model rows, and runs the Perfect-Information-MPC reference exactly once. Full execution requires exactly 8,709 origins. The loader additionally inspects `target_times` and refuses any year other than 2019, regardless of the file name. Before timing, freeze the config-declared device/dtype/thread environment and method order; record hardware plus Python, PyTorch, NumPy, SciPy, and HiGHS versions in every receipt.
 
 - [ ] **Step 8: Implement independent audit recomputation**
 
-The auditor reopens NPZ artifacts, recomputes forecast metrics through the existing canonical `evaluate_forecast` helper, recomputes all closed-loop summaries from raw arrays, verifies hashes and timestamp identity, enforces the 16-row method/seed matrix, checks inference LP counts (`8709` for each PTO row; `0` for RSC-PF/DigitalTwins), verifies one separate 8,709-call Perfect-Information-MPC reference, recomputes raw and terminal-stock-adjusted cumulative gaps, verifies gas exclusion and both access flags, and writes `MATCHED_CLOSED_LOOP_AUDIT.json` only if every numerical/protocol check passes. It additionally requires a full passing legacy-replay receipt and exact first-origin equality for the corrected RSC-PF row, while forbidding a false claim of full legacy equivalence for that corrected row. Provenance completeness is a separate field: the known `receipt_hash_only` v4.6 source-manifest gap must be disclosed but does not masquerade as a numerical audit failure.
+The auditor reopens NPZ artifacts, recomputes ordinary and regime-aware forecast metrics through Task 1 using the frozen training-only thermal scales, recomputes all closed-loop summaries from raw arrays, verifies hashes and timestamp identity, enforces the 16-row method/seed matrix, checks inference LP counts (`8709` for each PTO row; `0` for RSC-PF/DigitalTwins), verifies one separate 8,709-call Perfect-Information-MPC reference, recomputes raw and terminal-stock-valuation-sensitivity cumulative gaps, verifies gas exclusion and both access flags, and writes `MATCHED_CLOSED_LOOP_AUDIT.json` only if every numerical/protocol check passes. It additionally requires a full passing legacy-replay receipt and exact first-origin equality for the corrected RSC-PF row, while forbidding a false claim of full legacy equivalence for that corrected row. Provenance completeness is a separate field: the known `receipt_hash_only` v4.6 source-manifest gap must be disclosed but does not masquerade as a numerical audit failure.
 
 - [ ] **Step 9: Run the runner/audit tests**
 
-Expected: configuration, access, role, call-count, atomic-write, hash-tamper, resume, and audit-recomputation tests pass.
+Expected: configuration, causal-label isolation, access, role, call-count, runtime-control, atomic-write, hash-tamper, forced-stop/resume equivalence, and audit-recomputation tests pass.
 
 - [ ] **Step 10: Commit the execution boundary**
 
@@ -604,11 +675,17 @@ Expected: 16 complete model receipts plus one reference receipt; PTO rows each c
 
 Expected: `audit_passed: true`. The corrected RSC-PF row must equal the legacy rollout at origin 0 and must state `scheduler_soc_source: carried_state`. If false, do not run the full matrix.
 
-- [ ] **Step 5: Record the measured resource projection**
+- [ ] **Step 5: Rehearse interruption and exact resume beyond one checkpoint**
+
+Before projecting the full run, perform a real interruption/resume rehearsal beyond the 256-origin checkpoint boundary. Run one RSC-PF row and one PTO row for 300 origins twice: once uninterrupted under `smoke/resume_reference`, and once with `--stop-after 260` under `smoke/resume_interrupted`, followed by `--resume`. The deliberately interrupted command must return the documented non-success status while leaving a valid `.partial` artifact at cursor 260. For both methods, the resumed final NPZ arrays, counters, carried-state hash, and receipt metrics must equal the uninterrupted 300-origin result; exclude wall-clock timing fields from byte equality and compare their schema/ranges separately. If either comparison fails, stop before the full run.
+
+Freeze the deliberate-stop exit code as `75` and treat it as success only in this rehearsal harness; any other nonzero exit is a failure. The subsequent `--resume` command must finish with exit code `0` and remove or finalize the `.partial` artifact according to the atomic-write contract.
+
+- [ ] **Step 6: Record the measured resource projection**
 
 Use smoke timings to record projected wall time and free disk space before the full run. The full matrix entails exactly 87,090 inference LP calls (two PTO methods × five seeds × 8,709 origins) and 8,709 reference-only Perfect-Information-MPC calls, for 95,799 LP solves total. Save the projection in the smoke audit so the eventual run duration is evidence-based rather than guessed.
 
-- [ ] **Step 6: Run the full 2019 matrix**
+- [ ] **Step 7: Run the full 2019 matrix**
 
 ```powershell
 & D:\Paper\envs\rsc_pf_diffopt_v4\python.exe scripts\run_rsc_pf_matched_closed_loop_2019.py `
@@ -618,7 +695,7 @@ Use smoke timings to record projected wall time and free disk space before the f
 
 Expected: one RSC-PF row, fifteen external rows, and one separately labeled Perfect-Information-MPC reference, each with 8,709 aligned origins. This is sequential evaluation only; it does not retrain any model.
 
-- [ ] **Step 7: Run the full independent audit**
+- [ ] **Step 8: Run the full independent audit**
 
 ```powershell
 & D:\Paper\envs\rsc_pf_diffopt_v4\python.exe scripts\audit_rsc_pf_matched_closed_loop_2019.py `
@@ -629,15 +706,15 @@ Expected: one RSC-PF row, fifteen external rows, and one separately labeled Perf
 
 Expected: `audit_passed: true`, 16 valid model rows plus one reference trajectory, exact timestamp alignment, correct LP roles/counts, successful legacy RSC-PF replay plus corrected first-origin equivalence, and zero evaluation-year access.
 
-- [ ] **Step 8: Write the diagnostic review without inferential claims**
+- [ ] **Step 9: Write the diagnostic review without inferential claims**
 
-The review table separates forecast quality, four-hour planned feasibility, first-hour settled feasibility, recourse adjustment, no-shortage rate, shortage, raw and terminal-stock-adjusted cumulative objective, signed objective gap to the shared Perfect-Information-MPC reference, latency, and optimizer role. It states that RSC-PF has one seed, labels gas as an auxiliary prior, marks iTransformer/DecisionFocused/DigitalTwins as adaptations at their documented reproduction levels, discloses the missing v4.6-b source-manifest file, and calls the evidence “2019 protocol-validation diagnostic.” It must not call the signed gap guaranteed non-negative regret, and it must not compute p-values, confidence intervals, rank stability, or a final paper winner from the asymmetric seed matrix.
+The review table separates ordinary forecast quality, truth-active thermal performance, normalized truth-inactive leakage, four-hour planned feasibility, first-hour settled feasibility, recourse adjustment, no-shortage rate, shortage, raw cumulative objective, terminal-stock valuation sensitivity, signed objective gap to the shared Perfect-Information-MPC reference, latency, and optimizer role. It states that RSC-PF has one seed, labels gas as an auxiliary prior, marks iTransformer/DecisionFocused/DigitalTwins as adaptations at their documented reproduction levels, discloses the missing v4.6-b source-manifest file, and calls the evidence “2019 protocol-validation diagnostic.” It must explicitly state that v4.6-b failed the predeclared Gate 1 electricity-WAPE criterion and that this run neither rehabilitates the checkpoint nor proves the joint-training contribution because internal comparators are omitted. It must not compare architecture-specific regime-head F1 across methods, call the signed gap guaranteed non-negative regret, compute p-values/confidence intervals/rank stability, or declare a final paper winner from the asymmetric seed matrix. Latency is secondary diagnostic evidence only.
 
-- [ ] **Step 9: Record the next-gate decision**
+- [ ] **Step 10: Record the next-gate decision**
 
-If every protocol check passes, recommend a new plan to complete RSC-PF seeds 2027–2030, restore the complete preregistered internal/external baseline roster, freeze five seeds for every stochastic method, and only then authorize one-time 2020 Gate 2 evaluation. If a protocol check fails or the legacy RSC-PF replay does not match, record the precise blocker and stop before any training or 2020 access.
+If every protocol check passes, freeze the evaluator only. The recommendation must then be: repair/retrain or otherwise predeclare a new RSC-PF candidate without changing the existing Gate 1 threshold after seeing results; complete five RSC-PF seeds; restore the complete preregistered internal/external baseline roster; freeze five seeds for every stochastic method; rerun Gate 1; and authorize one-time 2020 Gate 2 evaluation only if that Gate 1 passes. The current rejected v4.6-b pilot cannot authorize 2020 merely because its protocol audit passes. If a protocol check fails or the legacy RSC-PF replay does not match, record the precise blocker and stop before any training or 2020 access.
 
-- [ ] **Step 10: Mark completed plan items and commit code/document changes only**
+- [ ] **Step 11: Mark completed plan items and commit code/document changes only**
 
 Generated report artifacts remain under the report root according to the repository's ignore policy. Commit tracked source, tests, config, and the updated plan without staging the pre-existing untracked `third_party/iTransformer_source/` directory.
 
