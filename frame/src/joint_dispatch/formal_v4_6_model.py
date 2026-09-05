@@ -238,6 +238,7 @@ class RiskAdjustedRSCPFModelV46(ResidualGatedRSCPFModel):
         *,
         last_thermal_regime: Tensor,
         detach_forecast_for_dispatch: bool = False,
+        disable_risk_adjustment: bool = False,
         **inputs: Tensor,
     ) -> FormalV46ForwardOutput:
         self._validate_common(inputs)
@@ -272,6 +273,8 @@ class RiskAdjustedRSCPFModelV46(ResidualGatedRSCPFModel):
             normalized_previous,
             probabilities_for_scheduler,
         )
+        if disable_risk_adjustment:
+            risk_adjustment = torch.zeros_like(risk_adjustment)
         scheduler_demand = nominal_for_scheduler.clone()
         scheduler_demand = torch.cat(
             (scheduler_demand[..., :3] + risk_adjustment, scheduler_demand[..., 3:]),
