@@ -722,3 +722,21 @@ Generated report artifacts remain under the report root according to the reposit
 git add docs/superpowers/plans/2026-09-05-rsc-pf-matched-closed-loop-evaluation.md
 git commit -m "docs: record matched closed-loop diagnostic completion"
 ```
+
+## Execution record (2026-09-06)
+
+The implementation and diagnostic execution were completed with one necessary
+result-integrity correction. The first v1 matrix was superseded because its
+NPZ rows did not persist the four-task forecast targets; the corrected v2
+matrix reran the same frozen 2019 protocol and includes those targets and
+training-only thermal scales.
+
+- [x] Relevant unit suite: 23 focused tests passed (only the known PyTorch Transformer warning).
+- [x] Full legacy RSC-PF replay: 8,709/8,709 rows and all stored-field checks passed.
+- [x] Smoke matrix and independent smoke audit passed.
+- [x] RSC-PF and iTransformer-PTO interruption/resume rehearsal passed: stop code 75, resume code 0, core arrays exactly equal.
+- [x] Resource projection recorded in `reports/rsc_pf_matched_closed_loop_2019/smoke/task5/RESOURCE_PROJECTION.json`.
+- [x] Corrected full 2019 matrix completed: 16 model rows × 8,709 origins plus one reference trajectory.
+- [x] Corrected full independent audit passed, including legacy replay provenance and first-origin equality.
+- [x] Diagnostic review written to `reports/rsc_pf_matched_closed_loop_2019/v2/MATCHED_CLOSED_LOOP_REVIEW.md`.
+- [x] Evaluator remains frozen only; Gate 1 is still rejected and no 2020/2021 evaluation was opened.
