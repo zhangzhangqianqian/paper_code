@@ -17,6 +17,7 @@ from .formal_v4_4_artifacts import sha256_file, write_json_once
 from .formal_v4_4_contract import FormalV44Contract, load_formal_v4_4_contract
 from .formal_v4_4_model import ResidualGatedRSCPFModel
 from .formal_v4_4_pilot_data import build_pilot_indices
+from .formal_v4_4_provenance import validate_source_manifest_payload
 from .formal_v4_4_regime import derive_last_observed_regime, derive_thermal_regimes, fit_thermal_prior
 from .formal_v4_4_training import named_autograd_norms
 from .model import JointForecastDispatchModel
@@ -103,6 +104,9 @@ def run_gate0_v44(
     if root.exists(): raise FileExistsError(root)
     root.mkdir(parents=True); gate_dir = root / "gate0"; gate_dir.mkdir()
     source_hash = sha256_file(source_manifest); train_hash = sha256_file(base_train_data); selection_hash = sha256_file(base_selection_data)
+    source_payload = json.loads(Path(source_manifest).read_text(encoding="utf-8"))
+    validate_source_manifest_payload(source_payload, repo_root=Path(__file__).resolve().parents[2], expected_run_id=str(run_id), expected_contract_sha256=contract.contract_sha256)
+    write_json_once(root / "protocol" / "SOURCE_MANIFEST.json", source_payload)
     train = _load_npz(base_train_data); selection = _load_npz(base_selection_data)
     train_years = _year_values(train["timestamps"]); selection_years = _year_values(selection["timestamps"])
     if train_years != set(contract.train_years):
@@ -114,7 +118,7 @@ def run_gate0_v44(
     split_pass = train_years == set(contract.train_years) and selection_years == {contract.selection_year} and contract.evaluation_year not in train_years | selection_years
     checks["split_firewall"] = GateCheckV44(True, split_pass, {"train_years": sorted(train_years), "selection_years": sorted(selection_years)})
     benchmark_ok = Path(benchmark).is_file(); capacity_ok = Path(capacity_receipt).is_file()
-    checks["source_files"] = GateCheckV44(True, benchmark_ok and capacity_ok and Path(source_manifest).is_file(), {"benchmark": benchmark_ok, "capacity": capacity_ok})
+    checks["source_files"] = GateCheckV44(True, benchmark_ok and capacity_ok and Path(source_manifest).is_file(), {"benchmark": benchmark_ok, "capacity": capacity_ok, "source_manifest": True})
     capacity_pass = False
     if capacity_ok:
         payload = json.loads(Path(capacity_receipt).read_text(encoding="utf-8")); selected = payload.get("selected", {})
