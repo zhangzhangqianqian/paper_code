@@ -56,6 +56,23 @@ def _git_head(root: Path) -> str:
     return result.stdout.strip()
 
 
+def _git_top_level(root: Path) -> Path:
+    result = _git(root, "rev-parse", "--show-toplevel")
+    if result.returncode != 0 or not result.stdout.strip():
+        raise ValueError("repository top-level is unavailable")
+    return Path(result.stdout.strip()).resolve()
+
+
+def _git_relative(root: Path, relative: str) -> str:
+    """Translate a path relative to ``root`` into Git's worktree-relative path."""
+    top = _git_top_level(root)
+    try:
+        prefix = root.resolve().relative_to(top)
+    except ValueError as exc:
+        raise ValueError("repository root is outside Git worktree") from exc
+    return (prefix / Path(relative)).as_posix() if str(prefix) != "." else relative
+
+
 def _relative(path: str | Path, root: Path) -> tuple[str, Path]:
     resolved = (Path(path) if Path(path).is_absolute() else root / Path(path)).resolve()
     try:
@@ -71,10 +88,11 @@ def _tracked_clean(root: Path, relative: str, expected_head: str) -> None:
     head = _git_head(root)
     if head != expected_head:
         raise ValueError("source manifest Git commit does not match HEAD")
-    tracked = _git(root, "ls-files", "--error-unmatch", "--", relative)
-    if tracked.returncode != 0 or tracked.stdout.strip() != relative:
+    git_relative = _git_relative(root, relative)
+    tracked = _git(root, "ls-files", "--error-unmatch", "--", git_relative)
+    if tracked.returncode != 0 or tracked.stdout.strip() != git_relative:
         raise ValueError(f"v4.4 source is untracked: {relative}")
-    status = _git(root, "status", "--porcelain=v1", "--untracked-files=all", "--", relative)
+    status = _git(root, "status", "--porcelain=v1", "--untracked-files=all", "--", git_relative)
     if status.returncode != 0 or status.stdout.strip():
         raise ValueError(f"v4.4 source is dirty: {relative}")
 
@@ -85,10 +103,17 @@ def _worktree_status(root: Path) -> tuple[bool, list[str]]:
         raise ValueError("unable to inspect Git worktree")
     entries = [line for line in result.stdout.splitlines() if line.strip()]
     unexpected: list[str] = []
+    top = _git_top_level(root)
+    try:
+        prefix = root.resolve().relative_to(top).as_posix()
+    except ValueError as exc:
+        raise ValueError("repository root is outside Git worktree") from exc
     for line in entries:
         path = line[3:].strip()
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
+        if prefix and (path == prefix or path.startswith(prefix + "/")):
+            path = path[len(prefix):].lstrip("/")
         if not any(path.replace("\\", "/").startswith(prefix) for prefix in ALLOWLISTED_UNTRACKED):
             unexpected.append(line)
     return bool(entries), unexpected
