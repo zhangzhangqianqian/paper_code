@@ -30,6 +30,21 @@ class MaterializedTrainingV45:
         return ("train", "early_stop")
 
 
+@dataclass(frozen=True)
+class MaterializedPilotV45:
+    """Train-only artifacts plus the permitted 2019 selection view."""
+
+    train: V44WindowCollection
+    early_stop: V44WindowCollection
+    selection_full: V44WindowCollection
+    selection_stress: V44WindowCollection
+    normalization_source: V44WindowCollection
+    lineage: Mapping[str, Any]
+
+    def roles(self) -> tuple[str, ...]:
+        return ("train", "early_stop", "selection_full", "selection_stress")
+
+
 def _teacher_dispatch(teacher: Any, role: str, expected: int) -> np.ndarray | None:
     if teacher is None:
         return None
@@ -199,7 +214,45 @@ def load_v45_training_cache(
     )
 
 
+def load_v45_pilot_cache(
+    *,
+    materialized_root: str | Path,
+    train_data: str | Path | None = None,
+    benchmark: str | Path | None = None,
+    capacity_receipt: str | Path | None = None,
+) -> MaterializedPilotV45:
+    """Load the verified train cache and the explicitly permitted 2019 view."""
+
+    training = load_v45_training_cache(
+        materialized_root=materialized_root, train_data=train_data,
+        benchmark=benchmark, capacity_receipt=capacity_receipt,
+    )
+    data_root = Path(materialized_root) / "data"
+    for name in ("selection_full", "selection_stress"):
+        if not (data_root / f"{name}.npz").is_file():
+            raise FileNotFoundError(data_root / f"{name}.npz")
+    selection_full = _load_collection(data_root, "selection_full", "selection_full")
+    selection_stress = _load_collection(data_root, "selection_stress", "selection_stress")
+    selection_years = tuple(sorted(set(selection_full.timestamps.astype("datetime64[Y]").astype(int) + 1970)))
+    if selection_years != (2019,):
+        raise ValueError("Pilot selection cache must contain 2019 only")
+    lineage = dict(training.lineage)
+    lineage.update({
+        "schema": "formal-v4.5-pilot-cache-lineage-v1",
+        "selection_files_read": ["selection_full.npz", "selection_stress.npz"],
+        "selection_year_accessed": True,
+        "evaluation_year_accessed": False,
+        "selection_years": list(selection_years),
+    })
+    lineage["lineage_sha256"] = canonical_sha256(lineage)
+    return MaterializedPilotV45(
+        train=training.train, early_stop=training.early_stop,
+        selection_full=selection_full, selection_stress=selection_stress,
+        normalization_source=training.normalization_source, lineage=lineage,
+    )
+
+
 __all__ = [
-    "MaterializedTrainingV45", "build_v45_loaders", "load_v45_training_cache",
+    "MaterializedPilotV45", "MaterializedTrainingV45", "build_v45_loaders", "load_v45_pilot_cache", "load_v45_training_cache",
     "materialize_v45_training_only",
 ]

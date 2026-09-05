@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -157,4 +157,110 @@ def execute_training_stages_v45(
     )
 
 
-__all__ = ["TeacherBundleV45", "TrainingBundleV45", "build_v45_teachers", "execute_training_stages_v45"]
+def execute_real_pilot_v45(
+    *,
+    materialized: Any,
+    contract: FormalV45Contract,
+    artifact_root: str | Path,
+    benchmark: str | Path,
+    capacity_receipt: str | Path,
+    seed: int,
+    epoch_cap: int | None = None,
+) -> Mapping[str, Any]:
+    """Train the frozen v4.5 stages and evaluate the permitted 2019 view."""
+
+    import json
+    from .formal_v4_2_data import fit_train_normalization
+    from .formal_v4_4_metrics import compute_forecast_metrics_v44
+    from .formal_v4_4_rollout import rollout_v44_2019
+
+    artifact_root = Path(artifact_root)
+    benchmark_payload = __import__("yaml").safe_load(Path(benchmark).read_text(encoding="utf-8"))
+    capacity_payload = json.loads(Path(capacity_receipt).read_text(encoding="utf-8"))
+    parameters = _parameters(benchmark_payload, capacity_payload)
+    prior = fit_thermal_prior(
+        materialized.normalization_source.forecast_target,
+        materialized.normalization_source.load_history,
+        materialized.normalization_source.target_times,
+    )
+    bundle = execute_training_stages_v45(
+        materialized=materialized, contract=contract, artifact_root=artifact_root,
+        benchmark=benchmark, capacity_receipt=capacity_receipt, seed=int(seed),
+        parameters=parameters, prior=prior, epoch_cap=epoch_cap,
+    )
+    normalization = fit_train_normalization(materialized.normalization_source.split)
+    indices = np.arange(len(materialized.selection_full), dtype=np.int64)
+    models = {
+        "continuous_control": bundle.continuous_control.model,
+        "residual_stage_p1": bundle.p1.model,
+        "rsc_pf_joint": bundle.j.joint.model,
+        "fair_decoupled": bundle.j.decoupled.model,
+    }
+    rollouts = {
+        name: rollout_v44_2019(
+            model=model, materialized=materialized, indices=indices,
+            normalization=normalization, parameters=parameters,
+            artifact_root=artifact_root, method_id=name,
+        ) for name, model in models.items()
+    }
+    p1 = rollouts["residual_stage_p1"]
+    from .formal_v4_4_rollout import RolloutResultV44
+    transition = RolloutResultV44(
+        method_id="transition_prior", prediction=p1.prediction, target=p1.target,
+        probability=p1.prior_probability, prior_probability=p1.prior_probability,
+        regimes=p1.regimes, planned_dispatch=p1.planned_dispatch,
+        settled_dispatch=p1.settled_dispatch, shortage=p1.shortage,
+        physical_residual=p1.physical_residual, operating_cost=p1.operating_cost,
+        physical_carbon=p1.physical_carbon, penalized_objective=p1.penalized_objective,
+        initial_soc=p1.initial_soc, previous_chp=p1.previous_chp,
+        realized_demand=p1.realized_demand, realized_renewables=p1.realized_renewables,
+        realized_prices=p1.realized_prices, times=p1.times, state_hashes=p1.state_hashes,
+    )
+    rollouts["transition_prior"] = transition
+    metrics = {
+        name: compute_forecast_metrics_v44(
+            value.prediction, value.target, value.probability,
+            value.prior_probability, value.regimes, value.times,
+        ) for name, value in rollouts.items()
+    }
+    joint = rollouts["rsc_pf_joint"]; decoupled = rollouts["fair_decoupled"]
+    baseline = rollouts["residual_stage_p1"]
+
+    def ratio(numerator: float, denominator: float) -> float:
+        if not np.isfinite(numerator) or not np.isfinite(denominator) or denominator <= 0.0:
+            return float("inf")
+        return float(numerator / denominator)
+
+    joint_metrics = metrics["rsc_pf_joint"]; base_metrics = metrics["residual_stage_p1"]
+    comparisons = {
+        "leakage_ratio": {name: ratio(joint_metrics.inactive_leakage[name], base_metrics.inactive_leakage[name]) for name in ("cooling", "heating")},
+        "active_wape_ratio": {name: ratio(joint_metrics.active_only[name]["wape"], base_metrics.active_only[name]["wape"]) for name in ("cooling", "heating")},
+        "electricity_gas_wape_ratio": {name: ratio(joint_metrics.task[name]["wape"], base_metrics.task[name]["wape"]) for name in ("electricity", "gas")},
+        "four_task_score_ratio": ratio(joint_metrics.four_task_score, base_metrics.four_task_score),
+    }
+    return {
+        "prediction": joint.prediction, "target": joint.target,
+        "probability": joint.probability, "prior_probability": joint.prior_probability,
+        "regimes": joint.regimes, "times": joint.times,
+        "comparisons": comparisons,
+        "joint": {
+            "penalized_objective": float(np.mean(joint.penalized_objective)),
+            "shortage": float(np.mean(joint.shortage.sum(axis=1))),
+            "gradient_norms": dict(bundle.j.joint.gradient_norms),
+        },
+        "decoupled": {
+            "penalized_objective": float(np.mean(decoupled.penalized_objective)),
+            "shortage": float(np.mean(decoupled.shortage.sum(axis=1))),
+            "gradient_norms": dict(bundle.j.decoupled.gradient_norms),
+        },
+        "physics": {"max_residual": float(np.max(joint.physical_residual))},
+        "metrics": {name: asdict(metric) for name, metric in metrics.items()},
+        "rows": ["continuous_control", "residual_stage_p1", "rsc_pf_joint", "fair_decoupled", "transition_prior"],
+        "bundle": bundle,
+    }
+
+
+__all__ = [
+    "TeacherBundleV45", "TrainingBundleV45", "build_v45_teachers",
+    "execute_real_pilot_v45", "execute_training_stages_v45",
+]
