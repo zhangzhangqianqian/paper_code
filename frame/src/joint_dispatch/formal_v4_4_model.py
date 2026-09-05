@@ -143,7 +143,13 @@ class ResidualGatedRSCPFModel(_FormalV4Base):
         normalized = (physical - task_mean) / task_scale
         forecast_for_dispatch = physical.detach() if detach_forecast_for_dispatch else physical
         physical_features = self.core._raw_physical_features(forecast_for_dispatch, inputs["scheduler_context"])
-        controls, dispatch = self._schedule(physical_features, state, inputs["previous_chp"])
+        # The decoupled comparator must cut every decision-to-forecast edge,
+        # including the parallel state-to-scheduler path.  The state remains
+        # attached to the supervised forecast head, but the scheduler receives
+        # a detached copy so its decision loss cannot update the forecast side
+        # through the causal state encoder.
+        scheduler_state = state.detach() if detach_forecast_for_dispatch else state
+        controls, dispatch = self._schedule(physical_features, scheduler_state, inputs["previous_chp"])
         return FormalV44ForwardOutput(
             base_forecast_normalized=base_normalized,
             base_forecast_physical=base_physical,
