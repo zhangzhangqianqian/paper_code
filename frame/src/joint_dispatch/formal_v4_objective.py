@@ -256,18 +256,8 @@ def settle_formal_v4_four_hour(
     shortage = torch.stack([item.shortage for item in outcomes], dim=1).sum(dim=(1, 2))
     normalized_shortage = shortage / actual_demand.abs().sum(dim=(1, 2)).clamp_min(1.0)
 
-    balance = torch.stack((
-        settled_dispatch[..., _I["grid"]] + settled_dispatch[..., _I["pv_use"]] + settled_dispatch[..., _I["wt_use"]] + settled_dispatch[..., _I["p_chp"]] + settled_dispatch[..., _I["p_discharge"]] + settled_dispatch[..., _I["slack_e"]] - settled_dispatch[..., _I["p_ec"]] - settled_dispatch[..., _I["p_charge"]] - actual_demand[..., 0],
-        settled_dispatch[..., _I["q_ec"]] + settled_dispatch[..., _I["q_ac"]] + settled_dispatch[..., _I["slack_c"]] - actual_demand[..., 1],
-        settled_dispatch[..., _I["q_chp"]] + settled_dispatch[..., _I["q_gb"]] + settled_dispatch[..., _I["slack_h"]] - settled_dispatch[..., _I["q_ac_in"]] - settled_dispatch[..., _I["q_dump"]] - actual_demand[..., 2],
-    ), dim=-1)
-    conversion = torch.stack((
-        settled_dispatch[..., _I["p_chp"]] - _parameter_at_step(parameters, "chp_electric_efficiency", settled_dispatch[..., 0], 0, 0.0) * settled_dispatch[..., _I["g_chp"]],
-        settled_dispatch[..., _I["q_chp"]] - _parameter_at_step(parameters, "chp_heat_efficiency", settled_dispatch[..., 0], 0, 0.0) * settled_dispatch[..., _I["g_chp"]],
-        settled_dispatch[..., _I["q_gb"]] - _parameter_at_step(parameters, "gas_boiler_efficiency", settled_dispatch[..., 0], 0, 0.0) * settled_dispatch[..., _I["g_gb"]],
-        settled_dispatch[..., _I["q_ec"]] - _parameter_at_step(parameters, "electric_chiller_cop", settled_dispatch[..., 0], 0, 0.0) * settled_dispatch[..., _I["p_ec"]],
-        settled_dispatch[..., _I["q_ac"]] - _parameter_at_step(parameters, "absorption_chiller_cop", settled_dispatch[..., 0], 0, 0.0) * settled_dispatch[..., _I["q_ac_in"]],
-    ), dim=-1)
+    balance = torch.stack([item.balance_residuals for item in outcomes], dim=1)
+    conversion = torch.stack([item.conversion_residuals for item in outcomes], dim=1)
     capacity = _finite_scalar(parameters.get("bess_energy_capacity", 1.0), "bess_energy_capacity")
     eta = _finite_scalar(parameters.get("bess_roundtrip_efficiency", 1.0), "bess_roundtrip_efficiency") ** 0.5
     previous_energy = initial_soc[:, 0] * capacity

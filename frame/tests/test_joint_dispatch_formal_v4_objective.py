@@ -11,8 +11,11 @@ from src.joint_dispatch.formal_v4_objective import (
     fit_training_objective_scale,
     formal_v4_curriculum_weights,
     formal_v4_joint_loss,
+    settle_formal_v4_four_hour,
 )
+from src.joint_dispatch.formal_v4_recourse import settle_first_step_v4
 from src.joint_dispatch.model import JointForecastDispatchModel
+from src.scheduling.dispatch_schema import VARIABLES
 
 
 PARAMETERS = {
@@ -118,6 +121,29 @@ def test_settlement_contract_has_reporting_only_shortage():
     )
     assert settlement.per_step_penalized_objective.shape == (2, 4)
     assert settlement.normalized_shortage.shape == (2,)
+
+
+def test_four_hour_constraint_penalty_includes_settlement_only_dump_accounting():
+    index = {name: position for position, name in enumerate(VARIABLES)}
+    planned = torch.zeros(1, 4, len(VARIABLES))
+    planned[..., index["p_chp"]] = PARAMETERS["chp_electric_capacity"]
+    demand = torch.zeros(1, 4, 3)
+    renewables = torch.zeros(1, 4, 2)
+    initial_soc = torch.full((1, 1), 0.5)
+    previous_chp = torch.full((1, 1), PARAMETERS["chp_electric_capacity"])
+
+    first = settle_first_step_v4(
+        planned[:, 0], demand[:, 0], renewables[:, 0], PARAMETERS,
+        initial_soc=initial_soc, previous_chp=previous_chp,
+    )
+    settled = settle_formal_v4_four_hour(
+        planned, demand, renewables, initial_soc, previous_chp, PARAMETERS,
+    )
+
+    assert first.p_dump.item() > 0.0
+    assert first.balance_residuals.abs().max().item() <= 1.0e-5
+    assert first.conversion_residuals.abs().max().item() <= 1.0e-5
+    assert settled.constraint_penalty.item() <= 1.0e-5
 
 
 def test_gradient_clipping_enforces_configured_norm():
