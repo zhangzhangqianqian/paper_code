@@ -25,14 +25,19 @@ Gate 1 run `formal_v4_2_20260905_i` correctly preserved that boundary but reject
 
 ## Tests
 
-- Add a regression case with deliberate electric surplus so `p_dump > 0` and assert the post-settlement constraint penalty is approximately zero.
+- Add a deterministic regression case that uses the CHP ramp lower bound to force unavoidable electric surplus. Grid and renewable curtailment must not be able to remove this surplus, so the case guarantees `p_dump > 0`.
+- Assert that the four-hour constraint penalty equals the aggregation of the canonical one-step balance and conversion residuals plus the explicit SOC recurrence residual. This prevents a second, divergent balance implementation from being introduced later.
+- Assert that the forced-surplus case has an approximately zero post-settlement constraint penalty even though `p_dump > 0`.
 - Assert the same case remains finite and records the surplus through the canonical one-step outcome.
 - Retain the Gate 1 regression proving four forecast targets are preserved while only the first three enter rigid settlement.
+- Audit every four-hour settlement caller and assert that only electricity, cooling, and heating are passed as rigid demand. Gate 2's independent chronological evaluator already derives `p_dump` correctly and is not changed.
 - Run the focused objective/Gate 1 tests and the complete formal-v4.2 suite.
 
 ## Gate Execution
 
-After tests and source commit, use a fresh run ID and execute Gate 0, Pilot, and Gate 1 in order. Continue to Gate 2 only when the immutable Gate 1 receipt contains `authorized_gate2=true`. Stop at the first failed gate. Do not run Gate 3, ablations, manuscript generation, or access the 2020 evaluation split outside an authorized Gate 2 execution.
+The correction changes the Stage J and Gate 2 training objective, not only a reporting field. All Stage J candidates and downstream training checkpoints produced before the correction are therefore invalid for the repaired protocol and must not be reused or re-ranked.
+
+After tests and source commit, use a fresh run ID and execute Gate 0, Pilot, and Gate 1 from newly trained checkpoints. Continue to Gate 2 only when the immutable Gate 1 receipt contains `authorized_gate2=true`. Stop at the first failed gate. Do not run Gate 3, ablations, manuscript generation, or access the 2020 evaluation split outside an authorized Gate 2 execution.
 
 ## Success Criteria
 
