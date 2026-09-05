@@ -58,7 +58,6 @@ class ExternalBaselineBatch:
         expected = {
             "load_history": (24, len(TASK_ORDER)),
             "exog_history": (24, len(EXOG_ORDER)),
-            "device_history": (24, len(DISPATCH_ORDER)),
             "device_status": (24, len(STATUS_ORDER)),
             "forecast_target": (4, len(TASK_ORDER)),
             "scheduler_context": (4, 6),
@@ -70,6 +69,12 @@ class ExternalBaselineBatch:
                 raise ValueError(f"{name} must have shape [B,{tail[0]},{tail[1]}]")
             if int(value.shape[0]) != n:
                 raise ValueError(f"{name} has a different batch size")
+        if self.device_history.ndim != 3 or tuple(self.device_history.shape[1:]) not in {
+            (24, 17), (24, len(DISPATCH_ORDER))
+        }:
+            raise ValueError("device_history must have shape [B,24,17] for v4.6 or legacy [B,24,21]")
+        if int(self.device_history.shape[0]) != n:
+            raise ValueError("device_history has a different batch size")
         if self.previous_chp.ndim != 2 or tuple(self.previous_chp.shape) != (n, 1):
             raise ValueError("previous_chp must have shape [B,1]")
         if self.oracle_first_step_objective.ndim != 1 or int(self.oracle_first_step_objective.shape[0]) != n:

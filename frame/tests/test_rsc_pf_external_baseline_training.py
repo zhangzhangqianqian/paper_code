@@ -18,9 +18,13 @@ ROOT = Path(__file__).parents[1]
 
 def _config(tmp_path: Path, *, smoke_limit: int = 2) -> dict[str, object]:
     return {
-        "source_root": str(ROOT / "reports" / "rsc_pf_external_baselines_v1" / "implementation" / "sources"),
+        "source_root": str(ROOT / "reports" / "rsc_pf_external_baselines_v46" / "implementation" / "sources"),
         "registry_path": str(ROOT / "configs" / "rsc_pf_external_baselines_v1.json"),
-        "data_root": str(ROOT / "reports" / "joint_forecast_dispatch_v1" / "data"),
+        "data_protocol": "formal_v46",
+        "data_root": str(ROOT / "reports" / "joint_forecast_dispatch_formal_v4_4" / "formal_v4_4_20260905_f" / "pilot" / "data"),
+        "train_file": "train.npz",
+        "validation_file": "early_stop.npz",
+        "pilot_file": "selection_full.npz",
         "output_root": str(tmp_path / "outputs"),
         "smoke_limit": smoke_limit,
         "smoke_epochs": 1,

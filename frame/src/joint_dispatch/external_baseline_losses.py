@@ -17,6 +17,7 @@ from torch.nn import functional as F
 from ..scheduling.proxy_physics import balance_residuals, conversion_residuals, soc_residuals
 from .contract import DISPATCH_ORDER, FORECAST_TASK_WEIGHTS, TASK_ORDER
 from .external_baseline_data import ExternalBaselineBatch, ExternalNormalization
+from .external_v46_data import ExternalV46Normalization
 
 
 class ExternalEvidenceError(RuntimeError):
@@ -88,8 +89,8 @@ def forecast_loss(
 ) -> Tensor:
     """Return weighted normalized Huber loss for a forecast adapter."""
 
-    if not isinstance(normalization, ExternalNormalization) or normalization.fitted_split != "train":
-        raise ValueError("forecast normalization must be an ExternalNormalization fitted on train")
+    if not isinstance(normalization, (ExternalNormalization, ExternalV46Normalization)) or normalization.fitted_split != "train":
+        raise ValueError("forecast normalization must be fitted on train")
     _forecast_pair(prediction, target)
     if tuple(float(value) for value in task_weights) != tuple(FORECAST_TASK_WEIGHTS):
         raise ValueError("task_weights must match the frozen task weights")

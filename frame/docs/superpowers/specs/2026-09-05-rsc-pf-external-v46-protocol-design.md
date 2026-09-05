@@ -51,5 +51,5 @@
 - 所有外部输入输出形状与 v4.6 协议一致。
 - 未来标签改变不会改变模型输入。
 - iTransformer-PTO 和 DecisionFocused-Online 的 LP 调用角色可审计；DigitalTwins-Policy 为零 exact LP 调用。
-- 所有短校准损失和输出有限，物理解码无不可接受残差。
+- 所有短校准损失和输出有限，物理解码的结构性残差有限；短校准不把“零负荷缺口”误当作物理解码器必须保证的条件，缺口由正式调度指标评价。
 - 生成的 receipt 明确记录数据来源、适配级别、分割、种子、LP 调用和 `test_set_accessed=false`。

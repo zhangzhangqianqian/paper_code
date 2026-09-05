@@ -1,8 +1,13 @@
 {
   "schema_version": "rsc-pf-external-implementation-v1",
   "registry_path": "configs/rsc_pf_external_baselines_v1.json",
-  "source_root": "reports/rsc_pf_external_baselines_v1/implementation/sources",
-  "output_root": "reports/rsc_pf_external_baselines_v1/implementation",
+  "source_root": "reports/rsc_pf_external_baselines_v46/implementation/sources",
+  "output_root": "reports/rsc_pf_external_baselines_v46/implementation",
+  "data_protocol": "formal_v46",
+  "data_root": "reports/joint_forecast_dispatch_formal_v4_4/formal_v4_4_20260905_f/pilot/data",
+  "train_file": "train.npz",
+  "validation_file": "early_stop.npz",
+  "pilot_file": "selection_full.npz",
   "lookback": 24,
   "horizon": 4,
   "task_count": 4,
@@ -10,6 +15,7 @@
   "exog_dim": 12,
   "dispatch_dim": 21,
   "status_dim": 6,
+  "historical_device_dim": 17,
   "seeds": [2026, 2027, 2028, 2029, 2030],
   "training": {
     "batch_size": 256,

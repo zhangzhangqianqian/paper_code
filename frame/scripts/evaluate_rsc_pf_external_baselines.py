@@ -18,7 +18,6 @@ FRAME_ROOT = Path(__file__).resolve().parents[1]
 if str(FRAME_ROOT) not in sys.path:
     sys.path.insert(0, str(FRAME_ROOT))
 
-from src.joint_dispatch.data import load_joint_split  # noqa: E402
 from src.joint_dispatch.data import benchmark_lp_generation  # noqa: E402
 from src.joint_dispatch.evaluation import evaluate_forecast  # noqa: E402
 from src.joint_dispatch.external_baseline_data import ExternalBaselineBatch, fit_external_normalization  # noqa: E402
@@ -31,6 +30,7 @@ from src.joint_dispatch.external_baseline_training import (  # noqa: E402
     _decoder_parameters,
     _forbidden_test_path,
     _load_data,
+    _split_manifest,
     _METHOD_SAFE,
     load_external_checkpoint,
 )
@@ -190,7 +190,7 @@ def evaluate_external_validation(method_id: str, seed: int, config: Mapping[str,
         "optimizer_role": "exact optimizer at inference" if method_id == "DecisionFocused-Online" else "none at inference" if method_id == "DigitalTwins-Policy" else "none at inference",
         "exact_lp_calls": int(lp_calls),
         "test_set_accessed": False,
-        "split_manifest": {"train": str(paths["data_root"] / "train.npz"), "validation": str(paths["data_root"] / "validation.npz")},
+        "split_manifest": _split_manifest(paths),
     }
     (evaluation_dir / "evaluation_receipt.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return receipt
@@ -280,7 +280,7 @@ def main() -> int:
     if args.all_methods and args.all_seeds:
         paths = _config_paths(config)
         manifest = write_external_validation_manifest(paths["output_root"])
-        validation_split, _stored_normalization, _metadata = load_joint_split(paths["data_root"] / "validation.npz")
+        _train_split, validation_split, _normalization = _load_data(paths)
         resource_gate = benchmark_external_lp_resources(paths["output_root"], validation_split)
         manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
         manifest_payload["lp_resource_gate"] = resource_gate

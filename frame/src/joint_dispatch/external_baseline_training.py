@@ -27,6 +27,13 @@ from .external_baseline_data import (
     ExternalNormalization,
     fit_external_normalization,
 )
+from .external_v46_data import (
+    ExternalV46Normalization,
+    ExternalV46Split,
+    build_external_v46_oracle,
+    build_external_v46_teacher,
+    load_external_v46_split,
+)
 from .external_baseline_losses import (
     audit_external_gradients,
     decision_focused_loss,
@@ -81,6 +88,10 @@ def _config_paths(config: Mapping[str, Any]) -> dict[str, Path]:
         "implementation_config": config.get("implementation_config", "configs/rsc_pf_external_baseline_implementation_v1.json"),
     }
     paths = {name: _resolve(value, root) for name, value in values.items()}
+    paths["train_file"] = Path(str(config.get("train_file", "train.npz")))
+    paths["validation_file"] = Path(str(config.get("validation_file", "validation.npz")))
+    paths["pilot_file"] = Path(str(config.get("pilot_file", "selection_full.npz")))
+    paths["data_protocol"] = Path(str(config.get("data_protocol", "joint_v1")))
     for name in ("data_root", "source_root", "output_root", "registry_path", "implementation_config"):
         if _forbidden_test_path(paths[name]):
             raise ValueError(f"{name} points to a sealed test-set path")
@@ -113,20 +124,85 @@ def _read_source_provenance(paths: Mapping[str, Path]) -> tuple[str, str, dict[s
     return registry_hash, _sha256(receipt_path), receipt
 
 
-def _load_data(paths: Mapping[str, Path]) -> tuple[JointWindowSplit, JointWindowSplit, ExternalNormalization]:
-    train_path = paths["data_root"] / "train.npz"
-    validation_path = paths["data_root"] / "validation.npz"
+def _external_lp_parameters() -> dict[str, float]:
+    values = _decoder_parameters()
+    values.update({
+        "bess_throughput_cost": 1.0e-6,
+        "grid_energy_price": 1.0,
+        "gas_energy_price": 0.6,
+        "grid_emission_factor": 0.5,
+        "gas_emission_factor": 0.25,
+        "carbon_price_default": 0.0,
+        "unserved_penalty": 100.0,
+    })
+    return values
+
+
+def _split_manifest(paths: Mapping[str, Path]) -> dict[str, str]:
+    return {
+        "train": str(paths["data_root"] / paths["train_file"]),
+        "validation": str(paths["data_root"] / paths["validation_file"]),
+    }
+
+
+def _load_data(paths: Mapping[str, Path]) -> tuple[Any, Any, Any]:
+    train_path = paths["data_root"] / paths["train_file"]
+    validation_path = paths["data_root"] / paths["validation_file"]
     for path in (train_path, validation_path):
         if _forbidden_test_path(path):
             raise ValueError("external training attempted to access a test path")
         if not path.is_file():
             raise FileNotFoundError(f"required split artifact is missing: {path}")
+    if str(paths.get("data_protocol", Path("joint_v1"))) == "formal_v46":
+        train = load_external_v46_split(train_path, "train")
+        validation = load_external_v46_split(validation_path, "validation")
+        cache = paths["output_root"] / "data_cache" / "v46_labels.npz"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        if cache.is_file():
+            with np.load(cache, allow_pickle=False) as payload:
+                train_teacher = payload["train_teacher"]
+                validation_teacher = payload["validation_teacher"]
+                validation_oracle = payload["validation_oracle"]
+        else:
+            train_teacher = build_external_v46_teacher(train, _external_lp_parameters())
+            validation_teacher = build_external_v46_teacher(validation, _external_lp_parameters())
+            validation_oracle = build_external_v46_oracle(validation, _external_lp_parameters())
+            np.savez_compressed(
+                cache, train_teacher=train_teacher, validation_teacher=validation_teacher,
+                validation_oracle=validation_oracle,
+            )
+        train = replace_external_labels(train, train_teacher, np.zeros((len(train),), dtype=np.float32))
+        validation = replace_external_labels(validation, validation_teacher, validation_oracle)
+        return train, validation, ExternalV46Normalization.fit(train)
     train, _stored_norm, _train_meta = load_joint_split(train_path)
     validation, _validation_norm, _validation_meta = load_joint_split(validation_path)
     if train.split != "train" or validation.split != "validation":
         raise ValueError("external runner requires train and validation split artifacts")
     normalization = fit_external_normalization(train)
     return train, validation, normalization
+
+
+def replace_external_labels(split: ExternalV46Split, teacher: np.ndarray, oracle: np.ndarray) -> ExternalV46Split:
+    if teacher.shape != (len(split), 4, 21) or oracle.shape != (len(split),):
+        raise ValueError("external labels do not match the v4.6 split")
+    return replace_dataclass(split, teacher_dispatch=teacher, oracle_first_step_objective=oracle)
+
+
+def replace_dataclass(split: ExternalV46Split, **changes: Any) -> ExternalV46Split:
+    return ExternalV46Split(
+        load_history=changes.get("load_history", split.load_history),
+        exog_history=changes.get("exog_history", split.exog_history),
+        device_history=changes.get("device_history", split.device_history),
+        device_status=changes.get("device_status", split.device_status),
+        scheduler_context=changes.get("scheduler_context", split.scheduler_context),
+        previous_chp=changes.get("previous_chp", split.previous_chp),
+        forecast_target=changes.get("forecast_target", split.forecast_target),
+        renewable_realized=changes.get("renewable_realized", split.renewable_realized),
+        target_times=changes.get("target_times", split.target_times), split=split.split,
+        teacher_dispatch=changes.get("teacher_dispatch", split.teacher_dispatch),
+        oracle_first_step_objective=changes.get("oracle_first_step_objective", split.oracle_first_step_objective),
+        source_path=split.source_path,
+    )
 
 
 def _take_split(split: JointWindowSplit, limit: int | None) -> JointWindowSplit:
@@ -159,14 +235,14 @@ def _decoder_parameters() -> dict[str, float]:
     # Values are the frozen Standard-IES benchmark parameters used to create
     # the causal windows, not a separately tuned policy setting.
     return {
-        "grid_import_capacity": 1917.0,
-        "chp_electric_capacity": 447.3,
-        "chp_heat_capacity": 575.1,
+        "grid_import_capacity": 1930.5,
+        "chp_electric_capacity": 450.45,
+        "chp_heat_capacity": 579.15,
         "gas_boiler_capacity": 1148.2812,
-        "electric_chiller_capacity": 869.115,
-        "absorption_chiller_capacity": 869.115,
-        "bess_power_capacity": 255.6,
-        "bess_energy_capacity": 1022.4,
+        "electric_chiller_capacity": 2166.102,
+        "absorption_chiller_capacity": 2166.102,
+        "bess_power_capacity": 257.4,
+        "bess_energy_capacity": 1029.6,
         "chp_electric_efficiency": 0.35,
         "chp_heat_efficiency": 0.45,
         "gas_boiler_efficiency": 0.9,
@@ -277,7 +353,7 @@ def _checkpoint_payload(
         "registry_sha256": registry_hash,
         "source_receipt_sha256": source_receipt_hash,
         "stage": stage,
-        "split_manifest": {"train": str(data_paths["data_root"] / "train.npz"), "validation": str(data_paths["data_root"] / "validation.npz")},
+        "split_manifest": _split_manifest(data_paths),
         "test_set_accessed": False,
         "rng_state": torch.get_rng_state(),
         "numpy_rng_state": np.random.get_state(),
@@ -424,7 +500,7 @@ def _run(
         "source_receipt_sha256": source_receipt_hash,
         "registry_sha256": registry_hash,
         "config_sha256": config_hash,
-        "split_manifest": {"train": str(paths["data_root"] / "train.npz"), "validation": str(paths["data_root"] / "validation.npz")},
+        "split_manifest": _split_manifest(paths),
         "normalization_fit_split": "train",
         "test_set_accessed": False,
         "source_method_receipt": next(item for item in source_receipt["methods"] if item["method_id"] == method_id),

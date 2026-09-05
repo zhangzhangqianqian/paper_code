@@ -27,6 +27,9 @@ REQUIRED_CONFIG_KEYS = {
 REQUIRED_TRAINING_KEYS = {
     "batch_size", "learning_rate", "weight_decay", "gradient_clip", "min_epochs", "max_epochs", "patience",
 }
+OPTIONAL_RUNTIME_KEYS = {
+    "data_protocol", "data_root", "train_file", "validation_file", "pilot_file", "historical_device_dim",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -46,7 +49,7 @@ def _read_json(path: Path) -> Mapping[str, Any]:
 def load_external_implementation_config(path: str | Path) -> dict[str, Any]:
     source = Path(path)
     payload = dict(_read_json(source))
-    unknown = sorted(set(payload) - REQUIRED_CONFIG_KEYS)
+    unknown = sorted(set(payload) - REQUIRED_CONFIG_KEYS - OPTIONAL_RUNTIME_KEYS)
     missing = sorted(REQUIRED_CONFIG_KEYS - set(payload))
     if unknown or missing:
         raise ValueError(f"implementation config keys invalid; unknown={unknown}, missing={missing}")
