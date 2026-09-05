@@ -26,6 +26,7 @@
 
 **Files:**
 - Create: `src/joint_dispatch/formal_v4_4_provenance.py`
+- Create: `scripts/build_rsc_pf_formal_v4_4_source_manifest.py`
 - Modify: `scripts/run_rsc_pf_formal_v4_4_gate0.py`
 - Modify: `src/joint_dispatch/formal_v4_4_gate0.py`
 - Create: `tests/test_joint_dispatch_formal_v4_4_provenance.py`
@@ -34,7 +35,9 @@
 **Interfaces:**
 - Produce `build_source_manifest(*, run_id: str, contract_sha256: str, repo_root: Path, required_paths: Sequence[Path]) -> dict[str, Any]`.
 - Produce `write_source_manifest(path: Path, manifest: Mapping[str, Any]) -> str`, returning the file SHA-256.
+- Expose `scripts/build_rsc_pf_formal_v4_4_source_manifest.py` with required arguments `--contract`, `--repo-root`, `--run-id`, and `--output`; it must call the two provenance functions and print the output path and digest.
 - Require the manifest to contain `schema="formal-v4.4-source-manifest-v1"`, current Git commit, clean/dirty status, contract hash, implementation path hashes, and `evaluation_year_accessed=false`.
+- Record `third_party/iTransformer_source/` as an explicit pre-existing allowlisted untracked path; do not stage, hash as v4.4 implementation, delete, or modify it.
 - Make Gate 0 reject a manifest whose commit or implementation hashes do not describe the current checkout.
 - Make Gate 0 copy the externally staged manifest into `<run>/protocol/SOURCE_MANIFEST.json` after creating the new run directory; the source-manifest staging directory must remain outside the run directory so Gate 0 can create the run atomically.
 - Add a measured `executor_entrypoint` check that imports the production executor and runs its non-training contract/data-shape preflight on a deterministic two-window fixture.
@@ -79,7 +82,7 @@ Run the command from Step 2. Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add src/joint_dispatch/formal_v4_4_provenance.py scripts/run_rsc_pf_formal_v4_4_gate0.py src/joint_dispatch/formal_v4_4_gate0.py tests/test_joint_dispatch_formal_v4_4_provenance.py tests/test_joint_dispatch_formal_v4_4_gate0.py
+git add src/joint_dispatch/formal_v4_4_provenance.py scripts/build_rsc_pf_formal_v4_4_source_manifest.py scripts/run_rsc_pf_formal_v4_4_gate0.py src/joint_dispatch/formal_v4_4_gate0.py tests/test_joint_dispatch_formal_v4_4_provenance.py tests/test_joint_dispatch_formal_v4_4_gate0.py
 git commit -m "feat: bind formal v4.4 source lineage"
 ```
 
@@ -397,7 +400,16 @@ authorization or metric computation.
 
 Use the current committed implementation and record the new run ID, Git commit,
 contract hash, executor hashes, and exact source paths. Do not reuse the v4.2
-manifest.
+manifest. The source manifest is staged outside the run directory with this
+command:
+
+```powershell
+& 'D:\Paper\envs\rsc_pf_diffopt_v4\python.exe' scripts\build_rsc_pf_formal_v4_4_source_manifest.py --contract configs\joint_forecast_dispatch_formal_v4_4.json --repo-root . --run-id formal_v4_4_20260905_b --output reports\joint_forecast_dispatch_formal_v4_4\source_manifests\formal_v4_4_20260905_b\SOURCE_MANIFEST.json
+```
+
+Expected: the manifest records the current commit, hashes the v4.4 source
+allowlist, records the pre-existing iTransformer directory as allowed
+untracked content, and sets `evaluation_year_accessed=false`.
 
 - [ ] **Step 3: Run Gate 0 with a new run ID**
 
