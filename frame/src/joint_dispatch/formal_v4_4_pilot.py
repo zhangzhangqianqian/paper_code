@@ -61,6 +61,10 @@ def run_pilot_v44(
     root = Path(output_root).resolve() / str(run_id)
     if root.exists(): raise FileExistsError(root)
     pilot_dir = root / "pilot"; pilot_dir.mkdir(parents=True)
+    # Keep an immutable copy of the Gate-0 split beside the Pilot artifacts so
+    # the independent audit never needs to infer indices from in-memory state.
+    with np.load(split_path, allow_pickle=False) as source_split:
+        write_npz_once(root / "gate0" / "PILOT_SPLIT.npz", {name: source_split[name] for name in source_split.files})
     if stage_executor is None:
         raise RuntimeError("formal Pilot requires a real stage executor with causal device trajectories and same-information LP labels; no executor was supplied")
     result = dict(stage_executor(train_data=base_train_data, selection_data=base_selection_data, benchmark=benchmark, capacity_receipt=capacity_receipt, split=split, contract=contract))
