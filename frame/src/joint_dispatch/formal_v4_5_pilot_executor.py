@@ -20,6 +20,7 @@ from .formal_v4_5_training import (
     run_continuous_control_v45, run_stage_j_pair_v45, run_stage_p0_v45,
     run_stage_p1_v45, run_stage_s_v45,
 )
+from .formal_v4_4_training import seed_everything
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,10 @@ def execute_training_stages_v45(
     if prior is None:
         source = materialized.normalization_source
         prior = fit_thermal_prior(source.forecast_target, source.load_history, source.target_times)
+    # Seed before model construction, not only inside individual stage loops.
+    # This makes the P1 model hash (and therefore same-information teacher
+    # lineage) reproducible across a safe process restart.
+    seed_everything(int(seed))
     model = build_v44_model(materialized, contract, prior, parameters)
     normalization = fit_train_normalization(materialized.normalization_source.split)
     batch_size = int(contract.payload["pilot_budget"]["batch_size"])
