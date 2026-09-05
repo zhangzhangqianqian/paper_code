@@ -28,6 +28,7 @@ DEFAULT_SOURCE_PATHS = (
     "src/joint_dispatch/formal_v4_4_pilot.py",
     "src/joint_dispatch/formal_v4_4_pilot_data.py",
     "src/joint_dispatch/formal_v4_4_pilot_gate.py",
+    "src/joint_dispatch/formal_v4_4_provenance.py",
     "src/joint_dispatch/formal_v4_4_regime.py",
     "src/joint_dispatch/formal_v4_4_training.py",
     "tests/test_joint_dispatch_formal_v4_4_provenance.py",
