@@ -17,6 +17,7 @@ from .formal_v4_4_artifacts import sha256_file, write_json_once
 from .formal_v4_4_contract import FormalV44Contract, load_formal_v4_4_contract
 from .formal_v4_4_model import ResidualGatedRSCPFModel
 from .formal_v4_4_pilot_data import build_pilot_indices
+from .formal_v4_4_pilot_executor import execute_real_pilot_v44
 from .formal_v4_4_provenance import validate_source_manifest_payload
 from .formal_v4_4_regime import derive_last_observed_regime, derive_thermal_regimes, fit_thermal_prior
 from .formal_v4_4_training import named_autograd_norms
@@ -148,7 +149,10 @@ def run_gate0_v44(
     checks["decoupled_gradient"] = GateCheckV44(True, dec_norms.get("base", 1.0) <= 1.0e-12 and dec_norms.get("gate", 1.0) <= 1.0e-12 and dec_norms.get("magnitude", 1.0) <= 1.0e-12 and dec_norms.get("scheduler", 0.0) > 0.0, dec_norms)
     finite = bool(torch.isfinite(output.dispatch).all() and torch.isfinite(output.forecast_physical).all()); checks["physical_residual"] = GateCheckV44(True, finite, 0.0, measured_max=0.0)
     checks["source_isolation"] = GateCheckV44(True, _source_isolated(), "formal_v4_4 imports")
-    checks["entrypoints"] = GateCheckV44(True, all(callable(value) for value in (run_gate0_v44, build_pilot_indices)), "gate0/pilot-data")
+    executor_signature = inspect.signature(execute_real_pilot_v44)
+    required_executor_args = ("train_data", "selection_data", "benchmark", "capacity_receipt", "split", "contract", "artifact_root")
+    entrypoint_ok = all(callable(value) for value in (run_gate0_v44, build_pilot_indices, execute_real_pilot_v44)) and all(name in executor_signature.parameters for name in required_executor_args)
+    checks["entrypoints"] = GateCheckV44(True, entrypoint_ok, {"gate0": "run_gate0_v44", "pilot": "execute_real_pilot_v44", "required_arguments": list(required_executor_args)})
     authorized = all(check.measured and check.passed for check in checks.values())
     split_dict = {} if split is None else split.to_dict(); prior_dict = prior.to_dict()
     receipt = Gate0ReceiptV44(str(run_id), contract.contract_sha256, source_hash, train_hash, selection_hash, authorized, checks, split_dict, prior_dict)
