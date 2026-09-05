@@ -213,6 +213,11 @@ def planned_horizon_residuals(
         row = plan.dispatch[horizon]
         demand = plan.scheduler_demand[horizon]
         renewable = plan.renewable_forecast[horizon]
+        # A forecast head may emit a small signed residual around zero.  The
+        # physical decoder and LP both interpret demand/renewables as
+        # non-negative quantities, so the audit uses the same boundary clamp.
+        demand = np.maximum(demand, 0.0)
+        renewable = np.maximum(renewable, 0.0)
         values.append(_planned_residuals_for_row(row, shadow, demand, renewable, parameters))
         shadow = advance_with_executed_first_hour(
             shadow,
@@ -402,11 +407,15 @@ def run_perfect_information_mpc_reference(
         plan = _dispatch_from_lp(dispatch_result.values, 4)
         planned = PlannedStep(labels.forecast_target.copy(), labels.forecast_target.copy(), labels.renewable_realized.copy(), plan, 0)
         planned_residuals.append(np.max(planned_horizon_residuals(planned, state, lp_parameters), axis=0))
+        settlement_parameters = dict(lp_parameters)
+        settlement_parameters["grid_energy_price"] = float(lp_parameters["grid_energy_price"][0])
+        settlement_parameters["gas_energy_price"] = float(lp_parameters["gas_energy_price"][0])
+        settlement_parameters["carbon_price"] = float(lp_parameters["carbon_price"][0])
         settled_result = settle_and_advance_v42(
             state,
             plan,
             {"demand": labels.forecast_target[0, :3], "renewable": labels.renewable_realized[0], "realized_load": labels.forecast_target[0], "realized_exog": labels.next_observed_exog},
-            lp_parameters,
+            settlement_parameters,
         )
         plans.append(plan)
         settled.append(settled_result.settled)
