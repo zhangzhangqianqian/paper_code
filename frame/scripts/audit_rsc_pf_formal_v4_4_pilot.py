@@ -34,7 +34,12 @@ def _json(path: Path) -> dict[str, Any]:
 
 
 def _array_equal(left: Any, right: Any, *, atol: float = 1.0e-8) -> bool:
-    return np.asarray(left).shape == np.asarray(right).shape and bool(np.allclose(left, right, rtol=1.0e-7, atol=atol, equal_nan=False))
+    left_array = np.asarray(left); right_array = np.asarray(right)
+    if left_array.shape != right_array.shape:
+        return False
+    if left_array.dtype.kind in "mMOSU" or right_array.dtype.kind in "mMOSU":
+        return bool(np.array_equal(left_array, right_array))
+    return bool(np.allclose(left_array, right_array, rtol=1.0e-7, atol=atol, equal_nan=False))
 
 
 def _load_rollout(root: Path, method_id: str) -> dict[str, np.ndarray]:
