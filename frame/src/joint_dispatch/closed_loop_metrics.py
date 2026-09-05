@@ -209,7 +209,7 @@ def _percentile(values: Any, q: float) -> float:
     return float(np.percentile(array, q)) if array.size else float("nan")
 
 
-def summarize_closed_loop(arrays: Mapping[str, Any]) -> dict[str, Any]:
+def summarize_closed_loop(arrays: Mapping[str, Any], *, thermal_active_scales: Mapping[str, float] | None = None) -> dict[str, Any]:
     """Summarize raw runner arrays while preserving metric boundaries."""
 
     if not isinstance(arrays, Mapping):
@@ -270,6 +270,16 @@ def summarize_closed_loop(arrays: Mapping[str, Any]) -> dict[str, Any]:
             "by_channel_mean": by_channel.mean(axis=0).tolist() if by_channel.size else [float("nan")] * len(RECOURSE_CHANNELS),
             "channels": list(RECOURSE_CHANNELS),
         }
+    if "forecast" in arrays or "forecast_target" in arrays:
+        if "forecast" not in arrays or "forecast_target" not in arrays:
+            raise ValueError("forecast and forecast_target must be provided together")
+        # Direct unit-test callers may omit the frozen training scales; the
+        # formal runner always supplies them and therefore emits the complete
+        # forecast section.  Do not infer scales from the evaluated targets.
+        if thermal_active_scales is not None:
+            result["forecast"] = regime_aware_forecast_metrics(
+                arrays["forecast"], arrays["forecast_target"], thermal_active_scales,
+            )
     if "latency_ms" in arrays:
         latency = _finite_array(arrays["latency_ms"], name="latency_ms").reshape(-1)
         result["latency"] = {"median_ms": _percentile(latency, 50.0), "p95_ms": _percentile(latency, 95.0), "count": int(latency.size)}

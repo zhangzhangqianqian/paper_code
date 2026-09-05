@@ -113,6 +113,20 @@ def _rsc_normalization(path: Path) -> Any:
     return SimpleNamespace(field_mean={"load": means["load_history"], "exog": means["exog_history"], "device": means["device_history"]}, field_scale={"load": scales["load_history"], "exog": scales["exog_history"], "device": scales["device_history"]}, train_years=(2015, 2016, 2017, 2018))
 
 
+def _thermal_active_scales(train: Any, epsilon: float) -> dict[str, float]:
+    target = np.asarray(train.forecast_target, dtype=np.float64)
+    if target.ndim != 3 or target.shape[-1] != 4:
+        raise ValueError("training forecast targets must have shape [N,H,4]")
+    scales: dict[str, float] = {}
+    for index, name in ((1, "cooling"), (2, "heating")):
+        active = target[..., index] > float(epsilon)
+        values = np.abs(target[..., index][active])
+        if values.size == 0 or not np.isfinite(values).all() or float(values.mean()) <= 0.0:
+            raise ValueError(f"training-only active scale is invalid for {name}")
+        scales[name] = float(values.mean())
+    return scales
+
+
 def _hardware(config: Mapping[str, Any]) -> dict[str, Any]:
     latency = config["latency"]
     torch.set_num_threads(int(latency.get("torch_num_threads", 1)))
@@ -211,6 +225,7 @@ def run_matrix(config_path: str | Path, *, methods: tuple[str, ...] = METHOD_ORD
         if not smoke:
             raise ValueError("limit, stop-after, and warm-up overrides require an output path segment named smoke")
     selection, train, parameters, rsc_norm, ext_norm = _selection_and_parameters(config)
+    thermal_scales = _thermal_active_scales(train, float(config.get("thermal_active_epsilon", 1.0e-9)))
     if limit is not None:
         if int(limit) <= 0 or int(limit) > len(selection):
             raise ValueError("limit is outside the selection range")
@@ -237,7 +252,7 @@ def run_matrix(config_path: str | Path, *, methods: tuple[str, ...] = METHOD_ORD
         for seed in row_seeds:
             row_dir = root / "rows" / method.replace("/", "_").replace(" ", "_") / f"seed_{seed}"
             provider = _provider(method, seed, config, parameters, rsc_norm, ext_norm)
-            result = run_matched_closed_loop(selection, provider, parameters, method_id=method, seed=seed, warmup_origins=warmup)
+            result = run_matched_closed_loop(selection, provider, parameters, method_id=method, seed=seed, warmup_origins=warmup, thermal_active_scales=thermal_scales)
             receipt = _row_receipt(result, provider, config_hash=config_hash, method=method, seed=seed, smoke=smoke, hardware=hardware)
             _write_atomic_row(row_dir, result, receipt, resume=resume, partial=stop_after is not None)
             rows.append({"method_id": method, "seed": int(seed), "path": str(row_dir), "optimizer_role": str(provider.optimizer_role), "inference_lp_calls": int(result.inference_lp_calls), "metrics": dict(result.metrics), "reproduction_level": getattr(provider, "reproduction_level", "frozen_local")})
@@ -245,7 +260,7 @@ def run_matrix(config_path: str | Path, *, methods: tuple[str, ...] = METHOD_ORD
     reference_dir = root / "reference"; reference_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(reference_dir / "perfect_information_mpc.npz", **dict(reference.arrays))
     (reference_dir / "PERFECT_INFORMATION_MPC.json").write_text(json.dumps({"schema": "perfect-information-mpc-reference-v1", "method_id": "Perfect-Information-MPC", "rows": len(selection), "reference_lp_calls": reference.reference_lp_calls, "deployable": False, "test_set_accessed": False, "evaluation_year_accessed": False}, indent=2) + "\n", encoding="utf-8")
-    manifest = {"schema": "rsc-pf-matched-closed-loop-manifest-v1", "selection_year": 2019, "evaluation_year": 2020, "excluded_years": [2021], "rows": rows, "reference": {"method_id": "Perfect-Information-MPC", "path": str(reference_dir), "reference_lp_calls": int(reference.reference_lp_calls)}, "gate1_authorized": False, "formal_candidate": False, "gate1_failure": {"criterion": "electricity_wape_ratio", "observed": EXPECTED_GATE1_RATIO, "limit": 1.02}, "test_set_accessed": False, "evaluation_year_accessed": False, "smoke": smoke, "origins": len(selection), "config_sha256": config_hash, "interrupted": bool(stop_after is not None), "cursor": int(len(selection)) if stop_after is not None else None, "thermal_active_scales": {"cooling": float(np.std(train.forecast_target[..., 1][train.forecast_target[..., 1] > 1e-9]) or 1.0), "heating": float(np.std(train.forecast_target[..., 2][train.forecast_target[..., 2] > 1e-9]) or 1.0)}}
+    manifest = {"schema": "rsc-pf-matched-closed-loop-manifest-v1", "selection_year": 2019, "evaluation_year": 2020, "excluded_years": [2021], "rows": rows, "reference": {"method_id": "Perfect-Information-MPC", "path": str(reference_dir), "reference_lp_calls": int(reference.reference_lp_calls)}, "gate1_authorized": False, "formal_candidate": False, "gate1_failure": {"criterion": "electricity_wape_ratio", "observed": EXPECTED_GATE1_RATIO, "limit": 1.02}, "test_set_accessed": False, "evaluation_year_accessed": False, "smoke": smoke, "origins": len(selection), "config_sha256": config_hash, "interrupted": bool(stop_after is not None), "cursor": int(len(selection)) if stop_after is not None else None, "thermal_active_scales": thermal_scales}
     (root / "MATCHED_CLOSED_LOOP_MANIFEST.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
     if stop_after is not None:
         raise SystemExit(75)

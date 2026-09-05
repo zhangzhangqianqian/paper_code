@@ -84,7 +84,7 @@ def audit_manifest(manifest: Mapping[str, Any], *, require_full: bool | None = N
     return {"rows": len(rows), "origins": origins, "full_matrix": bool(full), "methods": sorted(seen)}
 
 
-def _audit_row(row: Mapping[str, Any], root: Path, *, atol: float = 1.0e-8) -> dict[str, Any]:
+def _audit_row(row: Mapping[str, Any], root: Path, *, atol: float = 1.0e-8, thermal_active_scales: Mapping[str, float] | None = None) -> dict[str, Any]:
     row_dir = Path(str(row["path"]))
     if not row_dir.is_absolute():
         row_dir = FRAME_ROOT / row_dir
@@ -96,7 +96,7 @@ def _audit_row(row: Mapping[str, Any], root: Path, *, atol: float = 1.0e-8) -> d
         raise ValueError(f"row {row['method_id']} records future access")
     with np.load(npz_path, allow_pickle=False) as payload:
         arrays = {name: np.asarray(payload[name]) for name in payload.files}
-    summary = summarize_closed_loop(arrays)
+    summary = summarize_closed_loop(arrays, thermal_active_scales=thermal_active_scales)
     # Compare only the scalar summary values that are deterministic and finite;
     # NaN fields (for an empty warm-up latency vector) are intentionally skipped.
     recorded = receipt.get("metrics", {})
@@ -155,7 +155,10 @@ def audit_artifacts(manifest_path: str | Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     protocol = audit_manifest(manifest)
     root = path.parent
-    rows = [_audit_row(row, root) for row in manifest["rows"]]
+    scales = manifest.get("thermal_active_scales")
+    if not isinstance(scales, Mapping) or any(float(scales.get(name, 0.0)) <= 0.0 for name in ("cooling", "heating")):
+        raise ValueError("manifest is missing positive frozen thermal active scales")
+    rows = [_audit_row(row, root, thermal_active_scales=scales) for row in manifest["rows"]]
     reference = manifest["reference"]
     ref_dir = Path(str(reference["path"]))
     if not ref_dir.is_absolute():

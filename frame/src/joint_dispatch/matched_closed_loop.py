@@ -264,6 +264,7 @@ def run_matched_closed_loop(
     method_id: str,
     seed: int,
     warmup_origins: int = 100,
+    thermal_active_scales: Mapping[str, float] | None = None,
 ) -> MatchedClosedLoopResult:
     """Run one provider chronologically, settling only each first action."""
 
@@ -273,6 +274,7 @@ def run_matched_closed_loop(
         raise ValueError("warmup_origins must be in [0, len(selection))")
     state = initial_state_from_selection(selection)
     forecasts: list[np.ndarray] = []
+    forecast_targets: list[np.ndarray] = []
     scheduler_demands: list[np.ndarray] = []
     renewable_forecasts: list[np.ndarray] = []
     planned_dispatch: list[np.ndarray] = []
@@ -311,6 +313,7 @@ def run_matched_closed_loop(
             latency_ms.append(float(elapsed))
         settled, settled_residual, shortage, operating_cost, physical_carbon, penalized = _settled_arrays(settled_result, plan, labels, state)
         forecasts.append(plan.forecast.copy())
+        forecast_targets.append(labels.forecast_target.copy())
         scheduler_demands.append(plan.scheduler_demand.copy())
         renewable_forecasts.append(plan.renewable_forecast.copy())
         planned_dispatch.append(plan.dispatch.copy())
@@ -331,6 +334,7 @@ def run_matched_closed_loop(
 
     arrays: dict[str, np.ndarray] = {
         "forecast": np.stack(forecasts),
+        "forecast_target": np.stack(forecast_targets),
         "scheduler_demand": np.stack(scheduler_demands),
         "renewable_forecast": np.stack(renewable_forecasts),
         "planned_dispatch": np.stack(planned_dispatch),
@@ -348,7 +352,7 @@ def run_matched_closed_loop(
         "final_soc": np.asarray(final_socs),
         "latency_ms": np.asarray(latency_ms),
     }
-    metrics = summarize_closed_loop(arrays)
+    metrics = summarize_closed_loop(arrays, thermal_active_scales=thermal_active_scales)
     return MatchedClosedLoopResult(str(method_id), int(seed), arrays, metrics, lp_calls, 0)
 
 
