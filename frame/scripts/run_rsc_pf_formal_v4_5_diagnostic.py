@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 import sys
@@ -19,7 +20,9 @@ from src.joint_dispatch.formal_v4_4_pilot_executor import _parameters  # noqa: E
 from src.joint_dispatch.formal_v4_4_artifacts import write_json_once  # noqa: E402
 from src.joint_dispatch.formal_v4_5_artifacts import audit_v45_selection, write_v45_stage_receipt  # noqa: E402
 from src.joint_dispatch.formal_v4_5_contract import load_formal_v4_5_contract  # noqa: E402
-from src.joint_dispatch.formal_v4_5_pilot_data import materialize_v45_training_only  # noqa: E402
+from src.joint_dispatch.formal_v4_5_pilot_data import (  # noqa: E402
+    MaterializedTrainingV45, load_v45_training_cache, materialize_v45_training_only,
+)
 from src.joint_dispatch.formal_v4_5_pilot_executor import execute_training_stages_v45  # noqa: E402
 from src.joint_dispatch.formal_v4_5_training import curriculum_weights_v45  # noqa: E402
 
@@ -45,6 +48,20 @@ def _fixture_diagnostic(config_path: str | Path, output_root: str | Path, max_ba
     return receipt
 
 
+def _truncate_collection(collection: Any, limit: int) -> Any:
+    array_fields = {
+        "load_history", "exog_history", "renewable_history", "device_history",
+        "activity_history", "forecast_target", "rigid_demand", "renewable_forecast",
+        "renewable_realized", "prices_and_weights", "initial_soc", "previous_chp",
+        "target_times", "trajectory_ids", "state_hashes",
+    }
+    updates = {
+        field.name: getattr(collection.split, field.name)[:limit]
+        for field in fields(collection.split) if field.name in array_fields
+    }
+    return collection.__class__(replace(collection.split, **updates), collection.role)
+
+
 def run_formal_v45_diagnostic(
     *,
     config: str | Path,
@@ -54,9 +71,28 @@ def run_formal_v45_diagnostic(
     benchmark: str | Path | None = None,
     capacity_receipt: str | Path | None = None,
     split_path: str | Path | None = None,
+    materialized_root: str | Path | None = None,
 ) -> Mapping[str, Any]:
     """Run fixtures when sources are omitted, otherwise run training-only data."""
 
+    if materialized_root is not None:
+        contract = load_formal_v4_5_contract(config)
+        materialized = load_v45_training_cache(
+            materialized_root=materialized_root, train_data=train_data,
+            benchmark=benchmark, capacity_receipt=capacity_receipt,
+        )
+        if max_batches is not None:
+            limit = max(1, int(max_batches)) * int(contract.payload["pilot_budget"]["batch_size"])
+            materialized = MaterializedTrainingV45(
+                train=_truncate_collection(materialized.train, limit),
+                early_stop=_truncate_collection(materialized.early_stop, limit),
+                normalization_source=materialized.normalization_source,
+                lineage=materialized.lineage,
+            )
+        return _run_materialized_diagnostic(
+            contract=contract, materialized=materialized, output_root=output_root,
+            benchmark=benchmark, capacity_receipt=capacity_receipt, max_batches=max_batches,
+        )
     if any(value is None for value in (train_data, benchmark, capacity_receipt, split_path)):
         if any(value is not None for value in (train_data, benchmark, capacity_receipt, split_path)):
             raise ValueError("real diagnostic requires train_data, benchmark, capacity_receipt, and split_path together")
@@ -125,6 +161,47 @@ def run_formal_v45_diagnostic(
     return receipt
 
 
+def _run_materialized_diagnostic(
+    *, contract: Any, materialized: MaterializedTrainingV45, output_root: str | Path,
+    benchmark: str | Path | None, capacity_receipt: str | Path | None,
+    max_batches: int | None,
+) -> Mapping[str, Any]:
+    if benchmark is None or capacity_receipt is None:
+        raise ValueError("real diagnostic requires benchmark and capacity_receipt")
+    benchmark_payload = yaml.safe_load(Path(benchmark).read_text(encoding="utf-8"))
+    capacity_payload = json.loads(Path(capacity_receipt).read_text(encoding="utf-8"))
+    parameters = _parameters(benchmark_payload, capacity_payload)
+    bundle = execute_training_stages_v45(
+        materialized=materialized, contract=contract, artifact_root=output_root,
+        benchmark=benchmark, capacity_receipt=capacity_receipt,
+        seed=int(contract.payload["pilot_budget"]["seed"]), parameters=parameters,
+        epoch_cap=2 if max_batches is not None else None,
+    )
+    gradient_norms = {
+        "joint": dict(bundle.j.joint.gradient_norms),
+        "decoupled": dict(bundle.j.decoupled.gradient_norms),
+    }
+    checks = {
+        "year_firewall": list(materialized.lineage["years"]) == list(contract.train_years) and not materialized.lineage["selection_year_accessed"] and not materialized.lineage["evaluation_year_accessed"],
+        "joint_decision_to_base": gradient_norms["joint"].get("decision_to_base", 0.0) > 0.0,
+        "joint_decision_to_gate": gradient_norms["joint"].get("decision_to_gate", 0.0) > 0.0,
+        "joint_decision_to_magnitude": gradient_norms["joint"].get("decision_to_magnitude", 0.0) > 0.0,
+        "decoupled_forecast_boundary": all(gradient_norms["decoupled"].get(name, 0.0) <= 1.0e-12 for name in ("decision_to_base", "decision_to_gate", "decision_to_magnitude")),
+    }
+    receipt = {
+        "schema": "formal-v4.5-diagnostic-v1", "mode": "training_cache",
+        "accessed_years": list(materialized.lineage["years"]),
+        "selection_year_accessed": bool(materialized.lineage["selection_year_accessed"]),
+        "evaluation_year_accessed": bool(materialized.lineage["evaluation_year_accessed"]),
+        "pilot_authorized": False, "max_batches": max_batches,
+        "checks": checks, "gradient_norms": gradient_norms,
+        "lineage": dict(materialized.lineage),
+    }
+    output_root = Path(output_root); output_root.mkdir(parents=True, exist_ok=True)
+    write_json_once(output_root / "DIAGNOSTIC_RECEIPT.json", receipt)
+    return receipt
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -133,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark", type=Path)
     parser.add_argument("--capacity-receipt", type=Path)
     parser.add_argument("--split-path", type=Path)
+    parser.add_argument("--materialized-root", type=Path)
     parser.add_argument("--max-batches", type=int)
     args = parser.parse_args(argv)
     try:
@@ -141,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             max_batches=args.max_batches, train_data=args.train_data,
             benchmark=args.benchmark, capacity_receipt=args.capacity_receipt,
             split_path=args.split_path,
+            materialized_root=args.materialized_root,
         )
     except Exception as exc:
         print(json.dumps({"pilot_authorized": False, "error_type": type(exc).__name__, "reason": str(exc)}, ensure_ascii=False))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -11,7 +12,7 @@ import numpy as np
 from .formal_v4_4_artifacts import canonical_sha256, sha256_file
 from .formal_v4_4_pilot_materializer import (
     V44WindowCollection, _capacity_multiplier, _capacity_payload, _load_base,
-    _load_benchmark, _subset,
+    _load_benchmark, _load_collection, _subset,
 )
 from .formal_v4_4_pilot_data import build_v44_batches
 from .formal_v4_data import materialize_state_windows
@@ -138,4 +139,67 @@ def materialize_v45_training_only(
     )
 
 
-__all__ = ["MaterializedTrainingV45", "build_v45_loaders", "materialize_v45_training_only"]
+def load_v45_training_cache(
+    *,
+    materialized_root: str | Path,
+    train_data: str | Path | None = None,
+    benchmark: str | Path | None = None,
+    capacity_receipt: str | Path | None = None,
+) -> MaterializedTrainingV45:
+    """Load only immutable train/early-stop artifacts from a prior cache.
+
+    The v4.4 materializer already solved the expensive causal LP trajectory.
+    Reusing its train-only artifacts is equivalent data, but this loader never
+    opens selection files and records that fact in the returned lineage.
+    """
+
+    root = Path(materialized_root)
+    data_root = root / "data"
+    required = ("train", "early_stop", "normalization_source")
+    missing = [name for name in required if not (data_root / f"{name}.npz").is_file()]
+    if missing:
+        raise FileNotFoundError(f"training cache is missing {missing[0]}.npz")
+    train = _load_collection(data_root, "train", "train")
+    early_stop = _load_collection(data_root, "early_stop", "early_stop")
+    normalization_source = _load_collection(data_root, "normalization_source", "train")
+
+    stored_path = data_root / "MATERIALIZED_LINEAGE.json"
+    stored = json.loads(stored_path.read_text(encoding="utf-8")) if stored_path.is_file() else {}
+    if not isinstance(stored, Mapping):
+        raise ValueError("training cache lineage must be a mapping")
+    checks = {
+        "train_data": train_data,
+        "benchmark": benchmark,
+        "capacity_receipt": capacity_receipt,
+    }
+    for name, path in checks.items():
+        if path is None:
+            continue
+        key = f"{name}_sha256"
+        if key in stored and stored[key] != sha256_file(path):
+            raise ValueError(f"training cache {name} hash does not match requested source")
+    years = tuple(sorted(set(normalization_source.timestamps.astype("datetime64[Y]").astype(int) + 1970)))
+    if years != (2015, 2016, 2017, 2018):
+        raise ValueError("training cache contains years outside 2015--2018")
+    lineage = {
+        "schema": "formal-v4.5-training-cache-lineage-v1",
+        "source_materialized_lineage_sha256": stored.get("lineage_sha256"),
+        "source_materialized_root": str(root),
+        "years": list(years),
+        "selection_files_read": [],
+        "selection_year_accessed": False,
+        "evaluation_year_accessed": False,
+    }
+    lineage["lineage_sha256"] = canonical_sha256(lineage)
+    return MaterializedTrainingV45(
+        train=train,
+        early_stop=early_stop,
+        normalization_source=normalization_source,
+        lineage=lineage,
+    )
+
+
+__all__ = [
+    "MaterializedTrainingV45", "build_v45_loaders", "load_v45_training_cache",
+    "materialize_v45_training_only",
+]
