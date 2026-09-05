@@ -65,11 +65,13 @@
 - Modify: `configs/rsc_pf_external_baseline_implementation_v1.json`
 - Modify: `scripts/run_rsc_pf_external_baselines.py`
 - Modify: `scripts/evaluate_rsc_pf_external_baselines.py`
+- Create: `scripts/check_rsc_pf_external_v46_calibration.py`
 - Test: `tests/test_rsc_pf_external_baseline_runner.py`
 
 - [ ] Point the implementation config to the v4.6 train and early-stop artifacts, with explicit `pilot_path` for 2019 selection.
 - [ ] Use a small deterministic subset (no more than 16 train and 16 early-stop windows), one seed, and at most two epochs.
 - [ ] Run calibration for iTransformer-PTO, DecisionFocused-Online, and DigitalTwins-Policy.
+- [ ] Run `scripts/check_rsc_pf_external_v46_calibration.py` to write `CALIBRATION_GATE.json`.
 - [ ] Verify finite losses, causal feature hashes, finite structural decoder residuals, LP-call roles, and no test path access; do not require a two-epoch micro-run to have zero load shortage.
 - [ ] If any method fails, write a blocker receipt and stop before all-seed training.
 - [ ] Commit: `test: pass external baseline v4.6 calibration gate` only if all three pass.
