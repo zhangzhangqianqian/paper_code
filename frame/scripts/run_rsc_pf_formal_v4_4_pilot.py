@@ -10,6 +10,7 @@ import sys
 FRAME_ROOT = Path(__file__).resolve().parents[1]
 if str(FRAME_ROOT) not in sys.path: sys.path.insert(0, str(FRAME_ROOT))
 from src.joint_dispatch.formal_v4_4_pilot import run_pilot_v44  # noqa: E402
+from src.joint_dispatch.formal_v4_4_pilot_executor import execute_real_pilot_v44  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--run-id", required=True); args = parser.parse_args(argv)
     try:
-        decision = run_pilot_v44(contract_path=args.contract, gate0_transition=args.gate0_transition, source_manifest=args.source_manifest, base_train_data=args.base_train_data, base_selection_data=args.base_selection_data, benchmark=args.benchmark, capacity_receipt=args.capacity_receipt, output_root=args.output_root, run_id=args.run_id)
+        decision = run_pilot_v44(contract_path=args.contract, gate0_transition=args.gate0_transition, source_manifest=args.source_manifest, base_train_data=args.base_train_data, base_selection_data=args.base_selection_data, benchmark=args.benchmark, capacity_receipt=args.capacity_receipt, output_root=args.output_root, run_id=args.run_id, stage_executor=execute_real_pilot_v44)
     except PermissionError as exc:
         print(json.dumps({"authorized_gate1": False, "error_type": type(exc).__name__, "reason": str(exc)}, ensure_ascii=False)); return 2
     except Exception as exc:

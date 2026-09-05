@@ -71,7 +71,10 @@ def run_pilot_v44(
     # the independent audit never needs to infer indices from in-memory state.
     with np.load(split_path, allow_pickle=False) as source_split:
         write_npz_once(root / "gate0" / "PILOT_SPLIT.npz", {name: source_split[name] for name in source_split.files})
-    result = dict(stage_executor(train_data=base_train_data, selection_data=base_selection_data, benchmark=benchmark, capacity_receipt=capacity_receipt, split=split, contract=contract))
+    result = dict(stage_executor(
+        train_data=base_train_data, selection_data=base_selection_data, benchmark=benchmark,
+        capacity_receipt=capacity_receipt, split=split, contract=contract, artifact_root=pilot_dir,
+    ))
     required = ("prediction", "target", "probability", "prior_probability", "regimes", "times")
     missing = [name for name in required if name not in result]
     if missing: raise ValueError(f"Pilot stage executor did not return {missing[0]}")
