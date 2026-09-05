@@ -33,7 +33,7 @@ class ExternalBaselineBatch:
     forecast_target: Tensor
     teacher_dispatch: Tensor
     oracle_first_step_objective: Tensor
-    split: Literal["train", "validation"]
+    split: Literal["train", "validation", "pilot"]
 
     def __post_init__(self) -> None:
         tensors = {
@@ -79,8 +79,8 @@ class ExternalBaselineBatch:
             raise ValueError("previous_chp must have shape [B,1]")
         if self.oracle_first_step_objective.ndim != 1 or int(self.oracle_first_step_objective.shape[0]) != n:
             raise ValueError("oracle_first_step_objective must have shape [B]")
-        if self.split not in {"train", "validation"}:
-            raise ValueError("external baselines accept train or validation only")
+        if self.split not in {"train", "validation", "pilot"}:
+            raise ValueError("external baselines accept train, validation, or pilot only")
         if not torch.all((self.device_status == 0.0) | (self.device_status == 1.0)).item():
             raise ValueError("device_status must be binary")
 
@@ -88,7 +88,7 @@ class ExternalBaselineBatch:
     def from_split(cls, split: JointWindowSplit, indices: Sequence[int] | np.ndarray | None = None) -> "ExternalBaselineBatch":
         """Convert a causal numpy split (or a subset) to tensors."""
 
-        if split.split not in {"train", "validation"}:
+        if split.split not in {"train", "validation", "pilot"}:
             raise ValueError("external baselines cannot load the test split")
         index = None if indices is None else np.asarray(indices, dtype=np.int64)
         take = lambda value: value if index is None else value[index]
@@ -182,7 +182,7 @@ def build_causal_error_history(split: JointWindowSplit) -> np.ndarray:
     proxy, not mislabeled as a future forecast error.
     """
 
-    if split.split not in {"train", "validation"}:
+    if split.split not in {"train", "validation", "pilot"}:
         raise ValueError("causal error history cannot be built from the test split")
     history = np.asarray(split.load_history, dtype=np.float32)
     if history.ndim != 3 or history.shape[1:] != (24, len(TASK_ORDER)):

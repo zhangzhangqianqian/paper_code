@@ -200,7 +200,7 @@ class DigitalTwinsPolicy(nn.Module):
 
     @staticmethod
     def _batch_inputs(batch: ExternalBaselineBatch) -> tuple[Tensor, Tensor, Tensor]:
-        if batch.split not in {"train", "validation"}:
+        if batch.split not in {"train", "validation", "pilot"}:
             raise ValueError("direct policy cannot run on the test split")
         inputs = _history_inputs(batch.load_history, batch.exog_history)
         # The causal innovation proxy is built from observed history only;

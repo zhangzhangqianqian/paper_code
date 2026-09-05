@@ -150,8 +150,6 @@ class ExternalV46Normalization:
         return ((value - mean.reshape((1, 1, -1))) / scale.reshape((1, 1, -1))).astype(np.float32)
 
     def transform(self, split: ExternalV46Split) -> ExternalV46Split:
-        if split.split == "pilot":
-            raise ValueError("normalization transform is not used for pilot evaluation")
         return replace(
             split,
             load_history=self._apply(split.load_history, self.load_mean, self.load_scale),

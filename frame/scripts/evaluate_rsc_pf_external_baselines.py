@@ -37,6 +37,7 @@ from src.joint_dispatch.external_baseline_training import (  # noqa: E402
 from src.joint_dispatch.pto import PTOForecasts, solve_pto_windows  # noqa: E402
 from src.joint_dispatch.contract import DISPATCH_ORDER  # noqa: E402
 from src.scheduling.dispatch_lp import DispatchInputs  # noqa: E402
+from src.joint_dispatch.formal_v4_recourse import settle_first_step_v4  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -109,15 +110,40 @@ def _dispatch_metrics(dispatch: np.ndarray, split, *, lp_calls: int) -> tuple[di
     carbon = grid * 0.5 + gas * 0.25
     objective = operating + context[..., 4] * carbon + 100.0 * shortage.sum(axis=-1)
     first_objective = objective[:, 0]
+    # Use the same canonical one-step physical settlement as RSC-PF for the
+    # comparable metrics. The raw four-hour values above remain as open-loop
+    # diagnostics, while the first executed action is projected against the
+    # realized first-hour demand/renewables and the recorded initial state.
+    settled = settle_first_step_v4(
+        torch.as_tensor(values[:, 0, :], dtype=torch.float64),
+        torch.as_tensor(np.asarray(split.forecast_target[:, 0, :3], dtype=np.float64)),
+        torch.as_tensor(np.asarray(split.renewable_realized[:, 0, :], dtype=np.float64)),
+        _lp_parameters(),
+        initial_soc=torch.as_tensor(np.asarray(context[:, 0, 5:6], dtype=np.float64)),
+        previous_chp=torch.as_tensor(np.asarray(split.previous_chp, dtype=np.float64)),
+        grid_price=torch.as_tensor(np.asarray(context[:, 0, 2], dtype=np.float64)),
+        gas_price=torch.as_tensor(np.asarray(context[:, 0, 3], dtype=np.float64)),
+        carbon_price=torch.as_tensor(np.asarray(context[:, 0, 4], dtype=np.float64)),
+    )
+    settled_operating = settled.operating_cost.detach().cpu().numpy()
+    settled_carbon = settled.physical_carbon.detach().cpu().numpy()
+    settled_objective = settled.penalized_objective.detach().cpu().numpy()
+    settled_shortage = settled.shortage.detach().cpu().numpy()
+    settled_feasible = np.max(settled_shortage, axis=-1) <= 1.0e-8
     oracle = np.asarray(split.oracle_first_step_objective, dtype=np.float64)
     per_window = {
         "operating_cost": operating.sum(axis=1),
         "physical_carbon": carbon.sum(axis=1),
         "penalized_objective": objective.sum(axis=1),
-        "first_step_objective": first_objective,
-        "regret_vs_oracle": first_objective - oracle,
+        "operating_cost_first_step": settled_operating,
+        "physical_carbon_first_step": settled_carbon,
+        "penalized_objective_first_step": settled_objective,
+        "first_step_objective": settled_objective,
+        "regret_vs_oracle": settled_objective - oracle,
         "shortage": shortage.sum(axis=(1, 2)),
+        "shortage_first_step": settled_shortage.sum(axis=-1),
         "feasible": (np.max(shortage, axis=(1, 2)) <= 1.0e-8),
+        "feasible_first_step": settled_feasible,
     }
     summary = {
         "operating_cost_mean": float(per_window["operating_cost"].mean()),
@@ -127,6 +153,13 @@ def _dispatch_metrics(dispatch: np.ndarray, split, *, lp_calls: int) -> tuple[di
         "regret_vs_oracle_mean": float(per_window["regret_vs_oracle"].mean()),
         "shortage_mean": float(per_window["shortage"].mean()),
         "feasibility_rate": float(per_window["feasible"].mean()),
+        # These are the comparable rolling-execution statistics: only the
+        # first action of each four-hour prediction window is settled.
+        "operating_cost_first_step_mean": float(per_window["operating_cost_first_step"].mean()),
+        "physical_carbon_first_step_mean": float(per_window["physical_carbon_first_step"].mean()),
+        "penalized_objective_first_step_mean": float(per_window["penalized_objective_first_step"].mean()),
+        "shortage_first_step_mean": float(per_window["shortage_first_step"].mean()),
+        "feasibility_rate_first_step": float(per_window["feasible_first_step"].mean()),
         "exact_lp_calls": int(lp_calls),
         "windows": int(len(split)),
     }

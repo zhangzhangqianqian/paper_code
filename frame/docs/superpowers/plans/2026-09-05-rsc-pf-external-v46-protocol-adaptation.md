@@ -32,13 +32,13 @@
 - `build_external_v46_teacher(split: ExternalV46Split, parameters: Mapping[str, Any]) -> np.ndarray`
 - `fit_external_v46_normalization(train: ExternalV46Split) -> ExternalV46Normalization`
 
-- [ ] Write tests for the exact `[24,4]`, `[24,12]`, `[24,17]`, `[24,6]`, `[4,4]`, `[4,21]` shapes.
-- [ ] Add a causality test that mutating future targets does not change history/context tensors.
-- [ ] Implement NPZ loading from the current formal v4.6 materialized artifacts and construct the six-column scheduler context.
-- [ ] Generate missing teacher dispatch labels with the same offline LP parameters used by the formal v4.6 protocol; keep them label-only.
-- [ ] Fit normalization from train only and record source path/hash and split role.
-- [ ] Run the focused data tests and the existing external baseline contract tests.
-- [ ] Commit: `feat: adapt external baselines to formal v4.6 data contract`.
+- [x] Write tests for the exact `[24,4]`, `[24,12]`, `[24,17]`, `[24,6]`, `[4,4]`, `[4,21]` shapes.
+- [x] Add a causality test that mutating future targets does not change history/context tensors.
+- [x] Implement NPZ loading from the current formal v4.6 materialized artifacts and construct the six-column scheduler context.
+- [x] Generate missing teacher dispatch labels with the same offline LP parameters used by the formal v4.6 protocol; keep them label-only.
+- [x] Fit normalization from train only and record source path/hash and split role.
+- [x] Run the focused data tests and the existing external baseline contract tests.
+- [x] Commit: `feat: adapt external baselines to formal v4.6 data contract`.
 
 ### Task 2: Add and test the common PTO interface
 
@@ -52,12 +52,12 @@
 - `solve_pto_windows(forecasts: PTOForecasts, split: ExternalV46Split, parameters: Mapping[str, Any]) -> PTODispatchCache`
 - `seasonal_naive_forecasts(load_history: np.ndarray, season_length: int = 24) -> np.ndarray`
 
-- [ ] Write tests for finite forecast shapes, one LP call per window, and failure propagation.
-- [ ] Implement the LP bridge using the canonical dispatch order and current prices/weights/SOC.
-- [ ] Reject test-role splits and non-finite inputs.
-- [ ] Ensure no LP call is made by direct policy inference.
-- [ ] Run the PTO tests and import checks for `src.joint_dispatch` lazy exports.
-- [ ] Commit: `feat: add canonical PTO bridge for external baselines`.
+- [x] Write tests for finite forecast shapes, one LP call per window, and failure propagation.
+- [x] Implement the LP bridge using the canonical dispatch order and current prices/weights/SOC.
+- [x] Reject test-role splits and non-finite inputs.
+- [x] Ensure no LP call is made by direct policy inference.
+- [x] Run the PTO tests and import checks for `src.joint_dispatch` lazy exports.
+- [x] Commit: `feat: add canonical PTO bridge for external baselines`.
 
 ### Task 3: Run short calibration only
 
@@ -68,13 +68,13 @@
 - Create: `scripts/check_rsc_pf_external_v46_calibration.py`
 - Test: `tests/test_rsc_pf_external_baseline_runner.py`
 
-- [ ] Point the implementation config to the v4.6 train and early-stop artifacts, with explicit `pilot_path` for 2019 selection.
-- [ ] Use a small deterministic subset (no more than 16 train and 16 early-stop windows), one seed, and at most two epochs.
-- [ ] Run calibration for iTransformer-PTO, DecisionFocused-Online, and DigitalTwins-Policy.
-- [ ] Run `scripts/check_rsc_pf_external_v46_calibration.py` to write `CALIBRATION_GATE.json`.
-- [ ] Verify finite losses, causal feature hashes, finite structural decoder residuals, LP-call roles, and no test path access; do not require a two-epoch micro-run to have zero load shortage.
-- [ ] If any method fails, write a blocker receipt and stop before all-seed training.
-- [ ] Commit: `test: pass external baseline v4.6 calibration gate` only if all three pass.
+- [x] Point the implementation config to the v4.6 train and early-stop artifacts, with explicit `pilot_path` for 2019 selection.
+- [x] Use a small deterministic subset (no more than 16 train and 16 early-stop windows), one seed, and at most two epochs.
+- [x] Run calibration for iTransformer-PTO, DecisionFocused-Online, and DigitalTwins-Policy.
+- [x] Run `scripts/check_rsc_pf_external_v46_calibration.py` to write `CALIBRATION_GATE.json`.
+- [x] Verify finite losses, causal feature hashes, finite structural decoder residuals, LP-call roles, and no test path access; do not require a two-epoch micro-run to have zero load shortage.
+- [x] If any method fails, write a blocker receipt and stop before all-seed training.
+- [x] Commit: `test: pass external baseline v4.6 calibration gate` only if all three pass.
 
 ### Task 4: Start formal external validation only after calibration passes
 
@@ -84,12 +84,12 @@
 - Create: `scripts/run_rsc_pf_external_v46_pilot.py`
 - Test: `tests/test_rsc_pf_external_v46_pilot.py`
 
-- [ ] Run each approved method for seeds 2026–2030 with the frozen 20–30 epoch budget on train/early-stop only.
-- [ ] Select checkpoints using early-stop loss only.
-- [ ] Evaluate 2019 selection_full with forecast MAE/RMSE/WAPE, operating cost, physical carbon, penalized objective, first-step regret, shortage, feasibility, latency, and exact LP calls.
-- [ ] Write one receipt per method/seed and an aggregate manifest with adaptation disclosures.
-- [ ] Stop if any receipt is incomplete or any test access flag is not false.
-- [ ] Commit: `feat: run formal external baseline validation under v4.6`.
+- [x] Run each approved method for seeds 2026–2030 with the frozen 20–30 epoch budget on train/early-stop only.
+- [x] Select checkpoints using early-stop loss only.
+- [x] Evaluate 2019 selection_full with forecast MAE/RMSE/WAPE, operating cost, physical carbon, penalized objective, first-step regret, shortage, feasibility, latency, and exact LP calls.
+- [x] Write one receipt per method/seed and an aggregate manifest with adaptation disclosures.
+- [x] Stop if any receipt is incomplete or any test access flag is not false.
+- [x] Commit: `feat: run formal external baseline validation under v4.6`.
 
 ### Task 5: Review external comparison before manuscript integration
 
@@ -97,7 +97,7 @@
 - Create: `reports/rsc_pf_external_baselines_v46/EXTERNAL_COMPARISON_REVIEW.md`
 - Create: `reports/rsc_pf_external_baselines_v46/external_validation_manifest.json`
 
-- [ ] Compare RSC-PF, Fair Decoupled, and the three external baselines under identical 2019 selection windows.
-- [ ] Separate forecast quality, dispatch quality, optimizer role, and deployment latency; do not rank by a single metric.
-- [ ] State clearly which methods are true end-to-end, which are decision-focused with an optimizer, and which are PTO.
-- [ ] Do not modify the paper until this review confirms protocol and provenance completeness.
+- [x] Compare RSC-PF, Fair Decoupled, and the three external baselines under identical 2019 selection windows, with the remaining state-carry caveat recorded.
+- [x] Separate forecast quality, dispatch quality, optimizer role, and deployment latency; do not rank by a single metric.
+- [x] State clearly which methods are true end-to-end, which are decision-focused with an optimizer, and which are PTO.
+- [x] Do not modify the paper until this review confirms protocol and provenance completeness.
