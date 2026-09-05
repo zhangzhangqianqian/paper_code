@@ -1,0 +1,198 @@
+{
+  "schema_version": "rsc-pf-complete-formal-v1",
+  "protocol_status": "frozen",
+  "architecture": {
+    "lookback": 24,
+    "horizon": 4,
+    "latent_control_dim": 15,
+    "dispatch_dim": 21,
+    "allow_future_binary_decisions": false,
+    "gas_semantics": "station_side_auxiliary_prior",
+    "task_order": ["electricity", "cooling", "heating", "gas"],
+    "exog_order": ["temperature", "humidity", "solar_irradiance", "wind_speed", "wind_direction", "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos", "is_weekend"],
+    "dispatch_order": ["grid", "pv_use", "pv_curt", "wt_use", "wt_curt", "g_chp", "g_gb", "p_chp", "q_chp", "q_gb", "p_ec", "q_ec", "q_ac_in", "q_ac", "p_charge", "p_discharge", "soc", "slack_e", "slack_c", "slack_h", "q_dump"],
+    "status_order": ["chp_on", "gas_boiler_on", "electric_chiller_on", "absorption_chiller_on", "bess_charge_on", "bess_discharge_on"],
+    "rigid_demand_order": ["electricity", "cooling", "heating"]
+  },
+  "data_boundary": {
+    "train_years": [2015, 2016, 2017, 2018],
+    "selection_year": 2019,
+    "evaluation_year": 2020,
+    "excluded_years": [2021],
+    "selection_origin_count": 8709,
+    "evaluation_origin_count": 8757,
+    "allow_evaluation_access_before_gate1": false,
+    "allow_test_set_access_before_gate2": false,
+    "normalization_fit_split": "train_only",
+    "selection_uses_evaluation_year": false,
+    "evaluation_uses_excluded_year": false
+  },
+  "methods": [
+    {
+      "method_id": "RSC-PF",
+      "display_name": "RSC-PF",
+      "role": "joint_neural_policy",
+      "stochastic": true,
+      "deployable": true,
+      "forecast_metrics_applicable": true,
+      "inference_lp_calls_per_origin": 0,
+      "reproduction_level": "internal_primary"
+    },
+    {
+      "method_id": "Decoupled-RSC-PF",
+      "display_name": "Decoupled RSC-PF",
+      "role": "decoupled_gradient_control",
+      "stochastic": true,
+      "deployable": true,
+      "forecast_metrics_applicable": true,
+      "inference_lp_calls_per_origin": 0,
+      "reproduction_level": "internal_controlled_comparator"
+    },
+    {
+      "method_id": "Direct-Policy",
+      "display_name": "Direct Policy",
+      "role": "direct_policy",
+      "stochastic": true,
+      "deployable": true,
+      "forecast_metrics_applicable": false,
+      "inference_lp_calls_per_origin": 0,
+      "reproduction_level": "internal_policy_control"
+    },
+    {
+      "method_id": "Scheme2R-PTO",
+      "display_name": "Scheme2R-PTO",
+      "role": "predict_then_optimize",
+      "stochastic": true,
+      "deployable": true,
+      "forecast_metrics_applicable": true,
+      "inference_lp_calls_per_origin": 1,
+      "reproduction_level": "legacy_model_adaptation"
+    },
+    {
+      "method_id": "State-Conditioned-PTO",
+      "display_name": "State-Conditioned-PTO",
+      "role": "state_conditioned_predict_then_optimize",
+      "stochastic": true,
+      "deployable": true,
+      "forecast_metrics_applicable": true,
+      "inference_lp_calls_per_origin": 1,
+      "reproduction_level": "internal_state_conditioned_control"
+    },
+    {
+      "method_id": "Official iTransformer-PTO",
+      "display_name": "Official iTransformer-PTO",
+      "role": "external_forecasting_anchor",
+      "stochastic": true,
+      "deployable": true,
+      "forecast_metrics_applicable": true,
+      "inference_lp_calls_per_origin": 1,
+      "reproduction_level": "official_code_adaptation"
+    },
+    {
+      "method_id": "Differentiable-LP",
+      "display_name": "Differentiable-LP",
+      "role": "differentiable_optimizer",
+      "stochastic": true,
+      "deployable": true,
+      "forecast_metrics_applicable": true,
+      "inference_lp_calls_per_origin": 1,
+      "reproduction_level": "cvxpylayers_methodology_adaptation"
+    },
+    {
+      "method_id": "Seasonal-Naive-PTO",
+      "display_name": "Seasonal-Naive-PTO",
+      "role": "deterministic_predict_then_optimize",
+      "stochastic": false,
+      "deployable": true,
+      "forecast_metrics_applicable": true,
+      "inference_lp_calls_per_origin": 1,
+      "reproduction_level": "deterministic_reference"
+    },
+    {
+      "method_id": "Perfect-Information-MPC",
+      "display_name": "Perfect-Information-MPC",
+      "role": "ideal_information_reference",
+      "stochastic": false,
+      "deployable": false,
+      "forecast_metrics_applicable": false,
+      "inference_lp_calls_per_origin": 1,
+      "reproduction_level": "oracle_reference"
+    }
+  ],
+  "seeds": [2026, 2027, 2028, 2029, 2030],
+  "training": {
+    "common": {
+      "effective_batch_size": 64,
+      "max_epochs_per_stage": 30,
+      "patience": 5,
+      "validation_interval": 1,
+      "optimizer": "AdamW",
+      "gradient_clip_norm": 1.0,
+      "checkpoint_selection_split": "2019_validation_only"
+    },
+    "loss": {
+      "forecast_task_weights": [1.0, 1.0, 1.0, 0.25],
+      "forecast_weight": 1.0,
+      "anchor_weight": 0.5,
+      "decision_weight_start": 0.05,
+      "decision_weight_final": 0.50,
+      "imitation_weight_start": 1.0,
+      "imitation_weight_final": 0.25,
+      "curriculum_ramp_epochs": 5,
+      "gas_adjustment": 0.0,
+      "primary_carbon_loss": false
+    },
+    "search": {
+      "max_trials_per_method": 4,
+      "rsc_pf_decision_multiplier_grid": [1.0, 1.5, 2.0, 3.0],
+      "difflp_learning_rate_grid": [0.00001, 0.00003, 0.0001, 0.0003],
+      "selection_seed": 2026,
+      "selection_year": 2019,
+      "retune_missing_seed": false
+    }
+  },
+  "evaluation": {
+    "stage_names": ["gate1", "gate2"],
+    "selection_origin_count": 8709,
+    "evaluation_origin_count": 8757,
+    "rolling_execution": "one_hour",
+    "forecast_horizon": 4,
+    "objective_atol": 0.00001,
+    "objective_rtol": 0.0000001,
+    "negative_gap_tolerance": 0.00001,
+    "inference_lp_calls_are_counted": true,
+    "deterministic_rows_use_seed_null": true
+  },
+  "statistics": {
+    "independent_unit": "model_seed",
+    "paired_unit": "168h_temporal_block_within_seed",
+    "bootstrap_replicates": 2000,
+    "bootstrap_order": ["seed", "paired_168h_block"],
+    "alpha": 0.05,
+    "primary_contrast": "RSC-PF_minus_Decoupled-RSC-PF"
+  },
+  "source_contracts": {
+    "formal_v46_config": {
+      "path": "configs/joint_forecast_dispatch_formal_v4_6.json",
+      "sha256": "e0825de59e79dae97f89957c21ad23c1c49049764c0377822260512d4952e8f7"
+    },
+    "search_budget_v4": {
+      "path": "configs/joint_dispatch_search_budget_v4.json",
+      "sha256": "5799ad1876d0703391a2ebac8c7453d222dc4aadedf0a4f9375ec9cf0c27e827"
+    },
+    "official_source_receipt": {
+      "path": "reports/rsc_pf_external_baselines_v46/implementation_final/sources/source_receipt.json",
+      "sha256": "319305e88dccaca4e26a2f380dbda6634ad68c0ee94c80b477f816ddb097a0b5"
+    },
+    "closed_loop_audit": {
+      "path": "reports/rsc_pf_matched_closed_loop_2019/v2/MATCHED_CLOSED_LOOP_AUDIT.json",
+      "sha256": "6f0cafd497b4b367c03fa2207589e6dcf1f6f76f3b6562eed98dc98c9284caf7"
+    }
+  },
+  "output": {
+    "formal_root": "reports/rsc_pf_complete_formal",
+    "selection_root": "reports/rsc_pf_complete_formal/gate1",
+    "evaluation_root": "reports/rsc_pf_complete_formal/gate2",
+    "allow_output_overwrite": false
+  }
+}
