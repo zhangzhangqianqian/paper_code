@@ -2,7 +2,9 @@
 
 ## Goal
 
-Produce a scientifically comparable 2019 closed-loop evaluation for the frozen RSC-PF model and the three frozen external baselines without retraining any model or accessing the sealed test split.
+Produce a matched 2019 closed-loop **protocol-validation diagnostic** for the frozen RSC-PF pilot and the three frozen external baselines without retraining any model or accessing the sealed 2020 evaluation split.
+
+This run validates the evaluation machinery and provides directional evidence only. It is not the final paper comparison because the current RSC-PF artifact contains one seed while each external method contains five seeds, and 2019 is the formal selection year rather than the held-out evaluation year.
 
 The evaluation must correct two remaining ambiguities:
 
@@ -15,7 +17,7 @@ The evaluation must correct two remaining ambiguities:
 
 Reuse the existing validation-selected checkpoints. Start every method from the same first 2019 state, execute one action per hour through the canonical physical settlement operator, append the realized load/exogenous information and settled device state to the 24-hour histories, and carry SOC and previous CHP output to the next origin.
 
-This isolates evaluation fairness from training changes, preserves all existing checkpoint hashes, and can be completed in minutes rather than hours.
+This isolates evaluation fairness from training changes, preserves all existing checkpoint hashes, and can be completed in minutes rather than hours. It freezes the evaluation protocol, not the final experimental result.
 
 ### B. Independent-window first-step evaluation — rejected as final evidence
 
@@ -28,10 +30,11 @@ Generate model-owned roll-in histories during training and retrain all baselines
 ## Frozen inputs and models
 
 - Evaluation chronology: all 8,709 hourly origins in the predeclared 2019 `selection_full.npz` artifact.
-- RSC-PF reference: existing v4.6 `rsc_pf_joint.npz` rollout and frozen `J_joint.pt` checkpoint.
+- RSC-PF diagnostic reference: the existing single-seed (2026) v4.6 `rsc_pf_joint.npz` rollout and frozen `J_joint.pt` checkpoint.
 - External checkpoints: the five validation-selected seeds for iTransformer-PTO, DecisionFocused-Online, and DigitalTwins-Policy.
 - Normalization: fitted from the v4.6 training split only.
-- Sealed test data: prohibited.
+- Formal split boundary: 2015–2018 training, 2019 selection/protocol validation, 2020 sealed evaluation, and 2021 excluded.
+- Sealed 2020 evaluation data: prohibited until the matched protocol, five-seed model set, code, and hashes are frozen and Gate 2 explicitly authorizes access.
 - Model training, checkpoint selection, architecture, losses, and paper text: unchanged.
 
 ## Common chronological data flow
@@ -44,52 +47,61 @@ For each hourly origin:
 2. produce a four-hour forecast and/or dispatch plan;
 3. for PTO methods, solve one four-hour LP using the current carried SOC and previous CHP output;
 4. execute only the first planned action through `settle_first_step_v4` against realized first-hour electric/cooling/heating demand and PV/WT output;
-5. record the settled action, shortage, cost, carbon, objective, and residual families;
+5. record both the planned action and settled action, the physical correction applied by settlement, shortage, cost, carbon, objective, and residual families;
 6. append the settled observable dispatch and activity indicators, append the newly revealed load/exogenous observation, and carry the resulting SOC and CHP output into the next origin.
 
 The input timestamps must be strictly consecutive at one-hour intervals. Any gap, non-finite tensor, failed LP, state-hash mismatch, or sealed-test-like path fails the run closed.
 
 ## Method-specific behavior
 
-- **RSC-PF:** use the existing chronological v4.6 rollout as the reference. Recompute only the common summary fields from its saved arrays.
-- **iTransformer-PTO:** precompute its load forecasts from causal load/exogenous histories, but solve its LP sequentially because SOC and previous CHP output are carried.
-- **DecisionFocused-Online:** use its frozen decision-focused forecast checkpoint and solve its declared exact LP sequentially at inference.
+- **RSC-PF:** use the existing v4.6 checkpoint as the single-seed diagnostic reference and rerun it through the common chronological evaluator so latency has the same scope as the baselines. It makes zero inference-time LP calls. Its predictions, plans, and settled outcomes must agree with the existing `rsc_pf_joint.npz` rollout within the frozen numerical tolerance before the new receipt is accepted.
+- **iTransformer-PTO:** precompute its load forecasts from causal load/exogenous histories, but solve one exact LP per origin sequentially because SOC and previous CHP output are carried. The full PTO method therefore uses an online optimizer at inference even though the neural forecaster itself does not call one.
+- **DecisionFocused-Online:** use its frozen decision-focused forecast checkpoint and solve one exact LP per origin sequentially at inference.
 - **DigitalTwins-Policy:** run the policy sequentially because its dispatch depends on current SOC and previous CHP output; it must make zero inference-time LP calls.
 
 Although all methods receive the same available state container, a baseline may ignore fields that are not part of its declared architecture. This is an architectural distinction, not an evaluation-protocol mismatch.
 
 ## Metric definitions
 
+The fourth prediction task is the normalized station-side gas-consumption auxiliary prior. It is not a rigid terminal gas demand. Its MAE/RMSE/WAPE may be reported, but it is excluded from the electricity/cooling/heating balance equations, shortage energy, and no-shortage rate. Tables and figures must label it as a gas prior rather than an end-user gas load.
+
 Report the following separately:
 
 - forecast MAE, RMSE, and WAPE by task and horizon plus the macro task-by-horizon mean;
-- settled first-step operating cost, physical carbon, penalized objective, and shortage energy;
-- **physical-constraint feasibility rate:** fraction of settled rows whose balance, capacity, conversion, SOC, ramp, exclusivity, renewable-accounting, and finite residuals all satisfy the formal tolerance;
+- settled first-step operating cost, physical carbon, penalized objective, and electricity/cooling/heating shortage energy;
+- **planned-action physical feasibility:** residual families evaluated before realized-data settlement against the method's own declared scheduling demand and renewable forecast (nominal forecast plus risk adjustment for RSC-PF, forecast output for PTO methods, and policy forecast for DigitalTwins-Policy);
+- **settled-action physical feasibility:** residual families evaluated after canonical first-step settlement against realized demand and renewable output;
+- **recourse adjustment:** the first-step L1 distance between planned and settled dispatch, plus that distance divided by total realized electric/cooling/heating demand with an epsilon guard; report mean, median, and P95 so post-settlement feasibility cannot conceal a large correction;
 - **no-shortage rate:** fraction of settled rows with zero electric, cooling, and heating shortage within tolerance;
 - decision regret versus a perfect-information LP solved from that method's carried state;
 - inference latency and optimizer accounting.
 
-Inference LP calls and oracle-only evaluation LP calls must be recorded in separate fields. The oracle solver is never counted as part of deployable inference.
+Use the frozen tolerances consistently: a row is physically feasible only when every absolute physical residual is at most `1e-6`; a row is shortage-free only when every carrier shortage is at most `1e-8`. RSC-PF rerun equivalence uses `numpy.allclose` with `atol=1e-5` and `rtol=1e-6` for saved floating-point arrays, plus exact timestamp and state-hash equality.
+
+Inference LP calls and oracle-only evaluation LP calls must be recorded in separate fields. The oracle solver is never counted as part of deployable inference. Both iTransformer-PTO and DecisionFocused-Online must record one online LP call per origin; RSC-PF and DigitalTwins-Policy must record zero.
+
+Latency is measured in chronological batch-one execution on the same machine. It includes the neural forward pass, the online LP when declared by the complete method, and canonical physical settlement. It excludes artifact loading, metric aggregation, and oracle computation. The first 100 chronological origins are executed normally but excluded from latency aggregation as warm-up. Report median and P95 milliseconds per origin, total runtime, hardware, Python version, and solver version.
 
 ## Outputs and audit
 
-Each method/seed writes a closed-loop NPZ artifact and JSON receipt containing checkpoint hash, input artifact hash, timestamp hash, metric definitions, optimizer role, inference LP calls, oracle LP calls, residual maxima, and `test_set_accessed: false`.
+Each method/seed writes a closed-loop NPZ artifact and JSON receipt containing checkpoint hash, input artifact hash, timestamp hash, metric definitions, optimizer role, inference LP calls, oracle LP calls, planned and settled residual maxima, recourse-adjustment statistics, latency statistics, `test_set_accessed: false`, and `evaluation_year_accessed: false`.
 
 An aggregate comparison manifest must verify:
 
 - exactly 8,709 aligned 2019 origins for every row;
 - unchanged checkpoint hashes;
-- five complete seeds for every external method;
+- one complete diagnostic seed for RSC-PF and five complete seeds for every external method, with the imbalance stated explicitly and no significance test across this pilot table;
 - zero failed inference LP solves;
 - zero non-finite values;
-- explicit separation of physical feasibility and no-shortage rate;
-- zero test-set access.
+- explicit separation of planned feasibility, settled feasibility, recourse adjustment, and no-shortage rate;
+- correct online-optimizer roles for all four complete methods;
+- explicit station-side gas-prior semantics;
+- zero 2020 evaluation access.
 
 The existing independent-window receipts remain labeled as diagnostics and are not overwritten or used as the final paper table.
 
 ## Success criterion and next gate
 
-This task succeeds when the common closed-loop manifest passes all audit checks and a review table compares the methods under the unified metric definitions. No performance threshold is imposed during execution.
+This task succeeds when the 2019 common closed-loop manifest passes all audit checks and a diagnostic review table compares the methods under the unified metric definitions. No performance threshold is imposed during execution, and this task does not produce a final paper table.
 
-If RSC-PF retains a material decision-quality advantage, freeze the main experiment and proceed to named ablations and statistical testing. If the advantage disappears, stop before ablations and diagnose the specific metric or state trajectory responsible. Manuscript modification remains out of scope for this task.
-
+If the protocol is sound, freeze the evaluator and write a separate formal-experiment plan that completes the RSC-PF five-seed set and freezes the same five seed identities for every stochastic method. The already trained external checkpoints may be reused when their hashes, split boundaries, and selection rules pass audit; they are not retrained merely for symmetry. The frozen set then performs the one-time Gate 2 evaluation on 2020. Only those matched held-out results may support the final main table and inferential statistics. If the 2019 diagnostic reveals a protocol failure or removes the apparent decision advantage, stop before Gate 2 and diagnose the responsible metric or state trajectory. Ablations and manuscript modification remain out of scope for this task.
