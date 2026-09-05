@@ -201,15 +201,23 @@ class _FormalV4Base(nn.Module):
             raise ValueError("previous_chp must have shape [B,1]")
 
     def _schedule(self, physical_features: Tensor, state: Tensor, previous_chp: Tensor) -> tuple[Tensor, Tensor]:
+        # The closed-loop state is carried through float32 tensors while the
+        # decoder checks physical capacities in float64.  Permit only the
+        # sub-micro-unit round-off that can arise at this boundary; a genuine
+        # capacity violation remains fail-closed.
+        chp_capacity = float(self.core.decoder_parameters.get("chp_electric_capacity", self.core.decoder_parameters.get("Pbar_chp", float("inf"))))
+        if bool((previous_chp > chp_capacity + 1.0e-4).any()):
+            raise ValueError("previous_chp cannot exceed chp_electric_capacity")
+        bounded_previous_chp = previous_chp.clamp_min(0.0).clamp_max(chp_capacity)
         normalized = (physical_features - self.core.physical_feature_mean) / self.core.physical_feature_scale
         normalized_for_scheduler = normalized.to(dtype=state.dtype)
         state16 = self.state_to_scheduler(state)
-        normalized_previous = (previous_chp.to(dtype=state.dtype) - self.previous_chp_mean.to(dtype=state.dtype)) / self.previous_chp_scale.to(dtype=state.dtype)
+        normalized_previous = (bounded_previous_chp.to(dtype=state.dtype) - self.previous_chp_mean.to(dtype=state.dtype)) / self.previous_chp_scale.to(dtype=state.dtype)
         logits = self.core.scheduler(normalized_for_scheduler, state16, normalized_previous)
         controls_flat = torch.sigmoid(logits / CONTROL_TEMPERATURE)
         dispatch = decode_feasible_controls(
             controls_flat, physical_features, self.core.decoder_parameters,
-            previous_chp=previous_chp, allow_heat_dump=True,
+            previous_chp=bounded_previous_chp, allow_heat_dump=True,
         )
         controls = controls_flat.unsqueeze(1).expand(-1, 4, -1)
         return controls, dispatch

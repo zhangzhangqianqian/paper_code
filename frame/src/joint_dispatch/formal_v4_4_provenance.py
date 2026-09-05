@@ -39,6 +39,7 @@ DEFAULT_SOURCE_PATHS = (
     "src/joint_dispatch/formal_v4_2_rollout.py",
     "src/joint_dispatch/formal_v4_data.py",
     "src/joint_dispatch/formal_v4_history.py",
+    "src/joint_dispatch/formal_v4_models.py",
     "src/joint_dispatch/formal_v4_objective.py",
     "src/joint_dispatch/formal_v4_recourse.py",
     "tests/test_joint_dispatch_formal_v4_4_provenance.py",
