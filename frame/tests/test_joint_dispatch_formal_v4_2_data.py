@@ -113,6 +113,8 @@ def test_gate1_manifest_covers_activity_and_seasons() -> None:
     assert manifest.cooling_active_fraction >= 0.20
     assert manifest.heating_active_fraction >= 0.20
     assert len(np.unique(manifest.origin_indices)) == len(manifest.origin_indices)
+    assert np.all(np.diff(manifest.origin_indices) > 0)
+    assert np.all(np.diff(manifest.timestamps) > np.timedelta64(0, "s"))
 
 
 def test_gate1_manifest_rejects_activity_poor_selection() -> None:

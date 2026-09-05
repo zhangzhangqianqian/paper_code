@@ -259,6 +259,12 @@ def select_gate1_origins(
         add_ordered(np.arange(len(selection)), total - len(selected), "chronological_remaining")
     selected = selected[:total]
     labels = labels[:total]
+    # Stratified selection intentionally discovers stress cases by category,
+    # not by time.  Restore chronological order before materializing the
+    # immutable Gate-1 subset while preserving each origin's stratum label.
+    chronological_order = np.argsort(np.asarray(selected, dtype=np.int64), kind="stable")
+    selected = [selected[int(position)] for position in chronological_order]
+    labels = [labels[int(position)] for position in chronological_order]
     fractions = {
         "cooling": float(np.mean(cooling_active[np.asarray(selected)])),
         "heating": float(np.mean(heating_active[np.asarray(selected)])),
