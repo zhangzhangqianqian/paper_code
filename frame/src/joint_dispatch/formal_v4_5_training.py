@@ -214,10 +214,16 @@ def _j_validation_metric(
             output, parent_output, batch, normalization, weights,
             decision_loss=decision,
         )
+        # Validation guardrails compare against the parent on the same
+        # early-stop batch.  Using the train-set parent scale here would make
+        # a legitimate seasonal shift look like forecast degradation and can
+        # reject every checkpoint before J training starts.
+        parent_forecast = _forecast_loss_v45(parent_output, batch, prior, budget, epoch)
+        parent_forecast_scale = parent_forecast.detach().abs().clamp_min(1.0e-8)
         details = {
             "metric": float((terms.decision / normalization.decision).detach()),
             "decision": float((decision / normalization.decision).detach()),
-            "forecast": float((forecast / normalization.forecast).detach()),
+            "forecast": float((forecast / parent_forecast_scale).detach()),
             "imitation": float((imitation / normalization.imitation).detach()),
             "anchor": float(terms.anchor.detach()),
         }
@@ -332,7 +338,8 @@ def _run_j_branch_v45(
             stopping_reason = "early_stopped"
             break
     if best_state is None or best_epoch < 0:
-        raise RuntimeError(f"J {mode} has no eligible finite validation checkpoint")
+        tail = [dict(row) for row in validation_history[-3:]]
+        raise RuntimeError(f"J {mode} has no eligible finite validation checkpoint; validation_tail={tail}")
     terminal_sha256 = sha256_state_dict(model)
     model.load_state_dict(best_state, strict=True)
     final_sha256 = sha256_state_dict(model)
