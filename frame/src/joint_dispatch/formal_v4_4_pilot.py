@@ -61,7 +61,11 @@ def run_pilot_v44(
     if stage_executor is None:
         raise RuntimeError("formal Pilot requires a real stage executor with causal device trajectories and same-information LP labels; no executor was supplied")
     root = Path(output_root).resolve() / str(run_id)
-    if root.exists(): raise FileExistsError(root)
+    if root.exists():
+        if not (root / "gate0" / "GATE0_RECEIPT.json").is_file() or (root / "pilot").exists():
+            raise FileExistsError(root)
+    else:
+        root.mkdir(parents=True)
     pilot_dir = root / "pilot"; pilot_dir.mkdir(parents=True)
     # Keep an immutable copy of the Gate-0 split beside the Pilot artifacts so
     # the independent audit never needs to infer indices from in-memory state.
