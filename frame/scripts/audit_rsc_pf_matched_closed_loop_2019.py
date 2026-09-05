@@ -109,6 +109,47 @@ def _audit_row(row: Mapping[str, Any], root: Path, *, atol: float = 1.0e-8) -> d
     return {"method_id": row["method_id"], "seed": int(row["seed"]), "rollout_sha256": _sha256(npz_path), "rows": int(len(arrays["times"])), "metrics_recomputed": summary}
 
 
+def _audit_legacy_replay_provenance(root: Path, rsc_row: Mapping[str, Any], *, origins: int) -> dict[str, Any]:
+    """Require the frozen legacy replay receipt and first-origin equality."""
+
+    provenance = root / "provenance"
+    receipt_path = provenance / "RSC_PF_LEGACY_REPLAY.json"
+    replay_path = provenance / "rsc_pf_legacy_replay.npz"
+    if not receipt_path.is_file() or not replay_path.is_file():
+        raise FileNotFoundError("full matched run is missing the RSC-PF legacy replay provenance")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if receipt.get("schema") != "rsc-pf-legacy-replay-v1":
+        raise ValueError("legacy replay receipt schema is invalid")
+    if int(receipt.get("rows", -1)) != origins:
+        raise ValueError("legacy replay row count does not match the full run")
+    if receipt.get("scheduler_soc_source") != "materialized_origin" or receipt.get("evaluation_year_accessed") is not False:
+        raise ValueError("legacy replay receipt has invalid SOC or year provenance")
+    checks = receipt.get("checks", {})
+    if not isinstance(checks, Mapping) or not all(bool(value) for value in checks.values()):
+        raise ValueError("legacy replay receipt does not contain all passing checks")
+    row_dir = Path(str(rsc_row["path"]))
+    if not row_dir.is_absolute():
+        row_dir = FRAME_ROOT / row_dir
+    with np.load(row_dir / "rollout.npz", allow_pickle=False) as payload:
+        current = {name: np.asarray(payload[name]) for name in payload.files}
+    with np.load(replay_path, allow_pickle=False) as payload:
+        legacy = {name: np.asarray(payload[name]) for name in payload.files}
+    aliases = {
+        "forecast": "forecast_nominal",
+        "scheduler_demand": "scheduler_demand",
+        "planned_dispatch": "planned_dispatch",
+        "settled_dispatch": "settled_dispatch",
+    }
+    first_checks: dict[str, bool] = {}
+    for current_name, legacy_name in aliases.items():
+        first_checks[current_name] = bool(np.allclose(current[current_name][0], legacy[legacy_name][0], atol=1.0e-5, rtol=1.0e-6))
+    first_checks["times"] = bool(np.array_equal(current["times"][0:1].astype("datetime64[ns]"), legacy["times"][0:1].astype("datetime64[ns]")))
+    first_checks["state_hash"] = str(current["state_hashes"][0]) == str(legacy["state_hashes"][0])
+    if not all(first_checks.values()):
+        raise ValueError(f"full RSC-PF first-origin replay mismatch: {first_checks}")
+    return {"receipt": receipt, "first_origin_checks": first_checks, "replay_sha256": _sha256(replay_path)}
+
+
 def audit_artifacts(manifest_path: str | Path) -> dict[str, Any]:
     path = Path(manifest_path)
     manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -126,7 +167,15 @@ def audit_artifacts(manifest_path: str | Path) -> dict[str, Any]:
         ref_arrays = {name: np.asarray(payload[name]) for name in payload.files}
     if len(ref_arrays.get("times", ())) != protocol["origins"]:
         raise ValueError("reference origin count mismatch")
-    result = {"schema": "rsc-pf-matched-closed-loop-audit-v1", "manifest": protocol, "rows": rows, "reference": {"method_id": "Perfect-Information-MPC", "rows": protocol["origins"], "rollout_sha256": _sha256(ref_npz)}, "gate1_authorized": False, "formal_candidate": False, "test_set_accessed": False, "evaluation_year_accessed": False, "status": "PASS"}
+    legacy = None
+    if protocol["full_matrix"]:
+        rsc_rows = [row for row in manifest["rows"] if str(row.get("method_id")) == "RSC-PF" and int(row.get("seed", -1)) == 2026]
+        if len(rsc_rows) != 1:
+            raise ValueError("full manifest must contain one RSC-PF seed-2026 row")
+        legacy = _audit_legacy_replay_provenance(root, rsc_rows[0], origins=protocol["origins"])
+    projection_path = root / "RESOURCE_PROJECTION.json"
+    projection = json.loads(projection_path.read_text(encoding="utf-8")) if projection_path.is_file() else None
+    result = {"schema": "rsc-pf-matched-closed-loop-audit-v1", "manifest": protocol, "rows": rows, "reference": {"method_id": "Perfect-Information-MPC", "rows": protocol["origins"], "rollout_sha256": _sha256(ref_npz)}, "legacy_replay": legacy, "resource_projection": projection, "gate1_authorized": False, "formal_candidate": False, "test_set_accessed": False, "evaluation_year_accessed": False, "status": "PASS"}
     output = root / "MATCHED_CLOSED_LOOP_AUDIT.json"
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
     return result

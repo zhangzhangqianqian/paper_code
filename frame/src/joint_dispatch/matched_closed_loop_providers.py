@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping
+import json
 import re
 
 import numpy as np
@@ -104,7 +105,7 @@ def solve_pto_from_forecast(
         wt_available=np.maximum(origin.renewable_forecast[:, 1], 0.0),
         parameters=lp_parameters,
         initial_soc=float(context[0, 5]),
-        previous_chp=float(origin.previous_chp[0, 0]),
+        previous_chp=min(float(origin.previous_chp[0, 0]), float(parameters["chp_electric_capacity"])),
     ))
     if not result.success:
         raise RuntimeError(f"{method_id} inference LP failed: {result.message}")
@@ -288,12 +289,54 @@ def _compare_legacy_arrays(
     return {"checks": checks, "max_abs": max_abs}
 
 
+def _compare_legacy_mapping(current: Mapping[str, Any], legacy_rollout: str | Path, *, atol: float, rtol: float) -> dict[str, Any]:
+    """Compare a formal-v4.6 legacy result mapping with its saved NPZ."""
+
+    with np.load(Path(legacy_rollout), allow_pickle=False) as payload:
+        saved = {name: np.asarray(payload[name]) for name in payload.files}
+    aliases = {
+        "times": ("times",),
+        "forecast_nominal": ("forecast_nominal", "forecast"),
+        "scheduler_demand": ("scheduler_demand",),
+        "controls": ("controls",),
+        "planned_dispatch": ("planned_dispatch",),
+        "settled_dispatch": ("settled_dispatch",),
+        "state_hashes": ("state_hashes",),
+        "initial_soc": ("initial_soc",),
+        "previous_chp": ("previous_chp",),
+        "shortage": ("shortage",),
+        "operating_cost": ("operating_cost",),
+        "physical_carbon": ("physical_carbon",),
+        "penalized_objective": ("penalized_objective",),
+        "realized_demand": ("realized_demand",),
+        "realized_renewables": ("realized_renewables",),
+        "realized_prices": ("realized_prices",),
+    }
+    checks: dict[str, bool] = {}; max_abs: dict[str, float] = {}
+    for key, names in aliases.items():
+        if key not in current:
+            continue
+        left, right = np.asarray(current[key]), _legacy_array(saved, *names)
+        if key in {"times", "state_hashes"}:
+            checks[key] = np.array_equal(left.astype(str), right.astype(str))
+            max_abs[key] = 0.0 if checks[key] else float("inf")
+        else:
+            checks[key] = left.shape == right.shape and bool(np.allclose(left, right, atol=atol, rtol=rtol))
+            max_abs[key] = float(np.max(np.abs(left - right))) if left.shape == right.shape else float("inf")
+    if not all(checks.values()):
+        raise ValueError(f"RSC-PF legacy replay mismatch: {checks}")
+    return {"checks": checks, "max_abs": max_abs}
+
+
 def run_and_verify_rsc_pf_legacy_replay(
     provider: Any,
     materialized_root: str | Path,
     legacy_rollout: str | Path,
     artifact_root: str | Path,
     *,
+    train_data: str | Path | None = None,
+    benchmark: str | Path | None = None,
+    capacity_receipt: str | Path | None = None,
     atol: float = 1.0e-5,
     rtol: float = 1.0e-6,
 ) -> dict[str, Any]:
@@ -303,31 +346,40 @@ def run_and_verify_rsc_pf_legacy_replay(
     from a materialized cache and never accepts a sealed test path.
     """
 
-    from .external_v46_data import load_external_v46_split
-    from .matched_closed_loop import run_matched_closed_loop
+    from .formal_v4_2_data import fit_train_normalization
+    from .formal_v4_5_pilot_data import load_v45_pilot_cache
+    from .formal_v4_6_rollout import rollout_v46_2019
 
+    if not hasattr(provider, "model") or not hasattr(provider, "parameters"):
+        raise ValueError("provider must expose the frozen RSC-PF model and parameters")
     root = Path(materialized_root)
-    selection_path = root / "data" / "selection_full.npz"
-    if not selection_path.is_file():
-        selection_path = root / "selection_full.npz"
-    selection = load_external_v46_split(selection_path, "pilot")
-    parameters = getattr(provider, "parameters", None)
-    if not isinstance(parameters, Mapping):
-        raise ValueError("provider must expose frozen decoder parameters")
-    result = run_matched_closed_loop(selection, provider, parameters, method_id=str(provider.method_id), seed=0, warmup_origins=0)
-    checks = _compare_legacy_arrays(result, legacy_rollout, atol=atol, rtol=rtol)
-    out = Path(artifact_root) / "replay"
+    # Always pass the frozen lineage sources explicitly.  Leaving these as
+    # loader defaults would permit an unrelated benchmark to be selected and
+    # make a replay mismatch look like a model or numerical failure.
+    materialized = load_v45_pilot_cache(
+        materialized_root=root,
+        train_data=train_data,
+        benchmark=benchmark,
+        capacity_receipt=capacity_receipt,
+    )
+    normalization = fit_train_normalization(materialized.normalization_source.split)
+    indices = np.arange(len(materialized.selection_full), dtype=np.int64)
+    tmp_artifact = Path(artifact_root) / ".legacy_replay_work"
+    legacy = rollout_v46_2019(model=provider.model, materialized=materialized, indices=indices, normalization=normalization, parameters=provider.parameters, artifact_root=tmp_artifact, method_id="rsc_pf_joint")
+    current = {name: getattr(legacy, name) for name in ("times", "forecast_nominal", "scheduler_demand", "controls", "planned_dispatch", "settled_dispatch", "state_hashes", "initial_soc", "previous_chp", "shortage", "operating_cost", "physical_carbon", "penalized_objective", "realized_demand", "realized_renewables", "realized_prices")}
+    checks = _compare_legacy_mapping(current, legacy_rollout, atol=atol, rtol=rtol)
+    out = Path(artifact_root) / "provenance"
     out.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out / "rsc_pf_matched_replay.npz", **dict(result.arrays))
+    np.savez_compressed(out / "rsc_pf_legacy_replay.npz", **current)
     receipt = {
-        "schema": "rsc-pf-matched-replay-v1",
-        "method_id": str(provider.method_id),
-        "rows": int(len(selection)),
-        "scheduler_soc_source": "carried_state",
+        "schema": "rsc-pf-legacy-replay-v1",
+        "method_id": "RSC-PF",
+        "rows": int(len(materialized.selection_full)),
+        "scheduler_soc_source": "materialized_origin",
         "evaluation_year_accessed": False,
         **checks,
     }
-    (out / "RSC_PF_REPLAY.json").write_text(json.dumps(receipt, indent=2, default=str), encoding="utf-8")
+    (out / "RSC_PF_LEGACY_REPLAY.json").write_text(json.dumps(receipt, indent=2, default=str), encoding="utf-8")
     return receipt
 
 

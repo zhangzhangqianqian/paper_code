@@ -400,7 +400,11 @@ def run_perfect_information_mpc_reference(
             wt_available=labels.renewable_realized[:, 1].astype(np.float64),
             parameters=lp_parameters,
             initial_soc=float(state.initial_soc[0, 0].item()),
-            previous_chp=float(state.previous_chp[0, 0].item()),
+            # The settled recourse path is float64, while the carried state is
+            # stored in float32.  A one-ULP round-up at the capacity boundary
+            # must not make the reference LP reject an otherwise feasible
+            # state.
+            previous_chp=min(float(state.previous_chp[0, 0].item()), float(parameters["chp_electric_capacity"])),
         ))
         if not dispatch_result.success:
             raise RuntimeError(f"Perfect-Information-MPC LP failed at origin {index}: {dispatch_result.message}")
