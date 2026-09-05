@@ -16,6 +16,9 @@ class PilotDecisionV44:
     criteria: Mapping[str, bool]
     failures: tuple[str, ...]
     measured: Mapping[str, Any]
+    accessed_years: tuple[int, ...] = ()
+    rows: tuple[str, ...] = ()
+    audit_sha256: str = ""
 
 
 def _finite(value: Any) -> bool:
