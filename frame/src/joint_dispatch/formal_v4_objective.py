@@ -296,6 +296,7 @@ def formal_v4_joint_loss(
     step_weights: Sequence[float] = STEP_WEIGHTS,
     oracle_diagnostic: Tensor | None = None,
     settled: FormalV4FourHourSettlement | None = None,
+    supervised_forecast_loss: Tensor | None = None,
 ) -> FormalV4LossBreakdown:
     """Compute the formal-v4 loss while preserving forecast-to-dispatch gradients."""
 
@@ -320,8 +321,13 @@ def formal_v4_joint_loss(
     if horizons.shape != (4,) or bool((horizons < 0.0).any()) or not torch.isclose(horizons.sum(), forecast.new_tensor(1.0), atol=1.0e-8):
         raise ValueError("step_weights must be non-negative and sum to one")
 
-    per_task = F.smooth_l1_loss(forecast, target_normalized, reduction="none").mean(dim=1)
-    forecast_loss = (per_task * task_weights).sum(dim=-1).mean() / task_weights.sum()
+    if supervised_forecast_loss is None:
+        per_task = F.smooth_l1_loss(forecast, target_normalized, reduction="none").mean(dim=1)
+        forecast_loss = (per_task * task_weights).sum(dim=-1).mean() / task_weights.sum()
+    else:
+        if supervised_forecast_loss.ndim != 0 or not bool(torch.isfinite(supervised_forecast_loss).all()):
+            raise ValueError("supervised_forecast_loss must be a finite scalar")
+        forecast_loss = supervised_forecast_loss.to(dtype=forecast.dtype, device=forecast.device)
     if teacher_dispatch is None:
         imitation_loss = forecast_loss.new_zeros(())
     else:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Mapping
 
 import torch
@@ -79,6 +80,61 @@ class FormalV4ForwardOutput:
     latent_planning_demand: Tensor | None
     controls: Tensor
     dispatch: Tensor
+
+
+@dataclass(frozen=True)
+class RegimeForecastV43:
+    electricity_normalized: Tensor
+    gas_normalized: Tensor
+    regime_logits: Tensor
+    regime_probabilities: Tensor
+    thermal_magnitude_normalized: Tensor
+    thermal_magnitudes: Tensor
+
+
+@dataclass(frozen=True)
+class FormalV43ForwardOutput:
+    forecast_normalized: Tensor
+    forecast_physical: Tensor
+    regime_logits: Tensor
+    regime_probabilities: Tensor
+    thermal_magnitudes: Tensor
+    controls: Tensor
+    dispatch: Tensor
+
+
+class RegimeAwareForecastHead(nn.Module):
+    """Differentiable occurrence/state and conditional-size forecast head."""
+
+    def __init__(self, state_dim: int = 32, hidden_dim: int = 64, temperature: float = 1.0) -> None:
+        super().__init__()
+        if state_dim <= 0 or hidden_dim <= 0 or not math.isfinite(float(temperature)) or float(temperature) <= 0.0:
+            raise ValueError("invalid regime-aware forecast-head dimensions or temperature")
+        self.temperature = float(temperature)
+        self.hidden = nn.Sequential(
+            nn.Linear(4 + int(state_dim), int(hidden_dim)),
+            nn.GELU(),
+            nn.LayerNorm(int(hidden_dim)),
+        )
+        # electricity, gas, three regime logits, cooling magnitude, heating magnitude
+        self.output = nn.Linear(int(hidden_dim), 7)
+
+    def forward(self, base_forecast: Tensor, state: Tensor) -> RegimeForecastV43:
+        if base_forecast.ndim != 3 or tuple(base_forecast.shape[1:]) != (4, 4):
+            raise ValueError("base_forecast must have shape [B,4,4]")
+        if state.ndim != 2 or state.shape[0] != base_forecast.shape[0]:
+            raise ValueError("state must have shape [B,state_dim]")
+        state_horizon = state.unsqueeze(1).expand(-1, 4, -1)
+        raw = self.output(self.hidden(torch.cat((base_forecast, state_horizon), dim=-1)))
+        probabilities = F.softmax(raw[..., 2:5] / self.temperature, dim=-1)
+        return RegimeForecastV43(
+            electricity_normalized=raw[..., 0],
+            gas_normalized=raw[..., 1],
+            regime_logits=raw[..., 2:5],
+            regime_probabilities=probabilities,
+            thermal_magnitude_normalized=raw[..., 5:7],
+            thermal_magnitudes=raw[..., 5:7],
+        )
 
 
 def _pad_device_history(device_history: Tensor) -> Tensor:
@@ -184,6 +240,92 @@ class RSCPFModel(_FormalV4Base):
         return FormalV4ForwardOutput(forecast_normalized, forecast_physical, None, controls, dispatch)
 
 
+class RegimeAwareRSCPFModel(_FormalV4Base):
+    """RSC-PF with a differentiable off/cooling/heating thermal head."""
+
+    def __init__(
+        self,
+        *,
+        decoder_parameters: Mapping[str, Any] | None = None,
+        task_mean: Tensor | None = None,
+        task_scale: Tensor | None = None,
+        physical_feature_mean: Tensor | None = None,
+        physical_feature_scale: Tensor | None = None,
+        previous_chp_mean: Tensor | float | None = None,
+        previous_chp_scale: Tensor | float | None = None,
+        thermal_magnitude_mean: Tensor | None = None,
+        thermal_magnitude_scale: Tensor | None = None,
+        regime_temperature: float = 1.0,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__(
+            decoder_parameters=decoder_parameters,
+            task_mean=task_mean,
+            task_scale=task_scale,
+            physical_feature_mean=physical_feature_mean,
+            physical_feature_scale=physical_feature_scale,
+            previous_chp_mean=previous_chp_mean,
+            previous_chp_scale=previous_chp_scale,
+            dropout=dropout,
+        )
+        magnitude_mean = torch.as_tensor(
+            [1.0, 1.0] if thermal_magnitude_mean is None else thermal_magnitude_mean,
+            dtype=torch.float32,
+        )
+        magnitude_scale = torch.as_tensor(
+            [1.0, 1.0] if thermal_magnitude_scale is None else thermal_magnitude_scale,
+            dtype=torch.float32,
+        )
+        if magnitude_mean.shape != (2,) or magnitude_scale.shape != (2,):
+            raise ValueError("thermal magnitude statistics must have shape [2]")
+        if not bool(torch.isfinite(magnitude_mean).all() and torch.isfinite(magnitude_scale).all()) or bool((magnitude_scale <= 0.0).any()):
+            raise ValueError("thermal magnitude statistics must be finite with positive scale")
+        self.register_buffer("thermal_magnitude_mean", magnitude_mean)
+        self.register_buffer("thermal_magnitude_scale", magnitude_scale)
+        self.regime_head = RegimeAwareForecastHead(
+            state_dim=32,
+            hidden_dim=64,
+            temperature=regime_temperature,
+        )
+
+    def forecaster_parameters(self):
+        return tuple(super().forecaster_parameters()) + tuple(self.regime_head.parameters())
+
+    @classmethod
+    def for_test(cls) -> "RegimeAwareRSCPFModel":
+        return cls(decoder_parameters=JointForecastDispatchModel._test_parameters(), dropout=0.0)
+
+    def forward(self, *, detach_forecast_for_dispatch: bool = False, **inputs: Tensor) -> FormalV43ForwardOutput:
+        self._validate_common(inputs)
+        state = self.state_encoder(inputs["device_history"], inputs["activity_history"])
+        padded = _pad_device_history(inputs["device_history"])
+        base_forecast, _details = self.core.forecaster.forward_with_details(
+            inputs["load_history"], inputs["exog_history"], padded, inputs["activity_history"],
+        )
+        base_forecast = base_forecast + self.forecast_state_fusion(state).unsqueeze(1)
+        raw = self.regime_head(base_forecast, state)
+        electricity = F.softplus(self.core.task_mean[0] + self.core.task_scale[0] * raw.electricity_normalized)
+        gas = F.softplus(self.core.task_mean[3] + self.core.task_scale[3] * raw.gas_normalized)
+        thermal_raw = self.thermal_magnitude_mean + self.thermal_magnitude_scale * raw.thermal_magnitude_normalized
+        thermal_magnitudes = F.softplus(thermal_raw)
+        cooling = raw.regime_probabilities[..., 1] * thermal_magnitudes[..., 0]
+        heating = raw.regime_probabilities[..., 2] * thermal_magnitudes[..., 1]
+        forecast_physical = torch.stack((electricity, cooling, heating, gas), dim=-1)
+        forecast_normalized = (forecast_physical - self.core.task_mean) / self.core.task_scale
+        forecast_for_dispatch = forecast_physical.detach() if detach_forecast_for_dispatch else forecast_physical
+        physical_features = self.core._raw_physical_features(forecast_for_dispatch, inputs["scheduler_context"])
+        controls, dispatch = self._schedule(physical_features, state, inputs["previous_chp"])
+        return FormalV43ForwardOutput(
+            forecast_normalized=forecast_normalized,
+            forecast_physical=forecast_physical,
+            regime_logits=raw.regime_logits,
+            regime_probabilities=raw.regime_probabilities,
+            thermal_magnitudes=thermal_magnitudes,
+            controls=controls,
+            dispatch=dispatch,
+        )
+
+
 class DirectPolicyModel(_FormalV4Base):
     """Decision-only comparator with no supervised forecast output or loss."""
 
@@ -203,4 +345,7 @@ class DirectPolicyModel(_FormalV4Base):
         return FormalV4ForwardOutput(None, None, planning, controls, dispatch)
 
 
-__all__ = ["CausalStateDSTCNEncoder", "DirectPolicyModel", "FormalV4ForwardOutput", "RSCPFModel"]
+__all__ = [
+    "CausalStateDSTCNEncoder", "DirectPolicyModel", "FormalV4ForwardOutput", "FormalV43ForwardOutput",
+    "RegimeAwareForecastHead", "RegimeAwareRSCPFModel", "RegimeForecastV43", "RSCPFModel",
+]

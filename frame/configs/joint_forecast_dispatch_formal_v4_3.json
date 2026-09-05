@@ -1,0 +1,99 @@
+{
+  "schema_version": "joint-forecast-dispatch-formal-v4.3",
+  "protocol_status": "frozen",
+  "lookback": 24,
+  "horizon": 4,
+  "latent_control_dim": 15,
+  "dispatch_dim": 21,
+  "allow_future_binary_decisions": false,
+  "gas_semantics": "station_side_auxiliary_prior",
+  "task_order": ["electricity", "cooling", "heating", "gas"],
+  "rigid_demands": ["electricity", "cooling", "heating"],
+  "exog_order": [
+    "temperature", "humidity", "solar_irradiance", "wind_speed", "wind_direction",
+    "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos", "is_weekend"
+  ],
+  "dispatch_order": [
+    "grid", "pv_use", "pv_curt", "wt_use", "wt_curt", "g_chp", "g_gb", "p_chp",
+    "q_chp", "q_gb", "p_ec", "q_ec", "q_ac_in", "q_ac", "p_charge", "p_discharge",
+    "soc", "slack_e", "slack_c", "slack_h", "q_dump"
+  ],
+  "status_order": [
+    "chp_on", "gas_boiler_on", "electric_chiller_on", "absorption_chiller_on",
+    "bess_charge_on", "bess_discharge_on"
+  ],
+  "train_years": [2015, 2016, 2017, 2018],
+  "selection_year": 2019,
+  "evaluation_year": 2020,
+  "excluded_years": [2021],
+  "allow_evaluation_access_before_gate2": false,
+  "thermal_regime": {
+    "classes": ["off", "cooling", "heating"],
+    "active_epsilon": 1e-9,
+    "probability_temperature": 1.0,
+    "hard_calendar_mask": false,
+    "hard_training_gate": false,
+    "fail_on_simultaneous_thermal_targets": true,
+    "class_weight_clip": [0.5, 2.0]
+  },
+  "forecast_loss": {
+    "continuous_weight": 1.0,
+    "regime_weight": 1.0,
+    "active_magnitude_weight": 1.0,
+    "point_weight": 0.5,
+    "inactive_leakage_weight": 0.25,
+    "gas_task_weight": 0.25,
+    "transition_window_weight": 1.5
+  },
+  "gate1_views": {
+    "full_chronology": {"enabled": true, "uniform_weight": true},
+    "stress_sample": {"enabled": true, "secondary_only": true}
+  },
+  "candidate_grid": {
+    "forecaster_lr_multiplier": [0.5, 1.0, 2.0],
+    "decision_final": [0.25, 0.5, 1.0]
+  },
+  "forecast_guardrails": {
+    "active_wape_ratio_max": 1.05,
+    "inactive_leakage_ratio_max": 0.75,
+    "regime_macro_f1_min": 0.55,
+    "gas_wape_ratio_max": 1.10,
+    "physical_residual_max": 1e-5
+  },
+  "training": {
+    "stage_order": ["P", "teacher", "S", "clone", "J"],
+    "stage_p_max_epochs": 30,
+    "stage_s_max_epochs": 30,
+    "stage_j_max_epochs": 30,
+    "minimum_stage_j_epochs": 18,
+    "base_forecaster_lr": 1e-5,
+    "base_scheduler_lr": 1e-3,
+    "weight_decay": 1e-4,
+    "max_grad_norm": 1.0,
+    "decision_start_weight": 0.05,
+    "decision_final_weight": 1.0,
+    "curriculum_ramp_epochs": 18,
+    "forecast_weight": 1.0,
+    "imitation_start_weight": 1.0,
+    "imitation_final_weight": 0.0
+  },
+  "pilot": {
+    "seed": 2026,
+    "stage_epochs": 3,
+    "batch_size": 32,
+    "windows": 128,
+    "rollout_windows": 24,
+    "forecaster_learning_rate": 0.001,
+    "scheduler_learning_rate": 0.001
+  },
+  "data": {
+    "source_manifest_required": true,
+    "evaluation_year_accessed": false
+  },
+  "paths": {
+    "output_root": "reports/joint_forecast_dispatch_formal_v4_3",
+    "benchmark_path": "D:/Paper/standard_ies_benchmark_v1.yaml",
+    "parameter_ledger_path": "configs/scheduling_parameter_ledger_v2.csv",
+    "diffopt_python": "D:/Paper/envs/rsc_pf_diffopt_v4/python.exe"
+  }
+}
