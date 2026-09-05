@@ -177,16 +177,38 @@ def _run_materialized_diagnostic(
         seed=int(contract.payload["pilot_budget"]["seed"]), parameters=parameters,
         epoch_cap=2 if max_batches is not None else None,
     )
+    output_root = Path(output_root)
+    stage_root = output_root / "stages"
+    stage_root.mkdir(parents=True, exist_ok=True)
+    group_rates = [
+        {"name": "base", "lr": float(contract.payload["pilot_budget"]["j_forecaster_lr"])},
+        {"name": "head", "lr": float(contract.payload["pilot_budget"]["j_head_lr"])},
+        {"name": "scheduler", "lr": float(contract.payload["pilot_budget"]["j_scheduler_lr"])},
+    ]
+    decoupled_rates = [{"name": "scheduler", "lr": float(contract.payload["pilot_budget"]["j_scheduler_lr"])}]
+    joint_root = stage_root / "J_joint"; decoupled_root = stage_root / "J_decoupled"
+    write_v45_stage_receipt(joint_root / "STAGE_SELECTION.json", bundle.j.joint, bundle.j.joint.validation_history, group_rates, accessed_years=list(materialized.lineage["years"]))
+    write_v45_stage_receipt(decoupled_root / "STAGE_SELECTION.json", bundle.j.decoupled, bundle.j.decoupled.validation_history, decoupled_rates, accessed_years=list(materialized.lineage["years"]))
+    joint_audit = audit_v45_selection(joint_root, contract)
+    decoupled_audit = audit_v45_selection(decoupled_root, contract)
     gradient_norms = {
         "joint": dict(bundle.j.joint.gradient_norms),
         "decoupled": dict(bundle.j.decoupled.gradient_norms),
     }
+    joint_history = bundle.j.joint.validation_history
     checks = {
         "year_firewall": list(materialized.lineage["years"]) == list(contract.train_years) and not materialized.lineage["selection_year_accessed"] and not materialized.lineage["evaluation_year_accessed"],
         "joint_decision_to_base": gradient_norms["joint"].get("decision_to_base", 0.0) > 0.0,
         "joint_decision_to_gate": gradient_norms["joint"].get("decision_to_gate", 0.0) > 0.0,
         "joint_decision_to_magnitude": gradient_norms["joint"].get("decision_to_magnitude", 0.0) > 0.0,
         "decoupled_forecast_boundary": all(gradient_norms["decoupled"].get(name, 0.0) <= 1.0e-12 for name in ("decision_to_base", "decision_to_gate", "decision_to_magnitude")),
+        "joint_guardrails_finite": bool(joint_history) and all(
+            bool(float(row.get("eligible", 0.0))) and np.isfinite(float(row["forecast"]))
+            and np.isfinite(float(row["anchor"])) and float(row["forecast"]) <= 1.02
+            and float(row["anchor"]) <= 0.25 for row in joint_history
+        ),
+        "joint_selection_audited": joint_audit["authorized_gate1"] is False,
+        "decoupled_selection_audited": decoupled_audit["authorized_gate1"] is False,
     }
     receipt = {
         "schema": "formal-v4.5-diagnostic-v1", "mode": "training_cache",
@@ -195,9 +217,10 @@ def _run_materialized_diagnostic(
         "evaluation_year_accessed": bool(materialized.lineage["evaluation_year_accessed"]),
         "pilot_authorized": False, "max_batches": max_batches,
         "checks": checks, "gradient_norms": gradient_norms,
+        "stage_audits": {"joint": joint_audit, "decoupled": decoupled_audit},
         "lineage": dict(materialized.lineage),
     }
-    output_root = Path(output_root); output_root.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(parents=True, exist_ok=True)
     write_json_once(output_root / "DIAGNOSTIC_RECEIPT.json", receipt)
     return receipt
 
