@@ -250,7 +250,12 @@ def write_external_validation_manifest(output_root: Path) -> Path:
         "seeds": list(SEEDS),
         "entries": entries,
         "test_set_accessed": False,
-        "metric_definitions": {"forecast": ["MAE", "RMSE", "WAPE"], "dispatch": ["operating_cost", "physical_carbon", "regret_vs_oracle", "shortage", "feasibility_rate"]},
+        "metric_definitions": {
+            "forecast": ["MAE", "RMSE", "WAPE"],
+            "dispatch_open_loop_four_hour_diagnostic": ["operating_cost", "physical_carbon", "penalized_objective", "shortage", "feasibility_rate"],
+            "dispatch_first_step_settled_comparison": ["operating_cost", "physical_carbon", "penalized_objective", "regret_vs_oracle", "shortage", "feasibility_rate"],
+        },
+        "settlement": "canonical one-step physical settlement against realized first-hour demand and renewable output",
         "optimizer_roles": {"iTransformer-PTO": "none at inference", "DecisionFocused-Online": "exact optimizer at inference", "DigitalTwins-Policy": "none at inference"},
     }
     destination = root / "external_validation_manifest.json"
