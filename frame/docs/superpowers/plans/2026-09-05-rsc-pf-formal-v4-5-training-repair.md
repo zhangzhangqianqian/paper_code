@@ -374,7 +374,7 @@ git commit -m "add auditable v4.5 selection artifacts"
 - Test: `tests/test_joint_dispatch_formal_v4_5_diagnostic.py`
 
 **Interfaces:**
-- `run_formal_v45_diagnostic(*, config: str | Path, output_root: str | Path, max_batches: int | None = None) -> Mapping[str, Any]`
+- `run_formal_v45_diagnostic(*, config: str | Path, output_root: str | Path, max_batches: int | None = None, train_data: str | Path | None = None, benchmark: str | Path | None = None, capacity_receipt: str | Path | None = None, split_path: str | Path | None = None, materialized_root: str | Path | None = None) -> Mapping[str, Any]`
 
 - [ ] **Step 1: Add entrypoint and smoke test**
 
@@ -397,8 +397,11 @@ Expected: FAIL because the v4.5 entrypoint does not exist.
 - [ ] **Step 3: Implement the bounded diagnostic runner**
 
 Run deterministic fixture checks, then a small real-data train/early-stop
-diagnostic only. Stop after gradient, loss, early-stop, guardrail, and artifact
-checks. Do not evaluate 2019, do not access 2020, and do not launch baselines.
+diagnostic only. If a verified materialized cache exists, read only its
+`train`, `early_stop`, and `normalization_source` artifacts; never open the
+selection artifacts. Stop after gradient, loss, early-stop, guardrail, and
+artifact checks. Do not evaluate 2019, do not access 2020, and do not launch
+baselines.
 
 - [ ] **Step 4: Run all targeted tests and protected regression tests**
 
