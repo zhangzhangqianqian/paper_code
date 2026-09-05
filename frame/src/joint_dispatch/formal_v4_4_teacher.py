@@ -126,13 +126,13 @@ def _scaled_parameters(benchmark: Mapping[str, Any], capacity: Mapping[str, Any]
     return parameters
 
 
-def _lineage(materialized: MaterializedV44PilotData, benchmark: Path, capacity: Path, contract: FormalV44Contract, seed: int, model_hash: str) -> dict[str, Any]:
+def _lineage(materialized_lineage: Mapping[str, Any], benchmark: Path, capacity: Path, contract: FormalV44Contract, seed: int, model_hash: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema": "formal-v4.4-teacher-lineage-v1",
         "contract_sha256": contract.contract_sha256,
         "benchmark_sha256": sha256_file(benchmark),
         "capacity_receipt_sha256": sha256_file(capacity),
-        "materialized_lineage_sha256": materialized.lineage.get("lineage_sha256", ""),
+        "materialized_lineage_sha256": materialized_lineage.get("lineage_sha256", ""),
         "model_sha256": model_hash,
         "seed": int(seed),
         "evaluation_year_accessed": False,
@@ -178,7 +178,8 @@ def build_same_information_teacher_v44(
         raise ValueError("teacher indices are invalid")
     benchmark_path = Path(benchmark); capacity_path = Path(capacity_receipt)
     model_hash = _model_hash(model)
-    lineage = _lineage(materialized if isinstance(materialized, MaterializedV44PilotData) else MaterializedV44PilotData(collection, collection, collection, collection, collection, {"lineage_sha256": ""}), benchmark_path, capacity_path, contract, seed, model_hash)
+    lineage_source = materialized.lineage if isinstance(materialized, MaterializedV44PilotData) else {"lineage_sha256": ""}
+    lineage = _lineage(lineage_source, benchmark_path, capacity_path, contract, seed, model_hash)
     root = Path(artifact_root) / "teacher"
     if (root / "TEACHER.json").exists() or (root / "TEACHER.npz").exists():
         if not (root / "TEACHER.json").is_file() or not (root / "TEACHER.npz").is_file():
