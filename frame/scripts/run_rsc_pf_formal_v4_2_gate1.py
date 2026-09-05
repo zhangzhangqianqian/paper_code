@@ -215,6 +215,14 @@ def _weighted_wape(prediction: np.ndarray, target: np.ndarray, weights: np.ndarr
     return numerator / np.maximum(denominator, 1.0e-12)
 
 
+def _rigid_demand_target(four_task_target: torch.Tensor) -> torch.Tensor:
+    """Separate the three physical balances from the auxiliary gas target."""
+
+    if four_task_target.ndim != 3 or tuple(four_task_target.shape[1:]) != (4, 4):
+        raise ValueError("four-task target must have shape [B,4,4]")
+    return four_task_target[..., :3]
+
+
 def _evaluate_candidate(model: torch.nn.Module, split: FormalV4WindowSplit, normalization: Any, parameters: Mapping[str, Any], weights: np.ndarray, *, batch_size: int = 64) -> dict[str, Any]:
     predictions: list[np.ndarray] = []
     dispatches: list[np.ndarray] = []
@@ -226,7 +234,8 @@ def _evaluate_candidate(model: torch.nn.Module, split: FormalV4WindowSplit, norm
     for batch in _batches(split, normalization, batch_size):
         with torch.no_grad():
             output = model(**{name: batch[name] for name in ("load_history", "exog_history", "device_history", "activity_history", "scheduler_context", "previous_chp")})
-            settled = settle_formal_v4_four_hour(output.dispatch, batch["target_physical"].to(output.dispatch), batch["realized_renewables"].to(output.dispatch), batch["initial_soc"].to(output.dispatch), batch["previous_chp"].to(output.dispatch), parameters)
+            four_task_target = batch["target_physical"].to(output.dispatch)
+            settled = settle_formal_v4_four_hour(output.dispatch, _rigid_demand_target(four_task_target), batch["realized_renewables"].to(output.dispatch), batch["initial_soc"].to(output.dispatch), batch["previous_chp"].to(output.dispatch), parameters)
         predictions.append(output.forecast_physical.cpu().numpy())
         dispatches.append(output.dispatch.cpu().numpy())
         controls.append(output.controls.cpu().numpy())

@@ -6,6 +6,7 @@ from runpy import run_path
 
 import numpy as np
 import pytest
+import torch
 
 from src.joint_dispatch.formal_v4_2_contract import load_formal_v4_2_contract
 from src.joint_dispatch.formal_v4_2_data import Gate1OriginManifestV42
@@ -45,3 +46,11 @@ def test_gate1_rejects_candidates_outside_frozen_contract(tmp_path):
 def test_gate1_cli_exposes_no_calibration_budget_overrides():
     options = {action.dest for action in GATE1["build_gate1_parser"]()._actions}
     assert options.isdisjoint({"epochs", "learning_rate", "candidate_values", "origins"})
+
+
+def test_gate1_keeps_four_forecast_tasks_but_settles_three_rigid_demands():
+    target = torch.arange(2 * 4 * 4, dtype=torch.float32).reshape(2, 4, 4)
+    rigid = GATE1["_rigid_demand_target"](target)
+    assert rigid.shape == (2, 4, 3)
+    assert torch.equal(rigid, target[..., :3])
+    assert torch.equal(target[..., 3], torch.tensor([[3.0, 7.0, 11.0, 15.0], [19.0, 23.0, 27.0, 31.0]]))
