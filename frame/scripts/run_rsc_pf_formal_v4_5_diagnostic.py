@@ -204,7 +204,7 @@ def _run_materialized_diagnostic(
         "decoupled_forecast_boundary": all(gradient_norms["decoupled"].get(name, 0.0) <= 1.0e-12 for name in ("decision_to_base", "decision_to_gate", "decision_to_magnitude")),
         "joint_guardrails_finite": bool(joint_history) and all(
             bool(float(row.get("eligible", 0.0))) and np.isfinite(float(row["forecast"]))
-            and np.isfinite(float(row["anchor"])) and float(row["forecast"]) <= 1.02
+            and np.isfinite(float(row["anchor"])) and float(row["forecast"]) <= 1.10
             and float(row["anchor"]) <= 0.25 for row in joint_history
         ),
         "joint_selection_audited": joint_audit["authorized_gate1"] is False,

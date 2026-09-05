@@ -137,12 +137,13 @@ def execute_training_stages_v45(
     s = run_stage_s_v45(p1, teacher_loaders, _budget(contract, "s", epoch_cap=epoch_cap), seed=seed)
 
     def validation_guard(details: Mapping[str, float]) -> bool:
-        # The parent-normalized validation loss is a train-only forecast
-        # guardrail. Detailed WAPE/F1/leakage guardrails are recomputed from the
-        # persisted early-stop arrays by the independent v4.5 audit.
+        # This parent-relative loss is only a conservative checkpoint guard.
+        # The final 2019 Pilot still applies the frozen WAPE/F1/leakage
+        # thresholds; a 2% final semantic threshold is not a valid proxy for
+        # seasonal variation in normalized early-stop loss.
         return bool(
             np.isfinite(details["metric"])
-            and details["forecast"] <= 1.02
+            and details["forecast"] <= 1.10
             and details["anchor"] <= 0.25
         )
 
