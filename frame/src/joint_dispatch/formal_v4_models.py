@@ -208,7 +208,7 @@ class _FormalV4Base(nn.Module):
         chp_capacity = float(self.core.decoder_parameters.get("chp_electric_capacity", self.core.decoder_parameters.get("Pbar_chp", float("inf"))))
         if bool((previous_chp > chp_capacity + 1.0e-4).any()):
             raise ValueError("previous_chp cannot exceed chp_electric_capacity")
-        bounded_previous_chp = previous_chp.clamp_min(0.0).clamp_max(chp_capacity)
+        bounded_previous_chp = previous_chp.to(dtype=torch.float64).clamp_min(0.0).clamp_max(chp_capacity)
         normalized = (physical_features - self.core.physical_feature_mean) / self.core.physical_feature_scale
         normalized_for_scheduler = normalized.to(dtype=state.dtype)
         state16 = self.state_to_scheduler(state)
