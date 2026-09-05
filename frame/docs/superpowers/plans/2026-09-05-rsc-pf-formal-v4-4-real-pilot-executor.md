@@ -36,6 +36,8 @@
 - Produce `write_source_manifest(path: Path, manifest: Mapping[str, Any]) -> str`, returning the file SHA-256.
 - Require the manifest to contain `schema="formal-v4.4-source-manifest-v1"`, current Git commit, clean/dirty status, contract hash, implementation path hashes, and `evaluation_year_accessed=false`.
 - Make Gate 0 reject a manifest whose commit or implementation hashes do not describe the current checkout.
+- Make Gate 0 copy the externally staged manifest into `<run>/protocol/SOURCE_MANIFEST.json` after creating the new run directory; the source-manifest staging directory must remain outside the run directory so Gate 0 can create the run atomically.
+- Add a measured `executor_entrypoint` check that imports the production executor and runs its non-training contract/data-shape preflight on a deterministic two-window fixture.
 
 - [ ] **Step 1: Write failing provenance tests**
 
@@ -94,6 +96,7 @@ git commit -m "feat: bind formal v4.4 source lineage"
 - Produce `load_v44_base_series(train_data: Path, selection_data: Path) -> tuple[FormalV4BaseSeries, FormalV4BaseSeries]`.
 - Produce `materialize_v44_pilot_data(*, train_data: Path, selection_data: Path, benchmark: Path, capacity_receipt: Path, split: Mapping[str, np.ndarray], artifact_root: Path, contract: FormalV44Contract) -> MaterializedV44PilotData`.
 - Produce `save_or_load_materialized_v44(...)` that accepts a lineage key and rejects mismatched cached arrays.
+- Define `MaterializedV44PilotData` with `.train`, `.early_stop`, `.selection_full`, and `.selection_stress` window collections; each collection exposes `load_history`, `exog_history`, `device_history`, `activity_history`, `scheduler_context`, `previous_chp`, `initial_soc`, `forecast_target`, `renewable_forecast`, `renewable_realized`, and `timestamps`.
 - Return 24-hour histories, 17 continuous device-history features, six activity/status features, renewable forecasts and realizations, scheduler context, initial SOC, previous CHP output, four-hour targets, timestamps, and split role.
 
 - [ ] **Step 1: Write failing causal-boundary and resume tests**
@@ -205,6 +208,7 @@ git commit -m "feat: add formal v4.4 same-information teacher"
 
 **Interfaces:**
 - Produce `build_v44_model(materialized: MaterializedV44PilotData, contract: FormalV44Contract, prior: ThermalPriorV44, parameters: Mapping[str, Any]) -> ResidualGatedRSCPFModel`.
+- Produce `build_continuous_control_v44(p0_model: ResidualGatedRSCPFModel) -> nn.Module` that reuses the identical P0 base state but emits direct continuous cooling/heating forecasts without the learned regime gate or thermal residual heads.
 - Produce `execute_training_stages_v44(*, materialized, teacher, contract, artifact_root, seed) -> TrainingBundleV44`.
 - `TrainingBundleV44` must expose P0, P1, continuous-control, S, J-joint, and J-decoupled receipts and models with parent hashes.
 
@@ -231,9 +235,11 @@ Expected: FAIL because the production executor and bundle do not exist.
 
 Construct the v4.4 model from train-only normalization and transition priors.
 Run existing `run_stage_p0_v44`, `run_stage_p1_v44`,
-`run_continuous_control_v44`, `run_stage_s_v44`, and
-`run_stage_j_pair_v44` with the frozen budget. Save each stage before starting
-the next one and make resume load only a hash-matched parent.
+`run_stage_s_v44`, and `run_stage_j_pair_v44` with the frozen budget. Build the
+continuous control through `build_continuous_control_v44` and train it with
+the same P0-derived forecast optimizer-step count; do not let its regime gate
+or residual magnitude heads become a hidden second mechanism. Save each stage
+before starting the next one and make resume load only a hash-matched parent.
 
 - [ ] **Step 4: Run the focused test**
 
@@ -255,6 +261,7 @@ git commit -m "feat: orchestrate formal v4.4 pilot stages"
 **Interfaces:**
 - Produce `rollout_v44_2019(*, model: nn.Module, materialized: MaterializedV44PilotData, indices: np.ndarray, normalization: NormalizationReceiptV42, parameters: Mapping[str, Any], artifact_root: Path, method_id: str) -> RolloutReceiptV44`.
 - Return stored arrays for prediction, target, regime probabilities, prior probabilities, planned dispatch, settled dispatch, shortage, residuals, states, and timestamps.
+- Generate the `transition_prior` diagnostic row by applying the frozen train-only transition probabilities to the causal last observed regime and combining them with the fixed P1 magnitude backbone; do not fit or calibrate it on 2019.
 
 - [ ] **Step 1: Write failing first-step carry and chronology tests**
 
@@ -338,9 +345,10 @@ production-path test fails until the executor is connected.
 
 The executor must materialize data, train stages, build LP labels, roll all
 2019 origins for every required method row, and return only measured arrays and
-summaries. `run_pilot_v44` writes the canonical arrays and receipt; the audit
-recomputes all authorization-critical metrics from disk without importing the
-executor.
+summaries. Persist one rollout NPZ per required row, not only the forecast
+summary array. `run_pilot_v44` writes the canonical arrays and receipt; the
+audit recomputes all authorization-critical metrics from disk without importing
+the executor.
 
 - [ ] **Step 4: Add resume and corruption checks**
 
@@ -353,7 +361,17 @@ arrays, and incomplete method rows fail closed.
 Expected: PASS; forged success and corrupted artifacts must return
 `authorized_gate1=false`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Make the independent audit recompute decision and gradient evidence**
+
+The audit must load every row's stored planned/settled dispatch, shortage, and
+physical-residual arrays to recompute penalized objective and shortage
+comparisons. It must load the saved stage checkpoints and one immutable Pilot
+batch to rerun the Joint/Fair-Decoupled gradient probe in a fresh process;
+receipt-supplied gradient norms alone are not accepted. The audit must compare
+its recomputed values with the receipt within the contract tolerance and fail
+closed on disagreement.
+
+- [ ] **Step 7: Commit**
 
 ```powershell
 git add src/joint_dispatch/formal_v4_4_pilot.py scripts/run_rsc_pf_formal_v4_4_pilot.py src/joint_dispatch/formal_v4_4_artifacts.py scripts/audit_rsc_pf_formal_v4_4_pilot.py tests/test_joint_dispatch_formal_v4_4_pilot.py tests/test_joint_dispatch_formal_v4_4_adversarial.py
@@ -364,7 +382,7 @@ git commit -m "feat: connect auditable formal v4.4 pilot executor"
 
 **Files:**
 - Modify only generated run artifacts under `reports/joint_forecast_dispatch_formal_v4_4/formal_v4_4_20260905_b/`.
-- Create: `reports/joint_forecast_dispatch_formal_v4_4/formal_v4_4_20260905_b/protocol/SOURCE_MANIFEST.json`
+- Create: `reports/joint_forecast_dispatch_formal_v4_4/source_manifests/formal_v4_4_20260905_b/SOURCE_MANIFEST.json`
 
 - [ ] **Step 1: Run all v4.4, protected v4.2, decoder, and LP tests**
 
@@ -384,7 +402,7 @@ manifest.
 - [ ] **Step 3: Run Gate 0 with a new run ID**
 
 ```powershell
-& 'D:\Paper\envs\rsc_pf_diffopt_v4\python.exe' scripts\run_rsc_pf_formal_v4_4_gate0.py --contract configs\joint_forecast_dispatch_formal_v4_4.json --source-manifest reports\joint_forecast_dispatch_formal_v4_4\formal_v4_4_20260905_b\protocol\SOURCE_MANIFEST.json --base-train-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_train.npz --base-selection-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_selection.npz --benchmark reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\benchmark\STANDARD_IES_BENCHMARK.yaml --capacity-receipt reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\CAPACITY_FREEZE.json --output-root reports\joint_forecast_dispatch_formal_v4_4 --run-id formal_v4_4_20260905_b
+& 'D:\Paper\envs\rsc_pf_diffopt_v4\python.exe' scripts\run_rsc_pf_formal_v4_4_gate0.py --contract configs\joint_forecast_dispatch_formal_v4_4.json --source-manifest reports\joint_forecast_dispatch_formal_v4_4\source_manifests\formal_v4_4_20260905_b\SOURCE_MANIFEST.json --base-train-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_train.npz --base-selection-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_selection.npz --benchmark reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\benchmark\STANDARD_IES_BENCHMARK.yaml --capacity-receipt reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\CAPACITY_FREEZE.json --output-root reports\joint_forecast_dispatch_formal_v4_4 --run-id formal_v4_4_20260905_b
 ```
 
 Expected: `authorized_pilot=true`, `evaluation_year_accessed=false`, all
@@ -409,7 +427,7 @@ Generated reports remain run artifacts and are not mixed into source commits.
 - [ ] **Step 1: Launch the production Pilot**
 
 ```powershell
-& 'D:\Paper\envs\rsc_pf_diffopt_v4\python.exe' scripts\run_rsc_pf_formal_v4_4_pilot.py --contract configs\joint_forecast_dispatch_formal_v4_4.json --gate0-transition reports\joint_forecast_dispatch_formal_v4_4\formal_v4_4_20260905_b\GATE0_TRANSITION.json --source-manifest reports\joint_forecast_dispatch_formal_v4_4\formal_v4_4_20260905_b\protocol\SOURCE_MANIFEST.json --base-train-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_train.npz --base-selection-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_selection.npz --benchmark reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\benchmark\STANDARD_IES_BENCHMARK.yaml --capacity-receipt reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\CAPACITY_FREEZE.json --output-root reports\joint_forecast_dispatch_formal_v4_4 --run-id formal_v4_4_20260905_b
+& 'D:\Paper\envs\rsc_pf_diffopt_v4\python.exe' scripts\run_rsc_pf_formal_v4_4_pilot.py --contract configs\joint_forecast_dispatch_formal_v4_4.json --gate0-transition reports\joint_forecast_dispatch_formal_v4_4\formal_v4_4_20260905_b\GATE0_TRANSITION.json --source-manifest reports\joint_forecast_dispatch_formal_v4_4\source_manifests\formal_v4_4_20260905_b\SOURCE_MANIFEST.json --base-train-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_train.npz --base-selection-data reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\data\base_selection.npz --benchmark reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\benchmark\STANDARD_IES_BENCHMARK.yaml --capacity-receipt reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j\gate0\CAPACITY_FREEZE.json --output-root reports\joint_forecast_dispatch_formal_v4_4 --run-id formal_v4_4_20260905_b
 ```
 
 Expected: a non-placeholder `PILOT_RECEIPT.json`, stored 2019 arrays, stage
