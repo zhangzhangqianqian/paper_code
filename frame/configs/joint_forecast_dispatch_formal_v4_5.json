@@ -1,0 +1,106 @@
+{
+  "schema_version": "joint-forecast-dispatch-formal-v4.5",
+  "protocol_status": "frozen",
+  "source_manifest_required": true,
+  "lookback": 24,
+  "horizon": 4,
+  "latent_control_dim": 15,
+  "allow_future_binary_decisions": false,
+  "gas_semantics": "station_side_auxiliary_prior",
+  "task_order": ["electricity", "cooling", "heating", "gas"],
+  "exog_order": ["temperature", "humidity", "solar_irradiance", "wind_speed", "wind_direction", "hour_sin", "hour_cos", "dow_sin", "dow_cos", "month_sin", "month_cos", "is_weekend"],
+  "dispatch_order": ["grid", "pv_use", "pv_curt", "wt_use", "wt_curt", "g_chp", "g_gb", "p_chp", "q_chp", "q_gb", "p_ec", "q_ec", "q_ac_in", "q_ac", "p_charge", "p_discharge", "soc", "slack_e", "slack_c", "slack_h", "q_dump"],
+  "status_order": ["chp_on", "gas_boiler_on", "electric_chiller_on", "absorption_chiller_on", "bess_charge_on", "bess_discharge_on"],
+  "rigid_demand_order": ["electricity", "cooling", "heating"],
+  "train_years": [2015, 2016, 2017, 2018],
+  "selection_year": 2019,
+  "evaluation_year": 2020,
+  "excluded_years": [2021],
+  "allow_evaluation_access_before_gate2": false,
+  "claims": {"price_carbon_response": false},
+  "methods": [
+    {"name": "RSC-PF", "kind": "joint", "stochastic": true, "deployable": true, "online_exact_lp": false},
+    {"name": "Fair Decoupled", "kind": "decoupled", "stochastic": true, "deployable": true, "online_exact_lp": false},
+    {"name": "Direct-Policy", "kind": "direct_policy", "stochastic": true, "deployable": true, "online_exact_lp": false},
+    {"name": "Scheme2R-PTO", "kind": "pto", "stochastic": true, "deployable": true, "online_exact_lp": true},
+    {"name": "State-Conditioned-PTO", "kind": "pto", "stochastic": true, "deployable": true, "online_exact_lp": true},
+    {"name": "Official iTransformer-PTO", "kind": "external_pto_adaptation", "stochastic": true, "deployable": true, "online_exact_lp": true},
+    {"name": "Differentiable-LP", "kind": "differentiable_lp_adaptation", "stochastic": true, "deployable": true, "online_exact_lp": false},
+    {"name": "Perfect-Information-MPC", "kind": "oracle_reference", "stochastic": false, "deployable": false, "online_exact_lp": true},
+    {"name": "Seasonal-Naive-PTO", "kind": "deterministic_pto", "stochastic": false, "deployable": true, "online_exact_lp": true}
+  ],
+  "thermal_regime": {
+    "classes": ["off", "cooling", "heating"],
+    "epsilon": 1e-9,
+    "laplace_alpha": 1.0,
+    "hard_calendar_mask": false,
+    "hard_scheduling_gate": false,
+    "zero_initialize_residuals": true
+  },
+  "forecast_loss": {
+    "electricity_weight": 1.0,
+    "gas_weight": 0.25,
+    "regime_weight": 1.0,
+    "active_magnitude_weight": 1.0,
+    "point_weight_start": 0.25,
+    "point_weight_final": 1.0,
+    "inactive_leakage_weight_start": 0.10,
+    "transition_window_weight": 1.5,
+    "class_weight_clip": [0.5, 2.0]
+  },
+  "joint_curriculum": {
+    "forecast": 1.0,
+    "anchor": 0.5,
+    "decision_start": 0.05,
+    "decision_final": 0.50,
+    "imitation_start": 1.0,
+    "imitation_final": 0.25,
+    "ramp_epochs": 5
+  },
+  "forecast_guardrails": {
+    "max_macro_f1_drop": 0.02,
+    "max_inactive_leakage_relative_increase": 0.05
+  },
+  "pilot_budget": {
+    "seed": 2026,
+    "batch_size": 32,
+    "train_windows": 4096,
+    "minimum_epochs": 5,
+    "early_stopping_patience": 3,
+    "p0_max_epochs": 20,
+    "p1_max_epochs": 15,
+    "s_max_epochs": 15,
+    "j_max_epochs": 10,
+    "p0_forecaster_lr": 0.001,
+    "p1_base_lr": 0.0002,
+    "p1_head_lr": 0.001,
+    "s_scheduler_lr": 0.001,
+    "j_forecaster_lr": 0.0002,
+    "j_head_lr": 0.0005,
+    "j_scheduler_lr": 0.0005,
+    "weight_decay": 0.00001,
+    "max_grad_norm": 1.0
+  },
+  "pilot_candidate": {"temperature": 1.0, "inactive_leakage_weight": 0.25},
+  "candidate_grid": [
+    {"temperature": 1.0, "inactive_leakage_weight": 0.25},
+    {"temperature": 0.75, "inactive_leakage_weight": 0.25},
+    {"temperature": 1.0, "inactive_leakage_weight": 0.50},
+    {"temperature": 0.75, "inactive_leakage_weight": 0.50}
+  ],
+  "pilot_thresholds": {
+    "minimum_leakage_reduction": 0.30,
+    "maximum_active_wape_relative_degradation": 0.05,
+    "maximum_electricity_gas_wape_relative_degradation": 0.02,
+    "maximum_four_task_score_relative_degradation": 0.02,
+    "minimum_transition_balanced_accuracy_gain": 0.01,
+    "maximum_decoupled_decision_gradient": 1e-12,
+    "maximum_physical_residual": 1e-6
+  },
+  "paths": {
+    "output_root": "reports/joint_forecast_dispatch_formal_v4_5",
+    "benchmark_path": "D:/Paper/standard_ies_benchmark_v1.yaml",
+    "parameter_ledger_path": "configs/scheduling_parameter_ledger_v2.csv",
+    "diffopt_python": "D:/Paper/envs/rsc_pf_diffopt_v4/python.exe"
+  }
+}
