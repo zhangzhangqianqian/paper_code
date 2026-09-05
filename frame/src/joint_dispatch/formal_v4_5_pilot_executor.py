@@ -44,13 +44,17 @@ class TrainingBundleV45:
     normalization: Any
 
 
-def _budget(contract: FormalV45Contract, stage: str) -> StageBudgetV45:
+def _budget(contract: FormalV45Contract, stage: str, *, epoch_cap: int | None = None) -> StageBudgetV45:
     payload = contract.payload["pilot_budget"]
     if stage not in {"p0", "p1", "s", "j"}:
         raise ValueError(f"unsupported formal-v4.5 stage: {stage}")
+    configured_epochs = int(payload[f"{stage}_max_epochs"])
+    max_epochs = configured_epochs if epoch_cap is None else min(configured_epochs, int(epoch_cap))
+    if max_epochs < 1:
+        raise ValueError("epoch_cap must be positive")
     return StageBudgetV45(
-        max_epochs=int(payload[f"{stage}_max_epochs"]),
-        minimum_epochs=min(int(payload["minimum_epochs"]), int(payload[f"{stage}_max_epochs"])),
+        max_epochs=max_epochs,
+        minimum_epochs=min(int(payload["minimum_epochs"]), max_epochs),
         p0_lr=float(payload["p0_forecaster_lr"]),
         p1_base_lr=float(payload["p1_base_lr"]),
         p1_head_lr=float(payload["p1_head_lr"]),
@@ -105,6 +109,7 @@ def execute_training_stages_v45(
     parameters: Mapping[str, Any],
     prior: ThermalPriorReceiptV44 | None = None,
     teacher: TeacherBundleV45 | None = None,
+    epoch_cap: int | None = None,
 ) -> TrainingBundleV45:
     """Run P0/P1/continuous/S/J using explicit train and early-stop loaders."""
 
@@ -116,10 +121,10 @@ def execute_training_stages_v45(
     normalization = fit_train_normalization(materialized.normalization_source.split)
     batch_size = int(contract.payload["pilot_budget"]["batch_size"])
     loaders = build_v45_loaders(materialized, normalization, batch_size=batch_size)
-    p0 = run_stage_p0_v45(model, loaders, _budget(contract, "p0"), seed=seed)
-    p1 = run_stage_p1_v45(p0, loaders, _budget(contract, "p1"), prior=prior, seed=seed)
+    p0 = run_stage_p0_v45(model, loaders, _budget(contract, "p0", epoch_cap=epoch_cap), seed=seed)
+    p1 = run_stage_p1_v45(p0, loaders, _budget(contract, "p1", epoch_cap=epoch_cap), prior=prior, seed=seed)
     continuous_model = build_continuous_control_v44(p0.model)
-    continuous = run_continuous_control_v45(p0, continuous_model, loaders, _budget(contract, "p1"), seed=seed)
+    continuous = run_continuous_control_v45(p0, continuous_model, loaders, _budget(contract, "p1", epoch_cap=epoch_cap), seed=seed)
     if teacher is None:
         teacher = build_v45_teachers(
             model=p1.model, materialized=materialized, benchmark=benchmark,
@@ -129,7 +134,7 @@ def execute_training_stages_v45(
     teacher_loaders = build_v45_loaders(
         materialized, normalization, batch_size=batch_size, teacher=teacher.dispatch,
     )
-    s = run_stage_s_v45(p1, teacher_loaders, _budget(contract, "s"), seed=seed)
+    s = run_stage_s_v45(p1, teacher_loaders, _budget(contract, "s", epoch_cap=epoch_cap), seed=seed)
 
     def validation_guard(details: Mapping[str, float]) -> bool:
         # The parent-normalized validation loss is a train-only forecast
@@ -142,7 +147,7 @@ def execute_training_stages_v45(
         )
 
     pair = run_stage_j_pair_v45(
-        s, teacher_loaders, _budget(contract, "j"), prior=prior,
+        s, teacher_loaders, _budget(contract, "j", epoch_cap=epoch_cap), prior=prior,
         c_ref=float(parameters.get("unserved_penalty", 1.0)), parameters=parameters,
         contract=contract, seed=seed, validation_guard=validation_guard,
     )

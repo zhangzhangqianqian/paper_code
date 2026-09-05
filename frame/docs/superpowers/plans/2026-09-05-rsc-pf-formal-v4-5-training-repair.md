@@ -108,7 +108,7 @@ git commit -m "add formal v4.5 frozen training contract"
 - `StageValidationV45(metric: float, eligible: bool, details: Mapping[str, float])`
 - `StageReceiptV45.best_epoch: int`
 - `StageReceiptV45.validation_history: tuple[Mapping[str, float], ...]`
-- `run_stage_with_validation_v45(model: nn.Module, train_batches: Sequence[Mapping[str, Any]], validation_batches: Sequence[Mapping[str, Any]], optimizer_factory: Callable[[Iterable[nn.Parameter]], torch.optim.Optimizer], train_loss: Callable[[nn.Module, Mapping[str, Any], int], Tensor], validation_metric: Callable[[nn.Module, Mapping[str, Any]], float], eligibility: Callable[[Mapping[str, float]], bool], max_epochs: int, minimum_epochs: int, patience: int) -> StageReceiptV45`
+- `run_stage_with_validation_v45(model: nn.Module, train_batches: Sequence[Mapping[str, Any]], validation_batches: Sequence[Mapping[str, Any]], optimizer_factory: Callable[[Iterable[nn.Parameter]], torch.optim.Optimizer], train_loss: Callable[[nn.Module, Mapping[str, Any], int], Tensor], validation_metric: Callable[[nn.Module, Mapping[str, Any], int], float], eligibility: Callable[[Mapping[str, float]], bool], max_epochs: int, minimum_epochs: int, patience: int) -> StageReceiptV45`
 
 - [ ] **Step 1: Write failing early-stop tests**
 
@@ -271,7 +271,7 @@ git commit -m "add v4.5 joint curriculum and forecast anchor"
 
 **Interfaces:**
 - `build_v45_loaders(materialized, teacher, batch_size) -> dict[str, list[Mapping[str, Any]]]`
-- `execute_training_stages_v45(*, materialized: MaterializedV44PilotData, contract: FormalV45Contract, artifact_root: str | Path, seed: int, parameters: Mapping[str, Any], prior: ThermalPriorReceiptV44 | None, teacher: TeacherReceiptV44 | None) -> TrainingBundleV45`
+- `execute_training_stages_v45(*, materialized: MaterializedV44PilotData, contract: FormalV45Contract, artifact_root: str | Path, benchmark: str | Path, capacity_receipt: str | Path, seed: int, parameters: Mapping[str, Any], prior: ThermalPriorReceiptV44 | None, teacher: TeacherBundleV45 | None) -> TrainingBundleV45`
 
 - [ ] **Step 1: Write failing wiring tests**
 
