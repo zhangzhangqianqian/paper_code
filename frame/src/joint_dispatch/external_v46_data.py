@@ -52,6 +52,8 @@ class ExternalV46Split:
     teacher_dispatch: np.ndarray | None = None
     oracle_first_step_objective: np.ndarray | None = None
     source_path: str = ""
+    trajectory_ids: np.ndarray | None = None
+    source_state_hashes: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         fields = {
@@ -79,6 +81,15 @@ class ExternalV46Split:
         if times.shape != (n,):
             raise ValueError("target_times must have shape [N]")
         object.__setattr__(self, "target_times", times)
+        for name in ("trajectory_ids", "source_state_hashes"):
+            value = getattr(self, name)
+            if value is not None:
+                array = np.asarray(value, dtype=str)
+                if array.shape != (n,) or not array.astype(str).tolist():
+                    raise ValueError(f"{name} must have shape [N]")
+                if any(not item for item in array.tolist()):
+                    raise ValueError(f"{name} must contain non-empty strings")
+                object.__setattr__(self, name, array)
         if self.split not in {"train", "validation", "pilot"}:
             raise ValueError("split must be train, validation, or pilot")
         if not np.isin(converted["device_status"], (0.0, 1.0)).all():
@@ -113,6 +124,10 @@ class ExternalV46Split:
             fields["teacher_dispatch"] = self.teacher_dispatch[index]
         if self.oracle_first_step_objective is not None:
             fields["oracle_first_step_objective"] = self.oracle_first_step_objective[index]
+        if self.trajectory_ids is not None:
+            fields["trajectory_ids"] = self.trajectory_ids[index]
+        if self.source_state_hashes is not None:
+            fields["source_state_hashes"] = self.source_state_hashes[index]
         return replace(self, **fields)
 
 
@@ -188,6 +203,8 @@ def load_external_v46_split(path: str | Path, split_name: Literal["train", "vali
             scheduler_context=context, previous_chp=payload["previous_chp"],
             forecast_target=payload["forecast_target"], renewable_realized=payload["renewable_realized"],
             target_times=payload["target_times"], split=split_name, source_path=str(source.resolve()),
+            trajectory_ids=payload["trajectory_ids"] if "trajectory_ids" in payload.files else None,
+            source_state_hashes=payload["state_hashes"] if "state_hashes" in payload.files else None,
         )
 
 

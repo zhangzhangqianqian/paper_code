@@ -155,8 +155,10 @@ def recourse_distance(
 ) -> tuple[float, float, np.ndarray]:
     planned_array = _finite_array(planned, name="planned dispatch")
     settled_array = _finite_array(settled, name="settled dispatch")
-    if planned_array.shape != settled_array.shape or planned_array.shape[-1] != len(VARIABLES):
-        raise ValueError("planned and settled dispatch must have matching final dimension 21")
+    if planned_array.shape[-1] != len(VARIABLES) or settled_array.shape[-1] != len(VARIABLES):
+        raise ValueError("planned and settled dispatch must have final dimension 21")
+    if planned_array.ndim > 2 or settled_array.ndim > 2:
+        raise ValueError("dispatch must be [21] or [H,21]")
     planned_row = planned_array[0] if planned_array.ndim == 2 else planned_array
     settled_row = settled_array[0] if settled_array.ndim == 2 else settled_array
     if planned_row.ndim != 1:
