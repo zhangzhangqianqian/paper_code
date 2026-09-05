@@ -65,16 +65,17 @@ def _year_values(times: np.ndarray) -> set[int]:
 
 def _windows(data: Mapping[str, np.ndarray], max_windows: int | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     loads = np.asarray(data["load_and_exog"], dtype=np.float64); times = np.asarray(data["timestamps"], dtype="datetime64[ns]")
-    n = len(loads) - 28
+    # One origin consumes a causal 24-hour history and a four-hour future;
+    # the materializer uses the same origin convention below.
+    n = len(loads) - 27
     if n <= 0: raise ValueError("data does not contain complete four-hour windows")
-    origins = np.arange(n, dtype=np.int64)
+    origins = np.arange(24, len(loads) - 3, dtype=np.int64)
     if max_windows is not None: origins = origins[: int(max_windows)]
-    history = loads[origins, :4]
     # The source artifact stores one row per hour; construct the same causal
-    # 24-hour history and four-hour target used by the Pilot protocol.
-    histories = np.stack([loads[index:index + 24, :4] for index in origins], axis=0)
-    targets = np.stack([loads[index + 24:index + 28, :4] for index in origins], axis=0)
-    return times[origins + 23], histories, targets, origins
+    # 24-hour history and four-hour target used by the Pilot materializer.
+    histories = np.stack([loads[index - 24:index, :4] for index in origins], axis=0)
+    targets = np.stack([loads[index:index + 4, :4] for index in origins], axis=0)
+    return times[origins], histories, targets, origins
 
 
 def _batch_from_window(history: np.ndarray, target: np.ndarray) -> dict[str, torch.Tensor]:
