@@ -64,13 +64,11 @@ def _git_top_level(root: Path) -> Path:
 
 
 def _git_relative(root: Path, relative: str) -> str:
-    """Translate a path relative to ``root`` into Git's worktree-relative path."""
-    top = _git_top_level(root)
-    try:
-        prefix = root.resolve().relative_to(top)
-    except ValueError as exc:
-        raise ValueError("repository root is outside Git worktree") from exc
-    return (prefix / Path(relative)).as_posix() if str(prefix) != "." else relative
+    """Return a pathspec accepted by ``git -C root`` for a root-relative file."""
+    # Git resolves pathspecs relative to the directory supplied with ``-C``;
+    # do not prepend the worktree's ``frame/`` prefix even when the repository
+    # itself is rooted one level above this source tree.
+    return Path(relative).as_posix()
 
 
 def _relative(path: str | Path, root: Path) -> tuple[str, Path]:
