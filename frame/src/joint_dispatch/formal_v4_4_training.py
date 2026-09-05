@@ -213,8 +213,14 @@ def run_stage_p0_v44(model: nn.Module, loaders: Any, budget: StageBudgetV44 | No
     """Train the base forecast/state pathway on the frozen P0 curriculum."""
     budget = budget or StageBudgetV44(); seed_everything(seed); batches = _batches(loaders)
     if not batches: raise ValueError("P0 requires non-empty training batches")
-    groups = _groups(model); forecast_params = _all_forecast(groups)
+    groups = _groups(model)
+    # P0 is the common Scheme2R parent.  Residual regime/magnitude heads are
+    # intentionally held at their zero initialization until P1, where they
+    # receive the regime-aware curriculum.
+    forecast_params = tuple(groups.get("base", ())) or _all_forecast(groups)
     for p in forecast_params: p.requires_grad_(True)
+    for p in tuple((*groups.get("gate", ()), *groups.get("magnitude", ()))):
+        p.requires_grad_(False)
     for p in groups.get("scheduler", ()): p.requires_grad_(False)
     parent = sha256_state_dict(model); optimizer = torch.optim.AdamW(forecast_params, lr=budget.p0_lr, weight_decay=budget.weight_decay)
     return _run_epochs(model, batches, forecast_params, optimizer, lambda b, e: _forecast_loss(model(**_inputs(b)), b, None, budget, e), budget, stage="P0", mode="forecast_base", parent=parent, forecast_steps=True)

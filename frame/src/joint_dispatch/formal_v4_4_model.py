@@ -164,4 +164,53 @@ class ResidualGatedRSCPFModel(_FormalV4Base):
         )
 
 
-__all__ = ["FormalV44ForwardOutput", "ResidualGatedRSCPFModel", "ResidualThermalHead"]
+class ContinuousControlRSCPFModel(_FormalV4Base):
+    """Matched continuous thermal-control head without regime residuals.
+
+    The model keeps the identical P0 forecast/state and scheduler parameter
+    layout, but maps the two thermal tasks directly through the positive
+    forecast transform.  It therefore has no trainable regime gate or thermal
+    magnitude residual pathway.
+    """
+
+    def v44_parameter_groups(self) -> dict[str, tuple[nn.Parameter, ...]]:
+        return {
+            "base": tuple(self.forecaster_parameters()),
+            "gate": (),
+            "magnitude": (),
+            "scheduler": tuple(self.scheduler_parameters()),
+        }
+
+    def forward(self, *, last_thermal_regime: Tensor, detach_forecast_for_dispatch: bool = False, **inputs: Tensor) -> FormalV44ForwardOutput:
+        self._validate_common(inputs)
+        state = self.state_encoder(inputs["device_history"], inputs["activity_history"])
+        padded = _pad_device_history(inputs["device_history"])
+        base_normalized, _ = self.core.forecaster.forward_with_details(
+            inputs["load_history"], inputs["exog_history"], padded, inputs["activity_history"],
+        )
+        base_normalized = base_normalized + self.forecast_state_fusion(state).unsqueeze(1)
+        physical = self.core.forecast_to_physical(base_normalized)
+        task_mean = self.core.task_mean.to(dtype=base_normalized.dtype)
+        task_scale = self.core.task_scale.to(dtype=base_normalized.dtype)
+        normalized = (physical - task_mean) / task_scale
+        forecast_for_dispatch = physical.detach() if detach_forecast_for_dispatch else physical
+        physical_features = self.core._raw_physical_features(forecast_for_dispatch, inputs["scheduler_context"])
+        scheduler_state = state.detach() if detach_forecast_for_dispatch else state
+        controls, dispatch = self._schedule(physical_features, scheduler_state, inputs["previous_chp"])
+        zeros_logits = base_normalized.new_zeros((base_normalized.shape[0], 4, 3))
+        zeros_residual = base_normalized.new_zeros((base_normalized.shape[0], 4, 2))
+        return FormalV44ForwardOutput(
+            base_forecast_normalized=base_normalized,
+            base_forecast_physical=physical,
+            forecast_normalized=normalized,
+            forecast_physical=physical,
+            regime_logits=zeros_logits,
+            regime_probabilities=zeros_logits,
+            thermal_magnitudes=physical[..., 1:3],
+            thermal_residuals=zeros_residual,
+            controls=controls,
+            dispatch=dispatch,
+        )
+
+
+__all__ = ["ContinuousControlRSCPFModel", "FormalV44ForwardOutput", "ResidualGatedRSCPFModel", "ResidualThermalHead"]
