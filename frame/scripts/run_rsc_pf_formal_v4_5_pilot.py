@@ -95,9 +95,16 @@ def run_formal_v45_pilot(
         )
     root = Path(output_root).resolve() / str(run_id)
     if root.exists():
-        raise FileExistsError(root)
+        protected = (root / "pilot" / "PILOT_RECEIPT.json", root / "pilot" / "PILOT_AUDIT.json", root / "PILOT_TRANSITION.json")
+        if any(path.exists() for path in protected):
+            raise FileExistsError(root)
+        # A failed run may have left only deterministic teacher caches. They
+        # are safe to reuse; any other partial artifact requires a new run ID.
+        partial = [path for path in root.rglob("*") if path.is_file() and "teacher" not in path.parts]
+        if partial:
+            raise FileExistsError(root)
     pilot_root = root / "pilot"
-    pilot_root.mkdir(parents=True)
+    pilot_root.mkdir(parents=True, exist_ok=True)
     result = execute_real_pilot_v45(
         materialized=materialized, contract=contract, artifact_root=pilot_root,
         benchmark=benchmark, capacity_receipt=capacity_receipt,
