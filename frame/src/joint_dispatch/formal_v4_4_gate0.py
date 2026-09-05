@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import torch
+import yaml
 
 from .formal_v4_4_artifacts import sha256_file, write_json_once
 from .formal_v4_4_contract import FormalV44Contract, load_formal_v4_4_contract
@@ -21,6 +22,8 @@ from .formal_v4_4_pilot_executor import execute_real_pilot_v44
 from .formal_v4_4_provenance import validate_source_manifest_payload
 from .formal_v4_4_regime import derive_last_observed_regime, derive_thermal_regimes, fit_thermal_prior
 from .formal_v4_4_training import named_autograd_norms
+from .formal_v4_data import FormalV4BaseSeries
+from .formal_v4_history import generate_settled_device_trajectory
 from .model import JointForecastDispatchModel
 
 
@@ -64,19 +67,40 @@ def _year_values(times: np.ndarray) -> set[int]:
     return set(int(v) for v in np.asarray(times).astype("datetime64[Y]").astype(int) + 1970)
 
 
-def _windows(data: Mapping[str, np.ndarray], max_windows: int | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _windows(data: Mapping[str, np.ndarray], max_windows: int | None = None, valid_origins: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     loads = np.asarray(data["load_and_exog"], dtype=np.float64); times = np.asarray(data["timestamps"], dtype="datetime64[ns]")
     # One origin consumes a causal 24-hour history and a four-hour future;
     # the materializer uses the same origin convention below.
     n = len(loads) - 27
     if n <= 0: raise ValueError("data does not contain complete four-hour windows")
-    origins = np.arange(24, len(loads) - 3, dtype=np.int64)
+    origins = np.arange(24, len(loads) - 3, dtype=np.int64) if valid_origins is None else np.asarray(valid_origins, dtype=np.int64)
+    if origins.ndim != 1 or len(origins) == 0 or np.any(origins < 24) or np.any(origins + 3 >= len(loads)):
+        raise ValueError("valid origins are outside the causal four-hour boundary")
     if max_windows is not None: origins = origins[: int(max_windows)]
     # The source artifact stores one row per hour; construct the same causal
     # 24-hour history and four-hour target used by the Pilot materializer.
     histories = np.stack([loads[index - 24:index, :4] for index in origins], axis=0)
     targets = np.stack([loads[index:index + 4, :4] for index in origins], axis=0)
     return times[origins], histories, targets, origins
+
+
+def _materialized_origins(base: Mapping[str, np.ndarray], settled_mask: np.ndarray) -> np.ndarray:
+    """Mirror materialize_state_windows' causal mask and gap firewall."""
+
+    timestamps = np.asarray(base["timestamps"], dtype="datetime64[ns]")
+    mask = np.asarray(settled_mask, dtype=bool)
+    candidates = np.arange(24, len(timestamps) - 3, dtype=np.int64)
+    valid = []
+    for origin in candidates:
+        if not bool(mask[origin]) or not bool(mask[origin - 24:origin].all()):
+            continue
+        if not np.all(np.diff(timestamps[origin - 24:origin + 4]) == np.timedelta64(1, "h")):
+            continue
+        valid.append(int(origin))
+    result = np.asarray(valid, dtype=np.int64)
+    if len(result) == 0:
+        raise ValueError("causal materialization produced no valid origins")
+    return result
 
 
 def _batch_from_window(history: np.ndarray, target: np.ndarray) -> dict[str, torch.Tensor]:
@@ -126,8 +150,23 @@ def run_gate0_v44(
         payload = json.loads(Path(capacity_receipt).read_text(encoding="utf-8")); selected = payload.get("selected", {})
         capacity_pass = payload.get("status", "pass") == "pass" and np.isfinite(float(selected.get("multiplier", np.nan))) and float(selected.get("multiplier", 0.0)) > 0.0 and payload.get("selection_influenced_capacity") is not True
     checks["capacity_freeze"] = GateCheckV44(True, capacity_pass, capacity_ok)
-    train_times, histories, targets, train_origins = _windows(train, max_windows=None)
-    selection_times, selection_histories, selection_targets, selection_origins = _windows(selection, max_windows=None)
+    # Gate 0 and the Pilot must use the same causal-state window universe.  A
+    # raw 24-to-4 slice includes warm-up rows that have no settled device
+    # trajectory; derive the settled mask once here and mirror the materializer
+    # firewall before sampling Pilot indices.
+    benchmark_payload = yaml.safe_load(Path(benchmark).read_text(encoding="utf-8")) if benchmark_ok else {}
+    parameters = benchmark_payload.get("values", {}) if isinstance(benchmark_payload, Mapping) else {}
+    if benchmark_ok and capacity_ok and isinstance(parameters, Mapping):
+        train_base = FormalV4BaseSeries(train["load_and_exog"], train["renewable_forecast"], train["renewable_realized"], train["prices_and_weights"], train["timestamps"], "train")
+        selection_base = FormalV4BaseSeries(selection["load_and_exog"], selection["renewable_forecast"], selection["renewable_realized"], selection["prices_and_weights"], selection["timestamps"], "selection")
+        train_trajectory = generate_settled_device_trajectory(train_base, parameters, capacity_receipt=capacity_receipt, trajectory_id="formal-v4.4-gate0-train")
+        selection_trajectory = generate_settled_device_trajectory(selection_base, parameters, capacity_receipt=capacity_receipt, trajectory_id="formal-v4.4-gate0-selection")
+        train_origins_valid = _materialized_origins(train, train_trajectory.settled_mask)
+        selection_origins_valid = _materialized_origins(selection, selection_trajectory.settled_mask)
+    else:
+        train_origins_valid = None; selection_origins_valid = None
+    train_times, histories, targets, train_origins = _windows(train, max_windows=None, valid_origins=train_origins_valid)
+    selection_times, selection_histories, selection_targets, selection_origins = _windows(selection, max_windows=None, valid_origins=selection_origins_valid)
     train_last = derive_last_observed_regime(histories); train_future = derive_thermal_regimes(targets)
     selection_last = derive_last_observed_regime(selection_histories); selection_future = derive_thermal_regimes(selection_targets)
     prior = fit_thermal_prior(targets, histories, train_times)
