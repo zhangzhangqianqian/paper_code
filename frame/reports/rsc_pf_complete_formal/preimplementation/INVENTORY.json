@@ -1,0 +1,166 @@
+{
+  "schema": "rsc-pf-complete-formal-inventory-v1",
+  "read_only": true,
+  "frame_root": "D:\\Paper\\github_work\\paper-code-formal-v42-gate0\\frame",
+  "primary_methods": [
+    "RSC-PF",
+    "Decoupled-RSC-PF",
+    "Direct-Policy",
+    "Scheme2R-PTO",
+    "State-Conditioned-PTO",
+    "Official iTransformer-PTO",
+    "Differentiable-LP",
+    "Seasonal-Naive-PTO",
+    "Perfect-Information-MPC"
+  ],
+  "methods": {
+    "RSC-PF": {
+      "training_function_present": true,
+      "checkpoint_available": true,
+      "checkpoint_evidence": [
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_g\\pilot\\STAGE_J_JOINT.pt",
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_h\\pilot\\STAGE_J_JOINT.pt",
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_i\\pilot\\STAGE_J_JOINT.pt",
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_j\\pilot\\STAGE_J_JOINT.pt",
+        "joint_forecast_dispatch_formal_v4_4\\formal_v4_4_20260905_f\\pilot\\stages\\J_joint.pt",
+        "joint_forecast_dispatch_formal_v4_6\\formal_v4_6_20260905_b\\pilot\\stages\\J_joint.pt"
+      ],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "checkpoint_available"
+    },
+    "Decoupled-RSC-PF": {
+      "training_function_present": true,
+      "checkpoint_available": true,
+      "checkpoint_evidence": [
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_g\\pilot\\STAGE_J_DECOUPLED.pt",
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_h\\pilot\\STAGE_J_DECOUPLED.pt",
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_i\\pilot\\STAGE_J_DECOUPLED.pt",
+        "joint_forecast_dispatch_formal_v4_2\\formal_v4_2_20260905_j\\pilot\\STAGE_J_DECOUPLED.pt",
+        "joint_forecast_dispatch_formal_v4_4\\formal_v4_4_20260905_f\\pilot\\stages\\J_decoupled.pt",
+        "joint_forecast_dispatch_formal_v4_6\\formal_v4_6_20260905_b\\pilot\\stages\\J_decoupled.pt"
+      ],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "checkpoint_available"
+    },
+    "Direct-Policy": {
+      "training_function_present": true,
+      "checkpoint_available": false,
+      "checkpoint_evidence": [],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "missing_formal_result"
+    },
+    "Scheme2R-PTO": {
+      "training_function_present": true,
+      "checkpoint_available": false,
+      "checkpoint_evidence": [],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "missing_formal_result"
+    },
+    "State-Conditioned-PTO": {
+      "training_function_present": true,
+      "checkpoint_available": false,
+      "checkpoint_evidence": [],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "missing_formal_result"
+    },
+    "Official iTransformer-PTO": {
+      "training_function_present": true,
+      "checkpoint_available": true,
+      "checkpoint_evidence": [
+        "rsc_pf_external_baselines_v46\\implementation\\calibration\\iTransformer_PTO\\seed_2026\\best_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation\\calibration\\iTransformer_PTO\\seed_2026\\last_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\calibration\\iTransformer_PTO\\seed_2026\\best_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\calibration\\iTransformer_PTO\\seed_2026\\last_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2026\\best_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2026\\last_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2027\\best_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2027\\last_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2028\\best_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2028\\last_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2029\\best_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2029\\last_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2030\\best_checkpoint.pt",
+        "rsc_pf_external_baselines_v46\\implementation_final\\validation\\iTransformer_PTO\\seed_2030\\last_checkpoint.pt"
+      ],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "checkpoint_available"
+    },
+    "Differentiable-LP": {
+      "training_function_present": true,
+      "checkpoint_available": false,
+      "checkpoint_evidence": [],
+      "formal_result_present": false,
+      "native_gradient_gate_present": true,
+      "status": "missing_formal_result"
+    },
+    "Seasonal-Naive-PTO": {
+      "training_function_present": false,
+      "checkpoint_available": false,
+      "checkpoint_evidence": [],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "implementation_missing"
+    },
+    "Perfect-Information-MPC": {
+      "training_function_present": false,
+      "checkpoint_available": false,
+      "checkpoint_evidence": [],
+      "formal_result_present": false,
+      "native_gradient_gate_present": false,
+      "status": "implementation_missing"
+    }
+  },
+  "itransformer_source": {
+    "path": "D:\\Paper\\github_work\\paper-code-formal-v42-gate0\\frame\\third_party\\iTransformer_source",
+    "exists": true,
+    "file_count": 114
+  },
+  "difflp_evidence_files": [
+    {
+      "path": "src/joint_dispatch/formal_v4_diffopt.py",
+      "status": "present",
+      "sha256": "efaf83d66fc8f5ab1432e20dc9dcd0bcda853cafb0211bda30f883979053adde"
+    },
+    {
+      "path": "src/joint_dispatch/formal_v4_2_gate2_training.py",
+      "status": "present",
+      "sha256": "ebc78692820cafaedf861ae6755b7066c8c16660e77a8d7c8a1ca562c9e354c1"
+    },
+    {
+      "path": "scripts/run_rsc_pf_formal_v4_diffopt_gate.py",
+      "status": "present",
+      "sha256": "9230df9142cafc06e67401c3621bb537298d1976629a4613dcc47bca940aab15"
+    },
+    {
+      "path": "requirements/formal_v4_diffopt.lock",
+      "status": "present",
+      "sha256": "515beb82e0bab564efe4ce547919f03ec8b41ffa0b10581daee96a93e94f2ef8"
+    }
+  ],
+  "matched_v2": {
+    "path": "D:\\Paper\\github_work\\paper-code-formal-v42-gate0\\frame\\reports\\rsc_pf_matched_closed_loop_2019\\v2",
+    "manifest_present": true,
+    "audit_present": true,
+    "row_count": 16,
+    "rsc_pf_seeds": [
+      2026
+    ],
+    "origins": 8709,
+    "audit_status": "PASS",
+    "formal_candidate": false,
+    "gate1_authorized": false,
+    "evaluation_year_accessed": false,
+    "test_set_accessed": false
+  },
+  "future_access": {
+    "evaluation_year_accessed": false,
+    "excluded_year_accessed": false,
+    "test_set_accessed": false
+  }
+}
