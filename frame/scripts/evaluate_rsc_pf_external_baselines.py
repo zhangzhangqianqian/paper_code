@@ -220,7 +220,7 @@ def evaluate_external_validation(method_id: str, seed: int, config: Mapping[str,
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": _sha256(checkpoint),
         "metrics": metrics,
-        "optimizer_role": "exact optimizer at inference" if method_id == "DecisionFocused-Online" else "none at inference" if method_id == "DigitalTwins-Policy" else "none at inference",
+        "optimizer_role": "exact optimizer at inference" if method_id in {"iTransformer-PTO", "DecisionFocused-Online"} else "none at inference",
         "exact_lp_calls": int(lp_calls),
         "test_set_accessed": False,
         "split_manifest": _split_manifest(paths),
@@ -256,7 +256,7 @@ def write_external_validation_manifest(output_root: Path) -> Path:
             "dispatch_first_step_settled_comparison": ["operating_cost", "physical_carbon", "penalized_objective", "regret_vs_oracle", "shortage", "feasibility_rate"],
         },
         "settlement": "canonical one-step physical settlement against realized first-hour demand and renewable output",
-        "optimizer_roles": {"iTransformer-PTO": "none at inference", "DecisionFocused-Online": "exact optimizer at inference", "DigitalTwins-Policy": "none at inference"},
+        "optimizer_roles": {"iTransformer-PTO": "exact optimizer at inference", "DecisionFocused-Online": "exact optimizer at inference", "DigitalTwins-Policy": "none at inference"},
     }
     destination = root / "external_validation_manifest.json"
     destination.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -119,7 +119,9 @@ class ExternalForecastPTO(nn.Module):
     """Official-iTransformer-shaped forecast adapter for the PTO slot."""
 
     method_id = "iTransformer-PTO"
-    optimizer_role = "none at inference"
+    # The complete forecast-then-optimize method invokes one exact LP per
+    # chronological origin; the neural forward itself remains optimizer-free.
+    optimizer_role = "exact optimizer at inference"
 
     def __init__(self, *, d_model: int = 64, heads: int = 4, layers: int = 2) -> None:
         super().__init__()

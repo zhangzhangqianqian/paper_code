@@ -141,7 +141,7 @@ def evaluate_pilot(method_id: str, seed: int, config: Mapping[str, Any]) -> dict
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": _sha256(checkpoint),
         "metrics": metrics,
-        "optimizer_role": "exact optimizer at inference" if method_id == "DecisionFocused-Online" else "none at inference",
+        "optimizer_role": "exact optimizer at inference" if method_id in {"iTransformer-PTO", "DecisionFocused-Online"} else "none at inference",
         "exact_lp_calls": int(lp_calls),
         "test_set_accessed": False,
         "pilot_file": str(paths["data_root"] / paths["pilot_file"]),
@@ -173,4 +173,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

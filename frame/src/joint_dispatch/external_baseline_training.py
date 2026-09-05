@@ -504,7 +504,7 @@ def _run(
         "normalization_fit_split": "train",
         "test_set_accessed": False,
         "source_method_receipt": next(item for item in source_receipt["methods"] if item["method_id"] == method_id),
-        "optimizer_role": "exact optimizer at inference" if method_id == "DecisionFocused-Online" else "none at inference",
+        "optimizer_role": "exact optimizer at inference" if method_id in {"iTransformer-PTO", "DecisionFocused-Online"} else "none at inference",
     }
     (run_dir / "training_receipt.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
     return best_path
