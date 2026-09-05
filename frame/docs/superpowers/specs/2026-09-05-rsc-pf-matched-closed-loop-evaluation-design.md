@@ -21,7 +21,7 @@ This isolates evaluation fairness from training changes, preserves all existing 
 
 ### B. Independent-window first-step evaluation — rejected as final evidence
 
-Evaluate every origin using the materialized SOC and previous CHP stored in that origin. This is useful as a diagnostic and has already been completed, but it does not reproduce the chronological state carry used by RSC-PF.
+Evaluate every origin using the materialized SOC and previous CHP stored in that origin. This is useful as a diagnostic and has already been completed, but it does not enforce one fully carried state consistently across model inputs, settlement, and the next origin.
 
 ### C. Retrain every baseline with closed-loop roll-ins — deferred
 
@@ -43,18 +43,20 @@ At the first 2019 origin, construct a closed-loop state from the first window's 
 
 For each hourly origin:
 
-1. build the method input from the current carried state and the origin's causal future context;
+1. build the method input from the current carried state and the origin's causal future context; in particular, the scheduler-context SOC and previous-CHP values must come from the carried state rather than the materialized origin row;
 2. produce a four-hour forecast and/or dispatch plan;
 3. for PTO methods, solve one four-hour LP using the current carried SOC and previous CHP output;
 4. execute only the first planned action through `settle_first_step_v4` against realized first-hour electric/cooling/heating demand and PV/WT output;
 5. record both the planned action and settled action, the physical correction applied by settlement, shortage, cost, carbon, objective, and residual families;
 6. append the settled observable dispatch and activity indicators, append the newly revealed load/exogenous observation, and carry the resulting SOC and CHP output into the next origin.
 
+Separately, run one deterministic Perfect-Information-MPC reference trajectory from the same initial state. At each origin it receives the realized four-hour electric/cooling/heating demand and PV/WT availability, solves one four-hour LP, executes only its first action through the same settlement function, and carries its own state. This reference is not a deployable competitor and is not duplicated for every model seed.
+
 The input timestamps must be strictly consecutive at one-hour intervals. Any gap, non-finite tensor, failed LP, state-hash mismatch, or sealed-test-like path fails the run closed.
 
 ## Method-specific behavior
 
-- **RSC-PF:** use the existing v4.6 checkpoint as the single-seed diagnostic reference and rerun it through the common chronological evaluator so latency has the same scope as the baselines. It makes zero inference-time LP calls. Its predictions, plans, and settled outcomes must agree with the existing `rsc_pf_joint.npz` rollout within the frozen numerical tolerance before the new receipt is accepted.
+- **RSC-PF:** use the existing v4.6 checkpoint as the single-seed diagnostic reference and rerun it through the common chronological evaluator so latency has the same scope as the baselines. It makes zero inference-time LP calls. Before the matched run, reconstruct the checkpoint and reproduce the legacy `rsc_pf_joint.npz` through the unchanged legacy evaluator. That replay validates checkpoint loading only. The matched evaluator deliberately replaces the legacy materialized scheduler-context SOC with the actual carried SOC, so only the first origin is required to match the legacy rollout; later matched outputs are expected to differ and are treated as the corrected protocol result.
 - **iTransformer-PTO:** precompute its load forecasts from causal load/exogenous histories, but solve one exact LP per origin sequentially because SOC and previous CHP output are carried. The full PTO method therefore uses an online optimizer at inference even though the neural forecaster itself does not call one.
 - **DecisionFocused-Online:** use its frozen decision-focused forecast checkpoint and solve one exact LP per origin sequentially at inference.
 - **DigitalTwins-Policy:** run the policy sequentially because its dispatch depends on current SOC and previous CHP output; it must make zero inference-time LP calls.
@@ -73,18 +75,21 @@ Report the following separately:
 - **settled-action physical feasibility:** residual families evaluated after canonical first-step settlement against realized demand and renewable output;
 - **recourse adjustment:** the first-step L1 distance between planned and settled dispatch, plus that distance divided by total realized electric/cooling/heating demand with an epsilon guard; report mean, median, and P95 so post-settlement feasibility cannot conceal a large correction;
 - **no-shortage rate:** fraction of settled rows with zero electric, cooling, and heating shortage within tolerance;
-- decision regret versus a perfect-information LP solved from that method's carried state;
+- cumulative raw objective gap versus the separately rolled Perfect-Information-MPC reference;
+- final SOC and a terminal-stock-adjusted cumulative objective gap, using the frozen final-hour grid marginal value and battery charge/discharge efficiency, so end-of-year battery depletion cannot masquerade as an economic improvement;
 - inference latency and optimizer accounting.
 
-Use the frozen tolerances consistently: a row is physically feasible only when every absolute physical residual is at most `1e-6`; a row is shortage-free only when every carrier shortage is at most `1e-8`. RSC-PF rerun equivalence uses `numpy.allclose` with `atol=1e-5` and `rtol=1e-6` for saved floating-point arrays, plus exact timestamp and state-hash equality.
+Use the frozen tolerances consistently: a row is physically feasible only when every absolute physical residual is at most `1e-6`; a row is shortage-free only when every carrier shortage is at most `1e-8`. The separate RSC-PF legacy-replay check uses `numpy.allclose` with `atol=1e-5` and `rtol=1e-6` for saved floating-point arrays, plus exact timestamp and state-hash equality. In the corrected matched run, the first origin must meet the same equality check, while later origins are compared only under the new shared protocol.
 
-Inference LP calls and oracle-only evaluation LP calls must be recorded in separate fields. The oracle solver is never counted as part of deployable inference. Both iTransformer-PTO and DecisionFocused-Online must record one online LP call per origin; RSC-PF and DigitalTwins-Policy must record zero.
+Inference LP calls and reference-only LP calls must be recorded in separate fields. The Perfect-Information-MPC solver is never counted as part of deployable inference. Both iTransformer-PTO and DecisionFocused-Online must record one online LP call per origin; RSC-PF and DigitalTwins-Policy must record zero. The shared Perfect-Information-MPC reference records exactly one reference LP call per origin. Because a four-hour rolling MPC is not a globally optimal year-long controller, the signed difference is called an objective gap rather than guaranteed non-negative regret.
 
-Latency is measured in chronological batch-one execution on the same machine. It includes the neural forward pass, the online LP when declared by the complete method, and canonical physical settlement. It excludes artifact loading, metric aggregation, and oracle computation. The first 100 chronological origins are executed normally but excluded from latency aggregation as warm-up. Report median and P95 milliseconds per origin, total runtime, hardware, Python version, and solver version.
+Latency is measured in chronological batch-one execution on the same machine. It includes the neural forward pass, the online LP when declared by the complete method, and canonical physical settlement. It excludes artifact loading, metric aggregation, and the separate Perfect-Information-MPC reference. The first 100 chronological origins are executed normally but excluded from latency aggregation as warm-up. Report median and P95 milliseconds per origin, total runtime, hardware, Python version, and solver version.
 
 ## Outputs and audit
 
-Each method/seed writes a closed-loop NPZ artifact and JSON receipt containing checkpoint hash, input artifact hash, timestamp hash, metric definitions, optimizer role, inference LP calls, oracle LP calls, planned and settled residual maxima, recourse-adjustment statistics, latency statistics, `test_set_accessed: false`, and `evaluation_year_accessed: false`.
+Each method/seed writes a closed-loop NPZ artifact and JSON receipt containing checkpoint hash, input artifact hash, timestamp hash, metric definitions, optimizer role, inference LP calls, planned and settled residual maxima, recourse-adjustment statistics, raw and terminal-stock-adjusted cumulative objective, final SOC, latency statistics, `test_set_accessed: false`, and `evaluation_year_accessed: false`. A separate reference artifact records the Perfect-Information-MPC trajectory and its reference-only LP calls.
+
+The RSC-PF provenance directory also contains a legacy-replay receipt. It must show full equivalence to the saved rollout and separately record that the legacy evaluator used materialized scheduler-context SOC. The matched receipt must show that carried SOC was used and must never claim full equivalence to the legacy rollout.
 
 An aggregate comparison manifest must verify:
 
@@ -95,6 +100,7 @@ An aggregate comparison manifest must verify:
 - zero non-finite values;
 - explicit separation of planned feasibility, settled feasibility, recourse adjustment, and no-shortage rate;
 - correct online-optimizer roles for all four complete methods;
+- exactly one 8,709-origin Perfect-Information-MPC reference trajectory from the common initial state;
 - explicit station-side gas-prior semantics;
 - zero 2020 evaluation access.
 
