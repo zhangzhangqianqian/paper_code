@@ -219,8 +219,15 @@ def audit_run(run_dir: str | Path, contract_path: str | Path) -> PilotDecisionV4
     except Exception as exc:
         result = PilotDecisionV44(False, {}, (f"audit_exception:{type(exc).__name__}",), {}, (), (), "")
     audit_payload = {"schema": "formal-v4.4-pilot-independent-audit-v1", "authorized_gate1": result.authorized_gate1, "failures": list(result.failures), "criteria": dict(result.criteria), "audit_sha256": canonical_sha256({"authorized_gate1": result.authorized_gate1, "failures": list(result.failures), "criteria": dict(result.criteria)})}
-    try: write_json_once(pilot / "PILOT_INDEPENDENT_AUDIT.json", audit_payload)
-    except FileExistsError: pass
+    try:
+        write_json_once(pilot / "PILOT_INDEPENDENT_AUDIT.json", audit_payload)
+    except FileExistsError:
+        # Preserve write-once provenance.  If an audit implementation was
+        # corrected after a first run, emit a separately named rerun rather
+        # than silently overwriting the original evidence.
+        existing = _json(pilot / "PILOT_INDEPENDENT_AUDIT.json")
+        if existing != audit_payload:
+            write_json_once(pilot / "PILOT_INDEPENDENT_AUDIT_RERUN.json", audit_payload)
     return result
 
 
