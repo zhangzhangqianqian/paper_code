@@ -131,6 +131,32 @@ def smoke_rsc_training(*, windows: int = 16, epochs: int = 2, seed: int = 2026) 
     }
 
 
+def smoke_rsc_batch64(*, samples: int = 5, seed: int = 2026) -> dict[str, Any]:
+    """Calibrate one effective-batch update without loading formal arrays.
+
+    The required 16-window/two-epoch smoke remains the functional gate.  This
+    additional synthetic batch-64 timing avoids multiplying a small-batch CPU
+    timing by four, which is needlessly conservative for a vectorized model.
+    """
+
+    torch.manual_seed(seed)
+    torch.set_num_threads(1)
+    model = RSCPFModel(decoder_parameters=JointForecastDispatchModel._test_parameters(), dropout=0.0)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    inputs = _rsc_inputs(64)
+    samples_out: list[float] = []
+    model.train()
+    for _ in range(samples):
+        started = time.perf_counter()
+        output = model(**inputs)
+        loss = output.dispatch.square().mean() + output.forecast_physical.square().mean()
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+        samples_out.append(time.perf_counter() - started)
+    return {"batch_size": 64, "timing": _p50_p95(samples_out), "identity": "RSCPFModel.effective_batch_64_synthetic_update"}
+
+
 def smoke_exact_lp(*, samples: int = 5) -> dict[str, Any]:
     parameters = {
         "grid_import_capacity": 100.0, "chp_electric_capacity": 20.0, "chp_heat_capacity": 30.0,
@@ -200,8 +226,13 @@ def _project_resources(contract: CompleteFormalContract, timings: Mapping[str, M
     epochs = int(contract.training["common"]["max_epochs_per_stage"])
     stochastic_rows = len(contract.payload["seeds"]) * len([method for method in contract.primary_method_ids if contract.method(method).stochastic])
     updates = int(np.ceil(train_windows / batch) * epochs * stochastic_rows)
-    smoke_batch = 16
-    neural_seconds = updates * float(timings["rsc_training"]["p95_seconds"]) * batch / smoke_batch
+    if "rsc_training_batch64" in timings:
+        neural_seconds = updates * float(timings["rsc_training_batch64"]["p95_seconds"])
+        neural_timing_source = "synthetic_batch64_update"
+    else:
+        smoke_batch = 16
+        neural_seconds = updates * float(timings["rsc_training"]["p95_seconds"]) * batch / smoke_batch
+        neural_timing_source = "scaled_16_window_smoke"
     lp_calls_per_origin = sum(contract.method(method).inference_lp_calls_per_origin for method in contract.primary_method_ids)
     lp_seconds = contract.selection_origin_count * lp_calls_per_origin * float(timings["exact_lp"]["p95_seconds"])
     diff_seconds = updates * float(timings["difflp"]["p95_seconds"])
@@ -218,6 +249,7 @@ def _project_resources(contract: CompleteFormalContract, timings: Mapping[str, M
         "selection_origins": contract.selection_origin_count,
         "inference_lp_calls_per_origin_total": lp_calls_per_origin,
         "components_seconds": {"neural_training": neural_seconds, "exact_lp_selection": lp_seconds, "difflp_training": diff_seconds},
+        "neural_timing_source": neural_timing_source,
         "projected_total_seconds": total_seconds,
         "projected_total_hours": total_seconds / 3600.0,
         "maximum_hours": 24.0,
@@ -269,6 +301,7 @@ def run_gate0(*, contract_path: str | Path, output_root: str | Path, run_id: str
     started = time.perf_counter()
     try:
         rsc = dict(ops.get("rsc_training", lambda: smoke_rsc_training(windows=smoke_windows, epochs=smoke_epochs, seed=seed))())
+        rsc_batch64 = dict(ops.get("rsc_training_batch64", lambda: smoke_rsc_batch64(seed=seed))())
         lp = dict(ops.get("exact_lp", smoke_exact_lp)())
         difflp = dict(ops.get("difflp", smoke_difflp)())
         policy = dict(ops.get("direct_policy", smoke_policy)())
@@ -276,8 +309,8 @@ def run_gate0(*, contract_path: str | Path, output_root: str | Path, run_id: str
         itransformer = dict(ops.get("itransformer", lambda: verify_official_itransformer(source_root=Path(source_root), receipt_path=Path(itransformer_receipt)))())
     except Exception as exc:
         failures.append(f"native smoke error: {type(exc).__name__}: {exc}")
-        rsc, lp, difflp, policy, naive, itransformer = ({"native_gradient_nonzero": False}, {"success": False}, {"native_gradient_nonzero": False}, {"success": False}, {"success": False}, {"official_source_hash_verified": False})
-    timings = {"rsc_training": rsc.get("timing", {"p95_seconds": float("inf")}), "exact_lp": lp.get("timing", {"p95_seconds": float("inf")}), "difflp": difflp.get("timing", {"p95_seconds": float("inf")})}
+        rsc, rsc_batch64, lp, difflp, policy, naive, itransformer = ({"native_gradient_nonzero": False}, {"timing": {"p95_seconds": float("inf")}}, {"success": False}, {"native_gradient_nonzero": False}, {"success": False}, {"success": False}, {"official_source_hash_verified": False})
+    timings = {"rsc_training": rsc.get("timing", {"p95_seconds": float("inf")}), "rsc_training_batch64": rsc_batch64.get("timing", {"p95_seconds": float("inf")}), "exact_lp": lp.get("timing", {"p95_seconds": float("inf")}), "difflp": difflp.get("timing", {"p95_seconds": float("inf")})}
     resource_projection = _project_resources(contract, timings, train_windows=int(train_windows), disk=disk)
     families = {
         "RSC-PF": rsc.get("native_gradient_nonzero") is True and rsc.get("loss_finite") is True,
@@ -296,6 +329,7 @@ def run_gate0(*, contract_path: str | Path, output_root: str | Path, run_id: str
         "contract_sha256": contract.contract_sha256,
         "smoke": {"windows": smoke_windows, "epochs": smoke_epochs, "seed": seed, "data_arrays_loaded": False},
         "rsc_pf": rsc,
+        "rsc_batch64": rsc_batch64,
         "exact_lp": lp,
         "difflp": difflp,
         "itransformer": itransformer,
