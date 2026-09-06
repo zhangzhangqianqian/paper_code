@@ -170,6 +170,11 @@ def _factory_for(method_id: str) -> ProviderFactory:
             return supplied
         if method_id == "Perfect-Information-MPC":
             return _ReferenceProvider()
+        if method_id == "Differentiable-LP":
+            difflp = resources.get("difflp")
+            if isinstance(difflp, Mapping):
+                from .complete_formal_difflp import build_difflp_provider
+                return build_difflp_provider(**dict(difflp))
         parameters = resources.get("parameters")
         if not isinstance(parameters, Mapping):
             raise ValueError(f"{method_id} requires explicit provider resources or parameters")
