@@ -29,8 +29,12 @@ def _sha256(path: Path) -> str:
 
 
 def validate_itransformer_receipt(receipt: Mapping[str, Any]) -> None:
-    if receipt.get("schema_version") != "formal-v4.1-itransformer-source-v1":
-        raise ValueError("iTransformer receipt schema is not formal-v4.1")
+    schema = receipt.get("schema_version", receipt.get("schema"))
+    if schema not in {
+        "formal-v4.1-itransformer-source-v1",
+        "formal-v4.2-itransformer-source-v1",
+    }:
+        raise ValueError("iTransformer receipt schema is not a supported formal source receipt")
     if receipt.get("repository") != OFFICIAL_REPOSITORY:
         raise ValueError("iTransformer receipt repository is not the official THUML source")
     if receipt.get("backbone_class") != OFFICIAL_BACKBONE_CLASS:
