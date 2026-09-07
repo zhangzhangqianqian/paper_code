@@ -14,8 +14,14 @@ import hashlib
 import shutil
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 
+import torch
+
 from .complete_formal_contract import CompleteFormalContract
 from .formal_v4_2_artifacts import sha256_file
+from .formal_v4_2_checkpoint import load_training_checkpoint
+from .formal_v4_2_gate2_training import TrainedMethodArtifact
+from .formal_v4_2_training import StageBudgetV42
+from ..models import Scheme2RModel
 
 if TYPE_CHECKING:  # pragma: no cover - imported only for static type checking
     from .complete_formal_gate1 import Gate1DataBundle
@@ -396,6 +402,45 @@ def materialize_candidate(evidence: RecoveryCandidateEvidence, destination_trial
     return destination_row
 
 
+def restore_differentiable_lp_artifact(
+    row_dir: str | Path,
+    data: "Gate1DataBundle",
+    contract: CompleteFormalContract,
+) -> TrainedMethodArtifact:
+    """Restore a verified DiffLP model and optimizer without an update step."""
+
+    row = Path(row_dir).resolve()
+    receipt_path = row / "TRAINING_RECEIPT.json"
+    checkpoint_path = row / "CHECKPOINT.pt"
+    if not receipt_path.is_file() or not checkpoint_path.is_file():
+        raise CandidateValidationError("canonical Differentiable-LP checkpoint row is incomplete")
+    receipt = load_json_object(receipt_path)
+    if receipt.get("method_id") != "Differentiable-LP" or receipt.get("seed") != 2026 or receipt.get("epochs") != 30:
+        raise CandidateValidationError("Differentiable-LP restoration receipt is invalid")
+    if receipt.get("checkpoint_sha256") != sha256_file(checkpoint_path):
+        raise CandidateValidationError("Differentiable-LP restoration checkpoint hash mismatch")
+    model = Scheme2RModel(exog_dim=12, task_count=4, lookback=24, horizon=4, dropout=0.0)
+    budget = StageBudgetV42(forecaster_lr=1.0e-5)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=budget.forecaster_lr, weight_decay=budget.weight_decay,
+    )
+    checkpoint = load_training_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=optimizer,
+        expected_lineage=_expected_checkpoint_lineage(contract, data),
+    )
+    return TrainedMethodArtifact(
+        method_id="Differentiable-LP",
+        seed=2026,
+        model=model,
+        checkpoint_path=checkpoint.path,
+        checkpoint_sha256=checkpoint.model_sha256,
+        training_receipt=receipt,
+        decision_forecaster_gradient_norm=float(receipt.get("decision_forecaster_gradient_norm", 0.0)),
+    )
+
+
 __all__ = [
     "CandidateValidationError",
     "CandidatePaths",
@@ -409,4 +454,5 @@ __all__ = [
     "inspect_recovery_source",
     "load_json_object",
     "materialize_candidate",
+    "restore_differentiable_lp_artifact",
 ]

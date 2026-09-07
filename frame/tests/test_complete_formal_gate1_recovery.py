@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from src.joint_dispatch.complete_formal_contract import CompleteFormalContract
 from src.joint_dispatch.complete_formal_gate1 import Gate1RunConfig, load_gate1_data
@@ -13,6 +14,7 @@ from src.joint_dispatch.complete_formal_gate1_recovery import (
     inspect_candidate,
     inspect_recovery_source,
     materialize_candidate,
+    restore_differentiable_lp_artifact,
 )
 
 
@@ -106,3 +108,18 @@ def test_materialize_verified_difflp_checkpoint_to_canonical_row(tmp_path, contr
     assert destination == (tmp_path / "difflp_lr_1e-05" / "rows" / "Differentiable-LP" / "2026").resolve()
     assert (destination / "CHECKPOINT.pt").is_file()
     assert (destination / "TRAINING_RECEIPT.json").is_file()
+
+
+def test_restore_difflp_reproduces_checkpoint_parameters_without_optimizer_step(
+    tmp_path, contract, gate1_data, monkeypatch
+):
+    inspection = inspect_recovery_source(FAILED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    key = next(key for key in inspection.by_key if key.family == "Differentiable-LP" and key.value == 1e-5)
+    destination = materialize_candidate(inspection.by_key[key], tmp_path / "difflp_lr_1e-05")
+    monkeypatch.setattr(torch.optim.AdamW, "step", lambda self, *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore must not optimize")))
+    artifact = restore_differentiable_lp_artifact(destination, gate1_data, contract)
+    payload = torch.load(destination / "CHECKPOINT.pt", map_location="cpu", weights_only=False)
+    assert artifact.method_id == "Differentiable-LP"
+    assert artifact.seed == 2026
+    for name, tensor in artifact.model.state_dict().items():
+        assert torch.equal(tensor.cpu(), payload["model"][name].cpu())
