@@ -22,6 +22,8 @@ from .complete_formal_contract import CompleteFormalContract, MethodSeedKey, STO
 from .complete_formal_execution import audit_complete_formal
 from .complete_formal_gate1_recovery import (
     Gate1RecoveryInspection,
+    build_recovery_manifest,
+    inspect_recovery_source,
     materialize_candidate,
     restore_differentiable_lp_artifact,
 )
@@ -547,6 +549,8 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
     gate1_dir.mkdir(parents=True)
     protocol_dir.mkdir(parents=True)
     started = time.perf_counter()
+    recovery_manifest_path: Path | None = None
+    recovery: Gate1RecoveryInspection | None = None
     try:
         config_for_data = replace(config, smoke=False)
         data = load_gate1_data(config_for_data, contract)
@@ -566,7 +570,34 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
             "selection_origin_count": contract.selection_origin_count,
             "evaluation_year_accessed": False,
         })
-        search = select_gate1_hyperparameters(data, contract, gate1_dir, smoke=smoke_mode)
+        if config.resume_from is not None:
+            recovery = inspect_recovery_source(
+                config.resume_from, contract, data, config.gate0_transition_path,
+            )
+            write_once_json(gate1_dir / "RECOVERY_PLAN.json", {
+                "schema_version": "rsc-pf-complete-formal-gate1-recovery-plan-v1",
+                "source_run_root": str(recovery.source_root),
+                "candidate_states": [
+                    {
+                        "family": item.key.family,
+                        "value": item.key.value,
+                        "method_id": item.key.method_id,
+                        "seed": item.key.seed,
+                        "state": item.state,
+                        "reason": item.reason,
+                    }
+                    for item in recovery.candidates
+                ],
+                "source_modified": False,
+                "evaluation_year_accessed": False,
+            })
+        search = select_gate1_hyperparameters(data, contract, gate1_dir, smoke=smoke_mode, recovery=recovery)
+        if recovery is not None and not smoke_mode:
+            manifest = build_recovery_manifest(
+                recovery, root, contract, data, config.gate0_transition_path, search,
+            )
+            recovery_manifest_path = gate1_dir / "RECOVERY_MANIFEST.json"
+            write_once_json(recovery_manifest_path, manifest)
         artifacts = train_gate1_matrix(data, contract, gate1_dir, smoke=smoke_mode, selected_hyperparameters=search)
         rows = evaluate_gate1_matrix(data, contract, gate1_dir, artifacts, smoke=smoke_mode)
         if smoke_mode:
@@ -612,6 +643,7 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
             "search_status": search.get("status"),
             "selected_rsc_decision_multiplier": search.get("rsc_selected_decision_multiplier"),
             "selected_difflp_learning_rate": search.get("difflp_selected_learning_rate"),
+            "recovery_manifest_sha256": None if recovery_manifest_path is None else sha256_file(recovery_manifest_path),
         }
         write_once_json(gate1_dir / "GATE1_EVIDENCE.json", evidence)
         transition = {
@@ -637,6 +669,8 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
             "error_type": type(exc).__name__,
             "reason": str(exc),
             "evaluation_year_accessed": False,
+            "resume_from": None if config.resume_from is None else str(config.resume_from.resolve()),
+            "recovery_manifest_sha256": None if recovery_manifest_path is None else sha256_file(recovery_manifest_path),
         })
         raise
 

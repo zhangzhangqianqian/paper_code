@@ -11,12 +11,14 @@ from src.joint_dispatch.complete_formal_contract import CompleteFormalContract
 from src.joint_dispatch.complete_formal_gate1 import Gate1RunConfig, load_gate1_data
 import src.joint_dispatch.complete_formal_gate1 as gate1
 from src.joint_dispatch.complete_formal_gate1_recovery import (
+    build_recovery_manifest,
     expected_recovery_candidates,
     inspect_candidate,
     inspect_recovery_source,
     materialize_candidate,
     restore_differentiable_lp_artifact,
 )
+from scripts.run_rsc_pf_complete_formal_gate1_real import build_parser
 
 
 FRAME_ROOT = Path(__file__).resolve().parents[1]
@@ -159,3 +161,32 @@ def test_search_reuses_completed_trials_and_trains_only_missing(
     assert np.allclose(trained, [3e-5, 1e-4, 3e-4])
     assert result["recovery_used"] is True
     assert result["reused_candidate_count"] == 5
+
+
+def test_cli_accepts_explicit_recovery_source():
+    args = build_parser().parse_args([
+        "--gate0-transition", str(GATE0_TRANSITION),
+        "--source-run", str(SOURCE_RUN),
+        "--run-id", "recovered-run",
+        "--resume-from", str(FAILED_RUN),
+    ])
+    assert args.resume_from.resolve() == FAILED_RUN.resolve()
+
+
+def test_recovery_manifest_records_reused_training_time(contract, gate1_data, tmp_path):
+    inspection = inspect_recovery_source(FAILED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    payload = build_recovery_manifest(
+        inspection, tmp_path / "destination", contract, gate1_data, GATE0_TRANSITION,
+        {"trials": [
+            {"family": item.key.family, "value": item.key.value,
+             "action": "reused-complete" if item.state == "reusable-complete" else "reused-training-reran-evaluation" if item.state == "reusable-checkpoint" else "trained",
+             "training_reused": item.state != "retrain-required",
+             "evaluation_reused": item.state == "reusable-complete"}
+            for item in inspection.candidates
+        ]},
+    )
+    assert payload["source_modified"] is False
+    assert payload["candidate_count"] == 8
+    assert payload["reused_candidate_count"] == 5
+    assert payload["reused_training_runtime_seconds"] > 0
+    assert payload["evaluation_year_accessed"] is False

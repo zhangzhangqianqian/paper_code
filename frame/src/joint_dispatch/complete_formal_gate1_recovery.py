@@ -402,6 +402,62 @@ def materialize_candidate(evidence: RecoveryCandidateEvidence, destination_trial
     return destination_row
 
 
+def build_recovery_manifest(
+    inspection: Gate1RecoveryInspection,
+    destination_run_root: str | Path,
+    contract: CompleteFormalContract,
+    data: "Gate1DataBundle",
+    gate0_transition_path: str | Path,
+    search_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the immutable provenance envelope for a completed recovery run."""
+
+    actions = {
+        (str(item.get("family")), float(item.get("value"))): item
+        for item in search_payload.get("trials", [])
+        if isinstance(item, Mapping)
+    }
+    candidates: list[dict[str, Any]] = []
+    for evidence in inspection.candidates:
+        trial = actions.get((evidence.key.family, float(evidence.key.value)), {})
+        candidates.append({
+            "family": evidence.key.family,
+            "value": evidence.key.value,
+            "method_id": evidence.key.method_id,
+            "seed": evidence.key.seed,
+            "validation_state": evidence.state,
+            "action": trial.get("action", "not-run"),
+            "training_reused": bool(trial.get("training_reused", False)),
+            "evaluation_reused": bool(trial.get("evaluation_reused", False)),
+            "source_trial_root": str(evidence.source_trial_root),
+            "artifact_hashes": dict(evidence.file_sha256),
+            "runtime_seconds_reused": float(evidence.runtime_seconds_reused),
+            "reason": evidence.reason,
+        })
+    return {
+        "schema_version": "rsc-pf-complete-formal-gate1-recovery-v1",
+        "status": "complete",
+        "source_run_id": inspection.source_root.name,
+        "source_run_root": str(inspection.source_root),
+        "destination_run_id": Path(destination_run_root).resolve().name,
+        "destination_run_root": str(Path(destination_run_root).resolve()),
+        "failure_receipt_sha256": inspection.failure_receipt_sha256,
+        "contract_sha256": contract.contract_sha256,
+        "gate0_transition_sha256": sha256_file(gate0_transition_path),
+        "source_manifest_sha256": data.lineage["source_manifest_sha256"],
+        "train_windows_sha256": data.lineage["train_windows_sha256"],
+        "selection_windows_sha256": data.lineage["selection_windows_sha256"],
+        "normalization_sha256": data.lineage["normalization_sha256"],
+        "candidate_count": len(candidates),
+        "reused_candidate_count": sum(1 for item in candidates if item["training_reused"]),
+        "reused_training_runtime_seconds": sum(float(item["runtime_seconds_reused"]) for item in candidates if item["training_reused"]),
+        "candidates": candidates,
+        "source_modified": False,
+        "evaluation_year_accessed": False,
+        "test_set_accessed": False,
+    }
+
+
 def restore_differentiable_lp_artifact(
     row_dir: str | Path,
     data: "Gate1DataBundle",
@@ -454,5 +510,6 @@ __all__ = [
     "inspect_recovery_source",
     "load_json_object",
     "materialize_candidate",
+    "build_recovery_manifest",
     "restore_differentiable_lp_artifact",
 ]
