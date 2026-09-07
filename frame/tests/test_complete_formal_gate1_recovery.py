@@ -10,7 +10,9 @@ from src.joint_dispatch.complete_formal_contract import CompleteFormalContract
 from src.joint_dispatch.complete_formal_gate1 import Gate1RunConfig, load_gate1_data
 from src.joint_dispatch.complete_formal_gate1_recovery import (
     expected_recovery_candidates,
+    inspect_candidate,
     inspect_recovery_source,
+    materialize_candidate,
 )
 
 
@@ -76,3 +78,31 @@ def test_recovery_rejects_gate0_hash_mismatch(tmp_path, contract, gate1_data):
     wrong_gate0.write_text("{}", encoding="utf-8")
     with pytest.raises(PermissionError, match="gate0_transition"):
         inspect_recovery_source(source, contract, gate1_data, wrong_gate0)
+
+
+def test_materialize_verified_rsc_candidate_without_changing_source(tmp_path, contract, gate1_data):
+    inspection = inspect_recovery_source(FAILED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    candidate = inspection.by_key[next(key for key in inspection.by_key if key.family == "RSC-PF" and key.value == 1.0)]
+    before = {
+        path.relative_to(FAILED_RUN): path.stat().st_mtime_ns
+        for path in FAILED_RUN.rglob("*") if path.is_file()
+    }
+    destination = materialize_candidate(candidate, tmp_path / "rsc_multiplier_1")
+    assert (destination / "CHECKPOINT.pt").is_file()
+    assert (destination / "COMPLETE_GATE1_ROW_RECEIPT.json").is_file()
+    after = {
+        path.relative_to(FAILED_RUN): path.stat().st_mtime_ns
+        for path in FAILED_RUN.rglob("*") if path.is_file()
+    }
+    assert before == after
+
+
+def test_materialize_verified_difflp_checkpoint_to_canonical_row(tmp_path, contract, gate1_data):
+    inspection = inspect_recovery_source(FAILED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    key = next(key for key in inspection.by_key if key.family == "Differentiable-LP" and key.value == 1e-5)
+    candidate = inspection.by_key[key]
+    destination = materialize_candidate(candidate, tmp_path / "difflp_lr_1e-05")
+    assert candidate.state == "reusable-checkpoint"
+    assert destination == (tmp_path / "difflp_lr_1e-05" / "rows" / "Differentiable-LP" / "2026").resolve()
+    assert (destination / "CHECKPOINT.pt").is_file()
+    assert (destination / "TRAINING_RECEIPT.json").is_file()
