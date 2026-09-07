@@ -20,6 +20,11 @@ import numpy as np
 
 from .complete_formal_contract import CompleteFormalContract, MethodSeedKey, STOCHASTIC_METHOD_IDS
 from .complete_formal_execution import audit_complete_formal
+from .complete_formal_gate1_recovery import (
+    Gate1RecoveryInspection,
+    materialize_candidate,
+    restore_differentiable_lp_artifact,
+)
 from .formal_v4_2_artifacts import sha256_file, write_once_json
 from .formal_v4_2_data import NormalizationReceiptV42
 from .formal_v4_2_gate2_training import (
@@ -280,6 +285,7 @@ def select_gate1_hyperparameters(
     output_dir: Path,
     *,
     smoke: bool = False,
+    recovery: Gate1RecoveryInspection | None = None,
 ) -> Mapping[str, Any]:
     """Select the two frozen Gate 1 search parameters on 2019 only.
 
@@ -312,12 +318,29 @@ def select_gate1_hyperparameters(
     for multiplier in rsc_grid:
         freeze = _legacy_freeze(contract, work, multiplier=1.0, decision_multiplier=multiplier, c_ref=1.0)
         trial_root = search_dir / f"rsc_multiplier_{multiplier:g}"
-        family = train_rsc_family(2026, work.legacy, freeze, work.parameters, trial_root / "rows", budget=_budget(contract, decision_multiplier=multiplier))
         key = MethodSeedKey("RSC-PF", 2026)
-        row = evaluate_gate1_row(key, family["RSC-PF"], work, trial_root, contract=contract, paper_result=False)
+        evidence = recovery.by_key.get(next(
+            candidate for candidate in recovery.by_key
+            if candidate.family == "RSC-PF" and candidate.value == multiplier
+        )) if recovery is not None else None
+        action = "trained"
+        if evidence is not None and evidence.state == "reusable-complete":
+            destination_row = materialize_candidate(evidence, trial_root)
+            row = _json(destination_row / "COMPLETE_GATE1_ROW_RECEIPT.json")
+            action = "reused-complete"
+        else:
+            family = train_rsc_family(
+                2026, work.legacy, freeze, work.parameters, trial_root / "rows",
+                budget=_budget(contract, decision_multiplier=multiplier),
+            )
+            row = evaluate_gate1_row(key, family["RSC-PF"], work, trial_root, contract=contract, paper_result=False)
         score = float(row.get("penalized_objective", float("inf")))
         eligible = bool(row.get("finite", False) and row.get("physical_feasible", False))
-        trials.append({"family": "RSC-PF", "value": multiplier, "score": score, "eligible": eligible})
+        trials.append({
+            "family": "RSC-PF", "value": multiplier, "score": score, "eligible": eligible,
+            "action": action, "training_reused": action == "reused-complete",
+            "evaluation_reused": action == "reused-complete",
+        })
         if eligible:
             rsc_candidates.append((score, multiplier))
     diff_candidates: list[tuple[float, float]] = []
@@ -325,16 +348,35 @@ def select_gate1_hyperparameters(
         multiplier = learning_rate / 1.0e-5
         freeze = _legacy_freeze(contract, work, multiplier=multiplier, c_ref=1.0)
         trial_root = search_dir / f"difflp_lr_{learning_rate:g}"
-        artifact = train_differentiable_lp(
-            2026, work.legacy, freeze, diff_receipt, work.parameters,
-            trial_root / "rows" / "Differentiable-LP" / "2026",
-            budget=_budget(contract, multiplier=multiplier), layer=DifferentiableIESLayer(work.parameters), micro_batch_size=8,
-        )
         key = MethodSeedKey("Differentiable-LP", 2026)
-        row = evaluate_gate1_row(key, artifact, work, trial_root, contract=contract, paper_result=False)
+        evidence = recovery.by_key.get(next(
+            candidate for candidate in recovery.by_key
+            if candidate.family == "Differentiable-LP" and candidate.value == learning_rate
+        )) if recovery is not None else None
+        action = "trained"
+        if evidence is not None and evidence.state == "reusable-complete":
+            destination_row = materialize_candidate(evidence, trial_root)
+            row = _json(destination_row / "COMPLETE_GATE1_ROW_RECEIPT.json")
+            action = "reused-complete"
+        elif evidence is not None and evidence.state == "reusable-checkpoint":
+            destination_row = materialize_candidate(evidence, trial_root)
+            artifact = restore_differentiable_lp_artifact(destination_row, work, contract)
+            row = evaluate_gate1_row(key, artifact, work, trial_root, contract=contract, paper_result=False)
+            action = "reused-training-reran-evaluation"
+        else:
+            artifact = train_differentiable_lp(
+                2026, work.legacy, freeze, diff_receipt, work.parameters,
+                trial_root / "rows" / "Differentiable-LP" / "2026",
+                budget=_budget(contract, multiplier=multiplier), layer=DifferentiableIESLayer(work.parameters), micro_batch_size=8,
+            )
+            row = evaluate_gate1_row(key, artifact, work, trial_root, contract=contract, paper_result=False)
         score = float(row.get("penalized_objective", float("inf")))
         eligible = bool(row.get("finite", False) and row.get("physical_feasible", False))
-        trials.append({"family": "Differentiable-LP", "value": learning_rate, "score": score, "eligible": eligible})
+        trials.append({
+            "family": "Differentiable-LP", "value": learning_rate, "score": score, "eligible": eligible,
+            "action": action, "training_reused": action != "trained",
+            "evaluation_reused": action == "reused-complete",
+        })
         if eligible:
             diff_candidates.append((score, learning_rate))
     selected_rsc = min(rsc_candidates, default=(float("inf"), rsc_grid[0]))[1]
@@ -351,6 +393,8 @@ def select_gate1_hyperparameters(
         "trials": trials,
         "source_manifest_sha256": data.lineage["source_manifest_sha256"],
         "contract_sha256": contract.contract_sha256,
+        "recovery_used": recovery is not None,
+        "reused_candidate_count": sum(1 for trial in trials if trial.get("training_reused")),
     }
     write_once_json(output_dir / "GATE1_SEARCH.json", payload)
     return payload

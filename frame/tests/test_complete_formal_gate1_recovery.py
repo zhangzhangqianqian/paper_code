@@ -9,6 +9,7 @@ import torch
 
 from src.joint_dispatch.complete_formal_contract import CompleteFormalContract
 from src.joint_dispatch.complete_formal_gate1 import Gate1RunConfig, load_gate1_data
+import src.joint_dispatch.complete_formal_gate1 as gate1
 from src.joint_dispatch.complete_formal_gate1_recovery import (
     expected_recovery_candidates,
     inspect_candidate,
@@ -123,3 +124,38 @@ def test_restore_difflp_reproduces_checkpoint_parameters_without_optimizer_step(
     assert artifact.seed == 2026
     for name, tensor in artifact.model.state_dict().items():
         assert torch.equal(tensor.cpu(), payload["model"][name].cpu())
+
+
+def test_search_reuses_completed_trials_and_trains_only_missing(
+    tmp_path, contract, gate1_data, monkeypatch
+):
+    inspection = inspect_recovery_source(FAILED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    trained = []
+
+    def fail_rsc(*args, **kwargs):
+        raise AssertionError("completed RSC-PF candidates must not be retrained")
+
+    def record_difflp(*args, **kwargs):
+        trained.append(float(kwargs["budget"].forecaster_lr))
+        return None
+
+    monkeypatch.setattr(gate1, "train_rsc_family", fail_rsc)
+    monkeypatch.setattr(gate1, "train_differentiable_lp", record_difflp)
+    monkeypatch.setattr(
+        gate1, "evaluate_gate1_row",
+        lambda *args, **kwargs: {
+            "penalized_objective": 1.0,
+            "finite": True,
+            "physical_feasible": True,
+        },
+    )
+    monkeypatch.setattr(
+        gate1, "_itransformer_receipt",
+        lambda data, output_dir: ({"source_root": "frame/third_party/iTransformer_source"}, output_dir / "ITRANSFORMER_ADAPTER_RECEIPT.json", SOURCE_RUN / "protocol" / "DIFFERENTIABLE_LP_ENVIRONMENT_RECEIPT.json"),
+    )
+    result = gate1.select_gate1_hyperparameters(
+        gate1_data, contract, tmp_path, recovery=inspection,
+    )
+    assert np.allclose(trained, [3e-5, 1e-4, 3e-4])
+    assert result["recovery_used"] is True
+    assert result["reused_candidate_count"] == 5
