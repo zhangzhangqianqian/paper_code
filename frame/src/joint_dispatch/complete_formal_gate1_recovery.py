@@ -315,7 +315,7 @@ def _validate_final_row(
                 "TRAINING_RECEIPT.json": sha256_file(receipt_path),
             }, runtime,
         )
-    except (CandidateValidationError, OSError, RuntimeError, ValueError, TypeError) as exc:
+    except Exception as exc:
         return FinalRowEvidence(
             key, "retrain-required", row, None, None, str(exc), {}, 0.0,
         )
