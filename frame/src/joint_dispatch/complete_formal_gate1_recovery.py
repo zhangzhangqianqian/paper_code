@@ -19,7 +19,11 @@ import torch
 from .complete_formal_contract import CompleteFormalContract
 from .formal_v4_2_artifacts import sha256_file
 from .formal_v4_2_checkpoint import load_training_checkpoint
-from .formal_v4_2_gate2_training import TrainedMethodArtifact
+from .formal_v4_2_gate2_training import (
+    TrainedMethodArtifact,
+    build_direct_policy_model,
+    build_rsc_model,
+)
 from .formal_v4_2_training import StageBudgetV42
 from ..models import Scheme2RModel
 
@@ -58,15 +62,47 @@ class RecoveryCandidateEvidence:
     runtime_seconds_reused: float
 
 
+FINAL_REUSABLE_METHOD_IDS = (
+    "RSC-PF",
+    "Decoupled-RSC-PF",
+    "State-Conditioned-PTO",
+    "Direct-Policy",
+    "Scheme2R-PTO",
+)
+
+
+@dataclass(frozen=True)
+class FinalRowKey:
+    method_id: str
+    seed: int
+
+
+@dataclass(frozen=True)
+class FinalRowEvidence:
+    key: FinalRowKey
+    state: RecoveryState
+    source_row: Path
+    checkpoint_path: Path | None
+    training_receipt_path: Path | None
+    reason: str
+    file_sha256: Mapping[str, str]
+    runtime_seconds_reused: float
+
+
 @dataclass(frozen=True)
 class Gate1RecoveryInspection:
     source_root: Path
     failure_receipt_sha256: str
     candidates: tuple[RecoveryCandidateEvidence, ...]
+    final_rows: tuple[FinalRowEvidence, ...] = ()
 
     @property
     def by_key(self) -> Mapping[RecoveryCandidateKey, RecoveryCandidateEvidence]:
         return {candidate.key: candidate for candidate in self.candidates}
+
+    @property
+    def final_by_key(self) -> Mapping[FinalRowKey, FinalRowEvidence]:
+        return {row.key: row for row in self.final_rows}
 
 
 class CandidateValidationError(ValueError):
@@ -222,6 +258,156 @@ def _validate_training_artifact(
     return row_root, checkpoint_path, receipt
 
 
+def _final_row_path(source_root: Path, key: FinalRowKey) -> Path:
+    return source_root / "gate1" / "rows" / key.method_id / str(key.seed)
+
+
+def _final_epochs(contract: CompleteFormalContract) -> int:
+    training = contract.payload.get("training", {})
+    common = training.get("common", {}) if isinstance(training, Mapping) else {}
+    return int(common.get("max_epochs_per_stage", 30))
+
+
+def _validate_final_row(
+    source_root: Path,
+    key: FinalRowKey,
+    contract: CompleteFormalContract,
+    data: "Gate1DataBundle",
+) -> FinalRowEvidence:
+    row = _final_row_path(source_root, key)
+    receipt_path = row / "TRAINING_RECEIPT.json"
+    checkpoint_path = row / "CHECKPOINT.pt"
+    if not receipt_path.is_file() or not checkpoint_path.is_file():
+        return FinalRowEvidence(
+            key, "retrain-required", row, None, None,
+            "training checkpoint or receipt absent", {}, 0.0,
+        )
+    try:
+        receipt = load_json_object(receipt_path)
+        expected_receipt = {
+            "method_id": key.method_id,
+            "seed": key.seed,
+            "epochs": _final_epochs(contract),
+            "test_set_accessed": False,
+            "forecast_loss_applicable": key.method_id != "Direct-Policy",
+        }
+        for name, expected in expected_receipt.items():
+            if receipt.get(name) != expected:
+                raise CandidateValidationError(f"final row receipt field mismatch: {name}")
+        if receipt.get("checkpoint_sha256") != sha256_file(checkpoint_path):
+            raise CandidateValidationError("final row checkpoint hash mismatch")
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if not isinstance(payload, Mapping) or payload.get("schema") != "formal-v4.2-training-checkpoint-v1":
+            raise CandidateValidationError("final row checkpoint schema mismatch")
+        if int(payload.get("epoch", -1)) != _final_epochs(contract) - 1:
+            raise CandidateValidationError("final row checkpoint epoch mismatch")
+        lineage = payload.get("lineage")
+        if not isinstance(lineage, Mapping):
+            raise CandidateValidationError("final row checkpoint lineage is missing")
+        for name, expected in _expected_checkpoint_lineage(contract, data).items():
+            if lineage.get(name) != expected:
+                raise CandidateValidationError(f"final row checkpoint lineage mismatch: {name}")
+        runtime = float(receipt.get("runtime_seconds", 0.0))
+        return FinalRowEvidence(
+            key, "reusable-checkpoint", row, checkpoint_path, receipt_path,
+            "validated final training checkpoint", {
+                "CHECKPOINT.pt": sha256_file(checkpoint_path),
+                "TRAINING_RECEIPT.json": sha256_file(receipt_path),
+            }, runtime,
+        )
+    except (CandidateValidationError, OSError, RuntimeError, ValueError, TypeError) as exc:
+        return FinalRowEvidence(
+            key, "retrain-required", row, None, None, str(exc), {}, 0.0,
+        )
+
+
+def inspect_final_rows(
+    source_root: str | Path,
+    contract: CompleteFormalContract,
+    data: "Gate1DataBundle",
+) -> tuple[FinalRowEvidence, ...]:
+    """Classify final matrix checkpoints already present in a partial run."""
+
+    source = Path(source_root).resolve()
+    return tuple(
+        _validate_final_row(source, FinalRowKey(method_id, 2026), contract, data)
+        for method_id in FINAL_REUSABLE_METHOD_IDS
+    )
+
+
+def _restore_optimizer(model: torch.nn.Module, method_id: str) -> torch.optim.Optimizer:
+    """Recreate the optimizer parameter groups used by the saved artifact."""
+
+    weight_decay = 1.0e-4
+    if method_id == "RSC-PF":
+        return torch.optim.AdamW([
+            {"params": tuple(model.forecaster_parameters()), "lr": 1.0e-5},
+            {"params": tuple(model.scheduler_parameters()), "lr": 1.0e-3},
+        ], weight_decay=weight_decay)
+    if method_id == "Decoupled-RSC-PF":
+        return torch.optim.AdamW(tuple(model.scheduler_parameters()), lr=1.0e-3, weight_decay=weight_decay)
+    if method_id == "State-Conditioned-PTO":
+        return torch.optim.AdamW(tuple(model.forecaster_parameters()), lr=1.0e-5, weight_decay=weight_decay)
+    if method_id == "Direct-Policy":
+        return torch.optim.AdamW(model.parameters(), lr=1.0e-3, weight_decay=weight_decay)
+    if method_id == "Scheme2R-PTO":
+        return torch.optim.AdamW(model.parameters(), lr=1.0e-3, weight_decay=weight_decay)
+    raise ValueError(f"unsupported final row restoration method: {method_id}")
+
+
+def restore_final_artifact(
+    evidence: FinalRowEvidence,
+    data: "Gate1DataBundle",
+    contract: CompleteFormalContract,
+    output_row: str | Path,
+    source_info: Mapping[str, Any] | None = None,
+) -> TrainedMethodArtifact:
+    """Copy and restore one validated final checkpoint without an update step."""
+
+    if evidence.state != "reusable-checkpoint" or evidence.checkpoint_path is None or evidence.training_receipt_path is None:
+        raise CandidateValidationError("final row is not reusable")
+    destination = Path(output_row).resolve()
+    if destination.exists():
+        raise FileExistsError(f"refusing to overwrite recovery row: {destination}")
+    destination.mkdir(parents=True)
+    _copy_checked(
+        evidence.checkpoint_path,
+        destination / "CHECKPOINT.pt",
+        evidence.file_sha256["CHECKPOINT.pt"],
+    )
+    _copy_checked(
+        evidence.training_receipt_path,
+        destination / "TRAINING_RECEIPT.json",
+        evidence.file_sha256["TRAINING_RECEIPT.json"],
+    )
+    if evidence.key.method_id in {"RSC-PF", "Decoupled-RSC-PF", "State-Conditioned-PTO"}:
+        model = build_rsc_model(data.legacy, data.parameters)
+    elif evidence.key.method_id == "Direct-Policy":
+        model = build_direct_policy_model(data.legacy, data.parameters)
+    elif evidence.key.method_id == "Scheme2R-PTO":
+        model = Scheme2RModel(exog_dim=12, task_count=4, lookback=24, horizon=4, dropout=0.0)
+    else:  # pragma: no cover - guarded by FINAL_REUSABLE_METHOD_IDS
+        raise ValueError(f"unsupported final row restoration method: {evidence.key.method_id}")
+    optimizer = _restore_optimizer(model, evidence.key.method_id)
+    checkpoint = load_training_checkpoint(
+        destination / "CHECKPOINT.pt",
+        model=model,
+        optimizer=optimizer,
+        expected_lineage=_expected_checkpoint_lineage(contract, data),
+    )
+    receipt = load_json_object(destination / "TRAINING_RECEIPT.json")
+    return TrainedMethodArtifact(
+        method_id=evidence.key.method_id,
+        seed=evidence.key.seed,
+        model=model,
+        checkpoint_path=checkpoint.path,
+        checkpoint_sha256=checkpoint.model_sha256,
+        training_receipt=receipt,
+        stage_s_parent_sha256=str(receipt.get("stage_s_parent_sha256", "")),
+        decision_forecaster_gradient_norm=float(receipt.get("decision_forecaster_gradient_norm", 0.0)),
+    )
+
+
 def _validate_complete_evaluation(
     gate1_root: Path,
     key: RecoveryCandidateKey,
@@ -361,7 +547,8 @@ def inspect_recovery_source(
         inspect_candidate(gate1_root, key, contract, data)
         for key in expected_recovery_candidates(contract)
     )
-    return Gate1RecoveryInspection(source, failure_hash, candidates)
+    final_rows = inspect_final_rows(source, contract, data)
+    return Gate1RecoveryInspection(source, failure_hash, candidates, final_rows)
 
 
 def _copy_checked(source: Path, destination: Path, expected_hash: str) -> None:
@@ -434,6 +621,20 @@ def build_recovery_manifest(
             "runtime_seconds_reused": float(evidence.runtime_seconds_reused),
             "reason": evidence.reason,
         })
+    final_rows = [
+        {
+            "method_id": evidence.key.method_id,
+            "seed": evidence.key.seed,
+            "validation_state": evidence.state,
+            "action": "reused-checkpoint" if evidence.state == "reusable-checkpoint" else "trained",
+            "training_reused": evidence.state == "reusable-checkpoint",
+            "source_row": str(evidence.source_row),
+            "artifact_hashes": dict(evidence.file_sha256),
+            "runtime_seconds_reused": float(evidence.runtime_seconds_reused),
+            "reason": evidence.reason,
+        }
+        for evidence in inspection.final_rows
+    ]
     return {
         "schema_version": "rsc-pf-complete-formal-gate1-recovery-v1",
         "status": "complete",
@@ -452,6 +653,10 @@ def build_recovery_manifest(
         "reused_candidate_count": sum(1 for item in candidates if item["training_reused"]),
         "reused_training_runtime_seconds": sum(float(item["runtime_seconds_reused"]) for item in candidates if item["training_reused"]),
         "candidates": candidates,
+        "final_row_count": len(final_rows),
+        "reused_final_row_count": sum(1 for item in final_rows if item["training_reused"]),
+        "reused_final_training_runtime_seconds": sum(float(item["runtime_seconds_reused"]) for item in final_rows if item["training_reused"]),
+        "final_rows": final_rows,
         "source_modified": False,
         "evaluation_year_accessed": False,
         "test_set_accessed": False,
@@ -500,6 +705,9 @@ def restore_differentiable_lp_artifact(
 __all__ = [
     "CandidateValidationError",
     "CandidatePaths",
+    "FINAL_REUSABLE_METHOD_IDS",
+    "FinalRowEvidence",
+    "FinalRowKey",
     "Gate1RecoveryInspection",
     "RecoveryCandidateEvidence",
     "RecoveryCandidateKey",
@@ -507,9 +715,11 @@ __all__ = [
     "candidate_paths",
     "expected_recovery_candidates",
     "inspect_candidate",
+    "inspect_final_rows",
     "inspect_recovery_source",
     "load_json_object",
     "materialize_candidate",
     "build_recovery_manifest",
     "restore_differentiable_lp_artifact",
+    "restore_final_artifact",
 ]

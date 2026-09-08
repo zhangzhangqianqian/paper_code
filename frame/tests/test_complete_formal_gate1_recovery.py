@@ -8,15 +8,22 @@ import pytest
 import torch
 
 from src.joint_dispatch.complete_formal_contract import CompleteFormalContract
-from src.joint_dispatch.complete_formal_gate1 import Gate1RunConfig, load_gate1_data
+from src.joint_dispatch.complete_formal_gate1 import (
+    Gate1RunConfig,
+    load_gate1_data,
+    resolve_verified_itransformer_source,
+)
 import src.joint_dispatch.complete_formal_gate1 as gate1
 from src.joint_dispatch.complete_formal_gate1_recovery import (
     build_recovery_manifest,
     expected_recovery_candidates,
+    FinalRowKey,
     inspect_candidate,
+    inspect_final_rows,
     inspect_recovery_source,
     materialize_candidate,
     restore_differentiable_lp_artifact,
+    restore_final_artifact,
 )
 from scripts.run_rsc_pf_complete_formal_gate1_real import build_parser
 
@@ -26,6 +33,7 @@ CONTRACT_PATH = FRAME_ROOT / "configs" / "rsc_pf_complete_formal_v1.json"
 GATE0_TRANSITION = FRAME_ROOT / "reports" / "rsc_pf_complete_formal" / "complete_formal_gate0_20260906_i" / "gate0" / "GATE0_TRANSITION.json"
 SOURCE_RUN = FRAME_ROOT / "reports" / "joint_forecast_dispatch_formal_v4_2" / "formal_v4_2_20260905_j"
 FAILED_RUN = FRAME_ROOT / "reports" / "rsc_pf_complete_formal" / "complete_formal_gate1_20260906_b"
+RECOVERED_RUN = FRAME_ROOT / "reports" / "rsc_pf_complete_formal" / "complete_formal_gate1_recovered_20260907_a"
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +67,28 @@ def test_real_failed_run_is_read_only_inspectable(contract, gate1_data):
     assert states[("Differentiable-LP", 1e-5)] == "reusable-checkpoint"
     assert states[("Differentiable-LP", 3e-5)] == "retrain-required"
     assert inspection.failure_receipt_sha256
+
+
+def test_itransformer_source_preflight_resolves_against_current_frame(contract, gate1_data, tmp_path):
+    source, adapter_receipt, diff_receipt = resolve_verified_itransformer_source(gate1_data, tmp_path)
+    assert source["resolved_source_root"].endswith("third_party\\iTransformer_source") or source["resolved_source_root"].endswith("third_party/iTransformer_source")
+    assert adapter_receipt.is_file()
+    assert diff_receipt.is_file()
+
+
+def test_final_rows_are_read_only_and_restore_all_completed_seed_2026_rows(contract, gate1_data, tmp_path):
+    inspection = inspect_recovery_source(RECOVERED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    expected_methods = ("RSC-PF", "Decoupled-RSC-PF", "State-Conditioned-PTO", "Direct-Policy", "Scheme2R-PTO")
+    assert all(inspection.final_by_key[FinalRowKey(method, 2026)].state == "reusable-checkpoint" for method in expected_methods)
+    for method in expected_methods:
+        key = FinalRowKey(method, 2026)
+        artifact = restore_final_artifact(
+            inspection.final_by_key[key], gate1_data, contract,
+            tmp_path / method,
+        )
+        assert artifact.method_id == method
+        assert artifact.checkpoint_path.parent == (tmp_path / method).resolve()
+        assert artifact.checkpoint_sha256 == inspection.final_by_key[key].file_sha256["CHECKPOINT.pt"]
 
 
 def test_recovery_rejects_lineage_contract_mismatch(tmp_path, contract, gate1_data):

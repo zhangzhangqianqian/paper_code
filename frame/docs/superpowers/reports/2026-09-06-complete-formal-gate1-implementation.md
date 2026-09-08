@@ -82,3 +82,29 @@ this preflight:
 cd 'D:\Paper\github_work\paper-code-formal-v42-gate0\frame'
 & 'D:\Paper\envs\rsc_pf_diffopt_v4\python.exe' scripts/run_rsc_pf_complete_formal_gate1_real.py --contract configs\rsc_pf_complete_formal_v1.json --gate0-transition reports\rsc_pf_complete_formal\complete_formal_gate0_20260906_i\gate0\GATE0_TRANSITION.json --source-run reports\joint_forecast_dispatch_formal_v4_2\formal_v4_2_20260905_j --output-root reports\rsc_pf_complete_formal --run-id complete_formal_gate1_recovered_20260907_a --resume-from reports\rsc_pf_complete_formal\complete_formal_gate1_20260906_b
 ```
+
+## Task 7 recovery repair (2026-09-08)
+
+The previous recovery attempt stopped at Official iTransformer-PTO because a
+valid `frame/third_party/iTransformer_source` receipt was resolved relative to
+the data-run parent. The Gate1 source resolver now anchors that path to the
+current formal frame, rejects path escapes, and verifies the pinned checkout
+before any long training starts.
+
+The continuation path was also extended to validate and reuse the five final
+seed-2026 training checkpoints already present in
+`complete_formal_gate1_recovered_20260907_a`. The restored rows are
+RSC-PF, Decoupled-RSC-PF, State-Conditioned-PTO, Direct-Policy, and
+Scheme2R-PTO. Their model parameters and optimizer state load without an
+optimizer step; invalid or missing rows are retrained normally. Actions and
+hashes are recorded in `GATE1_MATRIX_RECOVERY.json` and the recovery manifest.
+
+Verification completed:
+
+```text
+19 recovery/source tests passed
+short smoke continuation passed with 37 synthetic, non-authorizing rows
+git diff --check passed
+```
+
+No full formal Gate1 continuation was started by this repair.

@@ -21,11 +21,13 @@ import numpy as np
 from .complete_formal_contract import CompleteFormalContract, MethodSeedKey, STOCHASTIC_METHOD_IDS
 from .complete_formal_execution import audit_complete_formal
 from .complete_formal_gate1_recovery import (
+    FinalRowKey,
     Gate1RecoveryInspection,
     build_recovery_manifest,
     inspect_recovery_source,
     materialize_candidate,
     restore_differentiable_lp_artifact,
+    restore_final_artifact,
 )
 from .formal_v4_2_artifacts import sha256_file, write_once_json
 from .formal_v4_2_data import NormalizationReceiptV42
@@ -52,6 +54,7 @@ from .formal_v4_2_training import StageBudgetV42
 from .formal_v4_diffopt import DifferentiableIESLayer
 from .formal_v4_method_adapter import build_formal_v4_method_adapter
 from .formal_v4_2_methods import build_v42_method
+from .formal_v4_itransformer import verify_itransformer_source_files
 
 
 @dataclass(frozen=True)
@@ -266,19 +269,56 @@ def _legacy_freeze(
     }
 
 
-def _itransformer_receipt(data: Gate1DataBundle, output_dir: Path) -> tuple[dict[str, Any], Path, Path]:
+def resolve_verified_itransformer_source(
+    data: Gate1DataBundle,
+    output_dir: Path,
+) -> tuple[dict[str, Any], Path, Path]:
+    """Resolve and verify the pinned upstream source before training starts.
+
+    The source receipt stores a repository-relative path (often prefixed with
+    ``frame/`` because it was produced by a parent orchestration script).  It
+    must be resolved against this checkout, never against the data run's
+    parent directories.  This avoids the old failure mode where a valid linked
+    worktree was accidentally addressed one directory above the formal frame.
+    """
     source_receipt_path = data.source_run_root / "protocol" / "ITRANSFORMER_SOURCE_RECEIPT.json"
     diff_receipt_path = data.source_run_root / "protocol" / "DIFFERENTIABLE_LP_ENVIRONMENT_RECEIPT.json"
     if not source_receipt_path.is_file() or not diff_receipt_path.is_file():
         raise FileNotFoundError("Gate 1 requires the verified iTransformer and DiffLP receipts")
     source = _json(source_receipt_path)
+    relative = Path(str(source.get("source_root", "")))
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        raise PermissionError("iTransformer source_root must be repository-relative")
+    frame_root = Path(__file__).resolve().parents[2]
+    source_root = frame_root / (
+        Path(*relative.parts[1:])
+        if relative.parts[0].lower() == "frame"
+        else relative
+    )
+    if not source_root.is_dir():
+        raise FileNotFoundError(
+            f"iTransformer source root is not a readable Git checkout: {source_root}"
+        )
+    verify_itransformer_source_files(source_root, source, require_license=True)
     legacy = {"schema_version": "formal-v4.1-itransformer-source-v1"}
-    for name in ("source_root", "repository", "commit", "backbone_class", "imported_file_hashes", "license_file", "license_sha256", "reproduction_level", "verified"):
+    for name in (
+        "source_root", "repository", "commit", "backbone_class",
+        "imported_file_hashes", "license_file", "license_sha256",
+        "reproduction_level", "verified",
+    ):
         if name in source:
             legacy[name] = source[name]
+    source = {**source, "resolved_source_root": str(source_root)}
+    legacy["resolved_source_root"] = str(source_root)
     receipt = output_dir / "ITRANSFORMER_ADAPTER_RECEIPT.json"
     write_once_json(receipt, legacy)
     return source, receipt, diff_receipt_path
+
+
+def _itransformer_receipt(data: Gate1DataBundle, output_dir: Path) -> tuple[dict[str, Any], Path, Path]:
+    """Backward-compatible name for the verified source resolver."""
+
+    return resolve_verified_itransformer_source(data, output_dir)
 
 
 def select_gate1_hyperparameters(
@@ -409,6 +449,7 @@ def train_gate1_matrix(
     *,
     smoke: bool = False,
     selected_hyperparameters: Mapping[str, Any] | None = None,
+    recovery: Gate1RecoveryInspection | None = None,
 ) -> Mapping[MethodSeedKey, TrainedMethodArtifact | None]:
     """Train all 35 stochastic rows using the frozen complete-v1 roster."""
 
@@ -424,30 +465,95 @@ def train_gate1_matrix(
     source_receipt = source
     diff_receipt = _json(diff_receipt_path)
     artifacts: dict[MethodSeedKey, TrainedMethodArtifact | None] = {}
+    recovery_actions: list[dict[str, Any]] = []
+    allow_reuse = recovery is not None and not smoke
+
+    def restore_if_available(method_id: str, seed: int) -> TrainedMethodArtifact | None:
+        if not allow_reuse or recovery is None:
+            return None
+        evidence = recovery.final_by_key.get(FinalRowKey(method_id, seed))
+        if evidence is None or evidence.state != "reusable-checkpoint":
+            return None
+        destination = rows_root / method_id / str(seed)
+        artifact = restore_final_artifact(evidence, work, contract, destination, source)
+        recovery_actions.append({
+            "method_id": method_id, "seed": seed, "action": "reused-checkpoint",
+            "source_row": str(evidence.source_row), "checkpoint_sha256": artifact.checkpoint_sha256,
+            "runtime_seconds_reused": evidence.runtime_seconds_reused,
+        })
+        return artifact
+
+    def load_recovered_teacher(seed: int) -> np.ndarray:
+        if recovery is None:
+            raise FileNotFoundError("recovery source is required for a reused RSC family")
+        teacher_path = recovery.source_root / "gate1" / "rows" / "_shared" / str(seed) / "TEACHER.npz"
+        if not teacher_path.is_file():
+            raise FileNotFoundError(f"recovery teacher artifact is missing: {teacher_path}")
+        with np.load(teacher_path, allow_pickle=False) as payload:
+            if "dispatch" not in payload:
+                raise ValueError("recovery teacher artifact has no dispatch array")
+            teacher = np.asarray(payload["dispatch"], dtype=np.float64)
+        if teacher.shape != (len(work.train), 4, 21) or not np.isfinite(teacher).all():
+            raise ValueError("recovery teacher artifact shape or finiteness is invalid")
+        return teacher
+
     for seed in (2026, 2027, 2028, 2029, 2030):
-        family = train_rsc_family(seed, work.legacy, freeze, work.parameters, rows_root, budget=budget)
-        teacher_path = rows_root / "_shared" / str(seed) / "TEACHER.npz"
-        with np.load(teacher_path, allow_pickle=False) as teacher_payload:
-            teacher_dispatch = teacher_payload["dispatch"]
-        direct = train_direct_policy(seed, work.legacy, freeze, work.parameters, rows_root / "Direct-Policy" / str(seed), budget=budget, teacher_dispatch=teacher_dispatch)
-        scheme = train_scheme2r_pto(seed, work.legacy, freeze, rows_root / "Scheme2R-PTO" / str(seed), budget=budget)
-        source_root = Path(str(source.get("source_root", "")))
-        if not source_root.is_absolute():
-            frame_root = work.source_run_root.parents[2]
-            source_root = frame_root / (Path(*source_root.parts[1:]) if source_root.parts and source_root.parts[0].lower() == "frame" else source_root)
+        family_method_ids = ("RSC-PF", "Decoupled-RSC-PF", "State-Conditioned-PTO")
+        family_ready = allow_reuse and recovery is not None and all(
+            recovery.final_by_key.get(FinalRowKey(method_id, seed)) is not None
+            and recovery.final_by_key[FinalRowKey(method_id, seed)].state == "reusable-checkpoint"
+            for method_id in family_method_ids
+        )
+        if family_ready:
+            family = {
+                method_id: restore_if_available(method_id, seed)
+                for method_id in family_method_ids
+            }
+            family = {method_id: artifact for method_id, artifact in family.items() if artifact is not None}
+            teacher_dispatch = load_recovered_teacher(seed)
+        else:
+            family = train_rsc_family(seed, work.legacy, freeze, work.parameters, rows_root, budget=budget)
+            recovery_actions.extend({
+                "method_id": method_id, "seed": seed, "action": "trained",
+                "runtime_seconds_reused": 0.0,
+            } for method_id in ("RSC-PF", "Decoupled-RSC-PF", "State-Conditioned-PTO"))
+            teacher_path = rows_root / "_shared" / str(seed) / "TEACHER.npz"
+            with np.load(teacher_path, allow_pickle=False) as teacher_payload:
+                teacher_dispatch = teacher_payload["dispatch"]
+        direct = restore_if_available("Direct-Policy", seed)
+        if direct is None:
+            direct = train_direct_policy(seed, work.legacy, freeze, work.parameters, rows_root / "Direct-Policy" / str(seed), budget=budget, teacher_dispatch=teacher_dispatch)
+            recovery_actions.append({"method_id": "Direct-Policy", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
+        scheme = restore_if_available("Scheme2R-PTO", seed)
+        if scheme is None:
+            scheme = train_scheme2r_pto(seed, work.legacy, freeze, rows_root / "Scheme2R-PTO" / str(seed), budget=budget)
+            recovery_actions.append({"method_id": "Scheme2R-PTO", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
         official = train_official_itransformer_pto(
             seed, work.legacy, freeze, source_receipt, rows_root / "Official iTransformer-PTO" / str(seed),
-            source_root=source_root, receipt_path=adapter_receipt, budget=budget,
+            source_root=Path(str(source.get("resolved_source_root", ""))),
+            receipt_path=adapter_receipt, budget=budget,
         )
+        recovery_actions.append({"method_id": "Official iTransformer-PTO", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
         diff = train_differentiable_lp(
             seed, work.legacy, freeze, diff_receipt, work.parameters,
             rows_root / "Differentiable-LP" / str(seed),
             budget=_budget(contract, multiplier=difflp_lr / 1.0e-5, smoke=smoke),
             layer=DifferentiableIESLayer(work.parameters), micro_batch_size=1 if smoke else 8,
         )
+        recovery_actions.append({"method_id": "Differentiable-LP", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
         by_method = {**family, "Direct-Policy": direct, "Scheme2R-PTO": scheme, "Official iTransformer-PTO": official, "Differentiable-LP": diff}
         for method_id in STOCHASTIC_METHOD_IDS:
             artifacts[MethodSeedKey(method_id, seed)] = by_method[method_id]
+    write_once_json(output_dir / "GATE1_MATRIX_RECOVERY.json", {
+        "schema_version": "rsc-pf-complete-formal-gate1-matrix-recovery-v1",
+        "recovery_used": bool(allow_reuse),
+        "source_run_root": None if recovery is None else str(recovery.source_root),
+        "actions": recovery_actions,
+        "reused_row_count": sum(1 for item in recovery_actions if item["action"] == "reused-checkpoint"),
+        "trained_row_count": sum(1 for item in recovery_actions if item["action"] == "trained"),
+        "source_modified": False,
+        "evaluation_year_accessed": False,
+    })
     return artifacts
 
 
@@ -592,13 +698,22 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
                 "evaluation_year_accessed": False,
             })
         search = select_gate1_hyperparameters(data, contract, gate1_dir, smoke=smoke_mode, recovery=recovery)
+        artifacts = train_gate1_matrix(
+            data, contract, gate1_dir, smoke=smoke_mode,
+            selected_hyperparameters=search, recovery=recovery,
+        )
         if recovery is not None and not smoke_mode:
             manifest = build_recovery_manifest(
                 recovery, root, contract, data, config.gate0_transition_path, search,
             )
+            matrix_recovery_path = gate1_dir / "GATE1_MATRIX_RECOVERY.json"
+            if matrix_recovery_path.is_file():
+                manifest = {
+                    **manifest,
+                    "matrix_recovery_sha256": sha256_file(matrix_recovery_path),
+                }
             recovery_manifest_path = gate1_dir / "RECOVERY_MANIFEST.json"
             write_once_json(recovery_manifest_path, manifest)
-        artifacts = train_gate1_matrix(data, contract, gate1_dir, smoke=smoke_mode, selected_hyperparameters=search)
         rows = evaluate_gate1_matrix(data, contract, gate1_dir, artifacts, smoke=smoke_mode)
         if smoke_mode:
             audit_status = "smoke-not-authorized"
@@ -643,6 +758,7 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
             "search_status": search.get("status"),
             "selected_rsc_decision_multiplier": search.get("rsc_selected_decision_multiplier"),
             "selected_difflp_learning_rate": search.get("difflp_selected_learning_rate"),
+            "matrix_recovery_sha256": sha256_file(gate1_dir / "GATE1_MATRIX_RECOVERY.json") if (gate1_dir / "GATE1_MATRIX_RECOVERY.json").is_file() else None,
             "recovery_manifest_sha256": None if recovery_manifest_path is None else sha256_file(recovery_manifest_path),
         }
         write_once_json(gate1_dir / "GATE1_EVIDENCE.json", evidence)
@@ -677,5 +793,6 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
 
 __all__ = [
     "Gate1DataBundle", "Gate1RunConfig", "evaluate_gate1_matrix", "evaluate_gate1_row",
-    "expected_gate1_rows", "load_gate1_data", "run_complete_gate1", "train_gate1_matrix",
+    "expected_gate1_rows", "load_gate1_data", "resolve_verified_itransformer_source",
+    "run_complete_gate1", "train_gate1_matrix",
 ]
