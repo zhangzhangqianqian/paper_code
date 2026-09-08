@@ -269,6 +269,23 @@ def _legacy_freeze(
     }
 
 
+def _resolve_itransformer_root(source: Mapping[str, Any]) -> Path:
+    relative = Path(str(source.get("source_root", "")))
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        raise PermissionError("iTransformer source_root must be repository-relative")
+    frame_root = Path(__file__).resolve().parents[2]
+    root = frame_root / (
+        Path(*relative.parts[1:])
+        if relative.parts[0].lower() == "frame"
+        else relative
+    )
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"iTransformer source root is not a readable Git checkout: {root}"
+        )
+    return root.resolve()
+
+
 def resolve_verified_itransformer_source(
     data: Gate1DataBundle,
     output_dir: Path,
@@ -286,19 +303,7 @@ def resolve_verified_itransformer_source(
     if not source_receipt_path.is_file() or not diff_receipt_path.is_file():
         raise FileNotFoundError("Gate 1 requires the verified iTransformer and DiffLP receipts")
     source = _json(source_receipt_path)
-    relative = Path(str(source.get("source_root", "")))
-    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
-        raise PermissionError("iTransformer source_root must be repository-relative")
-    frame_root = Path(__file__).resolve().parents[2]
-    source_root = frame_root / (
-        Path(*relative.parts[1:])
-        if relative.parts[0].lower() == "frame"
-        else relative
-    )
-    if not source_root.is_dir():
-        raise FileNotFoundError(
-            f"iTransformer source root is not a readable Git checkout: {source_root}"
-        )
+    source_root = _resolve_itransformer_root(source)
     verify_itransformer_source_files(source_root, source, require_license=True)
     legacy = {"schema_version": "formal-v4.1-itransformer-source-v1"}
     for name in (
@@ -543,7 +548,7 @@ def train_gate1_matrix(
             recovery_actions.append({"method_id": "Scheme2R-PTO", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
         official = train_official_itransformer_pto(
             seed, work.legacy, freeze, source_receipt, rows_root / "Official iTransformer-PTO" / str(seed),
-            source_root=Path(str(source.get("resolved_source_root", ""))),
+            source_root=_resolve_itransformer_root(source_receipt),
             receipt_path=adapter_receipt, budget=budget,
         )
         recovery_actions.append({"method_id": "Official iTransformer-PTO", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
