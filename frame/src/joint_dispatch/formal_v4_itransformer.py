@@ -63,7 +63,10 @@ def verify_itransformer_source_files(source_root: str | Path, receipt: Mapping[s
     try:
         actual_commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True, stderr=subprocess.STDOUT).strip()
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise ValueError("iTransformer source root is not a readable Git checkout") from exc
+        raise ValueError(
+            f"iTransformer source root is not a readable Git checkout: {root}; "
+            f"git rev-parse failed: {exc}"
+        ) from exc
     if actual_commit != str(receipt["commit"]):
         raise ValueError("iTransformer Git HEAD does not match the receipt commit")
     imported = receipt.get("imported_file_hashes", {})
