@@ -596,6 +596,7 @@ def build_recovery_manifest(
     data: "Gate1DataBundle",
     gate0_transition_path: str | Path,
     search_payload: Mapping[str, Any],
+    matrix_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the immutable provenance envelope for a completed recovery run."""
 
@@ -621,13 +622,18 @@ def build_recovery_manifest(
             "runtime_seconds_reused": float(evidence.runtime_seconds_reused),
             "reason": evidence.reason,
         })
+    matrix_actions = {}
+    if isinstance(matrix_payload, Mapping):
+        for item in matrix_payload.get("actions", []):
+            if isinstance(item, Mapping):
+                matrix_actions[(str(item.get("method_id")), int(item.get("seed")))] = str(item.get("action", "trained"))
     final_rows = [
         {
             "method_id": evidence.key.method_id,
             "seed": evidence.key.seed,
             "validation_state": evidence.state,
-            "action": "reused-checkpoint" if evidence.state == "reusable-checkpoint" else "trained",
-            "training_reused": evidence.state == "reusable-checkpoint",
+            "action": matrix_actions.get((evidence.key.method_id, evidence.key.seed), "trained"),
+            "training_reused": matrix_actions.get((evidence.key.method_id, evidence.key.seed)) == "reused-checkpoint",
             "source_row": str(evidence.source_row),
             "artifact_hashes": dict(evidence.file_sha256),
             "runtime_seconds_reused": float(evidence.runtime_seconds_reused),

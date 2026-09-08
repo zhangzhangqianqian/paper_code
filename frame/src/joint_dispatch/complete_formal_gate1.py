@@ -466,7 +466,20 @@ def train_gate1_matrix(
     diff_receipt = _json(diff_receipt_path)
     artifacts: dict[MethodSeedKey, TrainedMethodArtifact | None] = {}
     recovery_actions: list[dict[str, Any]] = []
-    allow_reuse = recovery is not None and not smoke
+    reuse_disabled_reason: str | None = None
+    if recovery is not None and not smoke:
+        search_path = recovery.source_root / "gate1" / "GATE1_SEARCH.json"
+        try:
+            prior_search = _json(search_path)
+            prior_rsc = float(prior_search["rsc_selected_decision_multiplier"])
+            prior_diff = float(prior_search["difflp_selected_learning_rate"])
+            if not np.isclose(prior_rsc, rsc_decision_multiplier, rtol=0.0, atol=1.0e-12):
+                reuse_disabled_reason = "recovery RSC decision multiplier differs from current selection"
+            elif not np.isclose(prior_diff, difflp_lr, rtol=0.0, atol=1.0e-12):
+                reuse_disabled_reason = "recovery Differentiable-LP learning rate differs from current selection"
+        except (FileNotFoundError, KeyError, TypeError, ValueError):
+            reuse_disabled_reason = "recovery search receipt is missing or invalid"
+    allow_reuse = recovery is not None and not smoke and reuse_disabled_reason is None
 
     def restore_if_available(method_id: str, seed: int) -> TrainedMethodArtifact | None:
         if not allow_reuse or recovery is None:
@@ -547,6 +560,7 @@ def train_gate1_matrix(
     write_once_json(output_dir / "GATE1_MATRIX_RECOVERY.json", {
         "schema_version": "rsc-pf-complete-formal-gate1-matrix-recovery-v1",
         "recovery_used": bool(allow_reuse),
+        "reuse_disabled_reason": reuse_disabled_reason,
         "source_run_root": None if recovery is None else str(recovery.source_root),
         "actions": recovery_actions,
         "reused_row_count": sum(1 for item in recovery_actions if item["action"] == "reused-checkpoint"),
@@ -705,6 +719,8 @@ def run_complete_gate1(config: Gate1RunConfig, *, smoke: bool | None = None) -> 
         if recovery is not None and not smoke_mode:
             manifest = build_recovery_manifest(
                 recovery, root, contract, data, config.gate0_transition_path, search,
+                _json(gate1_dir / "GATE1_MATRIX_RECOVERY.json")
+                if (gate1_dir / "GATE1_MATRIX_RECOVERY.json").is_file() else None,
             )
             matrix_recovery_path = gate1_dir / "GATE1_MATRIX_RECOVERY.json"
             if matrix_recovery_path.is_file():

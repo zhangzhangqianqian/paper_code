@@ -30,6 +30,10 @@ No long formal experiment was launched while applying this repair.
 5. Recovery manifests now include final-row reuse evidence and the matrix
    receipt hash. The Gate1 evidence remains fail-closed: no evidence or
    transition is written after a preflight/training exception.
+6. A continuation may reuse a final checkpoint only when the prior Gate1
+   search receipt selects the same RSC decision multiplier and
+   Differentiable-LP learning rate as the current run. Otherwise all affected
+   rows are retrained and the reason is recorded.
 
 ## Verification
 
