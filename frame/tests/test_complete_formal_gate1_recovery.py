@@ -10,6 +10,7 @@ import torch
 from src.joint_dispatch.complete_formal_contract import CompleteFormalContract
 from src.joint_dispatch.complete_formal_gate1 import (
     Gate1RunConfig,
+    _load_recovered_teacher,
     load_gate1_data,
     resolve_verified_itransformer_source,
 )
@@ -99,6 +100,15 @@ def test_interrupted_run_inspects_completed_rows_across_all_seeds(contract, gate
     assert states[("RSC-PF", 2027)] == "reusable-checkpoint"
     assert states[("Scheme2R-PTO", 2028)] == "reusable-checkpoint"
     assert states[("RSC-PF", 2029)] == "retrain-required"
+
+
+def test_recovered_teacher_falls_back_to_legacy_search_path(contract, gate1_data):
+    inspection = inspect_recovery_source(INTERRUPTED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    teacher = _load_recovered_teacher(
+        inspection, 2026, expected_train_count=len(gate1_data.train), rsc_decision_multiplier=1.0,
+    )
+    assert teacher.shape == (len(gate1_data.train), 4, 21)
+    assert np.isfinite(teacher).all()
 
 
 def test_recovery_rejects_lineage_contract_mismatch(tmp_path, contract, gate1_data):

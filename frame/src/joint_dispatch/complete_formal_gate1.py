@@ -286,6 +286,36 @@ def _resolve_itransformer_root(source: Mapping[str, Any]) -> Path:
     return root.resolve()
 
 
+def _load_recovered_teacher(
+    recovery: Gate1RecoveryInspection,
+    seed: int,
+    *,
+    expected_train_count: int,
+    rsc_decision_multiplier: float,
+) -> np.ndarray:
+    """Load a validated teacher from a prior run, including legacy search paths."""
+
+    source_root = recovery.source_root / "gate1"
+    candidates = [
+        source_root / "rows" / "_shared" / str(seed) / "TEACHER.npz",
+        source_root / "search" / f"rsc_multiplier_{float(rsc_decision_multiplier):g}"
+        / "rows" / "_shared" / str(seed) / "TEACHER.npz",
+    ]
+    for teacher_path in candidates:
+        if not teacher_path.is_file():
+            continue
+        with np.load(teacher_path, allow_pickle=False) as payload:
+            if "dispatch" not in payload:
+                continue
+            teacher = np.asarray(payload["dispatch"], dtype=np.float64)
+        if teacher.shape == (expected_train_count, 4, 21) and np.isfinite(teacher).all():
+            return teacher
+    raise FileNotFoundError(
+        "recovery teacher artifact is missing or invalid; checked: "
+        + ", ".join(str(path) for path in candidates)
+    )
+
+
 def resolve_verified_itransformer_source(
     data: Gate1DataBundle,
     output_dir: Path,
@@ -504,16 +534,12 @@ def train_gate1_matrix(
     def load_recovered_teacher(seed: int) -> np.ndarray:
         if recovery is None:
             raise FileNotFoundError("recovery source is required for a reused RSC family")
-        teacher_path = recovery.source_root / "gate1" / "rows" / "_shared" / str(seed) / "TEACHER.npz"
-        if not teacher_path.is_file():
-            raise FileNotFoundError(f"recovery teacher artifact is missing: {teacher_path}")
-        with np.load(teacher_path, allow_pickle=False) as payload:
-            if "dispatch" not in payload:
-                raise ValueError("recovery teacher artifact has no dispatch array")
-            teacher = np.asarray(payload["dispatch"], dtype=np.float64)
-        if teacher.shape != (len(work.train), 4, 21) or not np.isfinite(teacher).all():
-            raise ValueError("recovery teacher artifact shape or finiteness is invalid")
-        return teacher
+        return _load_recovered_teacher(
+            recovery,
+            seed,
+            expected_train_count=len(work.train),
+            rsc_decision_multiplier=rsc_decision_multiplier,
+        )
 
     for seed in (2026, 2027, 2028, 2029, 2030):
         family_method_ids = ("RSC-PF", "Decoupled-RSC-PF", "State-Conditioned-PTO")
@@ -562,9 +588,14 @@ def train_gate1_matrix(
                     "runtime_seconds_reused": 0.0,
                 } for method_id in family_method_ids)
 
-        if allow_reuse and recovery is not None and (recovery.source_root / "gate1" / "rows" / "_shared" / str(seed) / "TEACHER.npz").is_file():
-            teacher_dispatch = load_recovered_teacher(seed)
+        if allow_reuse and recovery is not None:
+            try:
+                teacher_dispatch = load_recovered_teacher(seed)
+            except FileNotFoundError:
+                teacher_dispatch = None
         else:
+            teacher_dispatch = None
+        if teacher_dispatch is None:
             teacher_path = rows_root / "_shared" / str(seed) / "TEACHER.npz"
             if not teacher_path.is_file():
                 teacher_path = rows_root / "_recovery_staging" / str(seed) / "_shared" / str(seed) / "TEACHER.npz"
