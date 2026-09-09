@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 import torch
 
-from .complete_formal_contract import CompleteFormalContract
+from .complete_formal_contract import CompleteFormalContract, FROZEN_SEEDS
 from .formal_v4_2_artifacts import sha256_file
 from .formal_v4_2_checkpoint import load_training_checkpoint
 from .formal_v4_2_gate2_training import (
@@ -330,7 +330,8 @@ def inspect_final_rows(
 
     source = Path(source_root).resolve()
     return tuple(
-        _validate_final_row(source, FinalRowKey(method_id, 2026), contract, data)
+        _validate_final_row(source, FinalRowKey(method_id, seed), contract, data)
+        for seed in FROZEN_SEEDS
         for method_id in FINAL_REUSABLE_METHOD_IDS
     )
 

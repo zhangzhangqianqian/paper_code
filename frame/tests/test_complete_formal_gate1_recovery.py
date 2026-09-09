@@ -34,6 +34,7 @@ GATE0_TRANSITION = FRAME_ROOT / "reports" / "rsc_pf_complete_formal" / "complete
 SOURCE_RUN = FRAME_ROOT / "reports" / "joint_forecast_dispatch_formal_v4_2" / "formal_v4_2_20260905_j"
 FAILED_RUN = FRAME_ROOT / "reports" / "rsc_pf_complete_formal" / "complete_formal_gate1_20260906_b"
 RECOVERED_RUN = FRAME_ROOT / "reports" / "rsc_pf_complete_formal" / "complete_formal_gate1_recovered_20260907_a"
+INTERRUPTED_RUN = FRAME_ROOT / "reports" / "rsc_pf_complete_formal" / "complete_formal_gate1_repaired_20260908_d"
 
 
 @pytest.fixture(scope="module")
@@ -89,6 +90,15 @@ def test_final_rows_are_read_only_and_restore_all_completed_seed_2026_rows(contr
         assert artifact.method_id == method
         assert artifact.checkpoint_path.parent == (tmp_path / method).resolve()
         assert artifact.checkpoint_sha256 == inspection.final_by_key[key].file_sha256["CHECKPOINT.pt"]
+
+
+def test_interrupted_run_inspects_completed_rows_across_all_seeds(contract, gate1_data):
+    inspection = inspect_recovery_source(INTERRUPTED_RUN, contract, gate1_data, GATE0_TRANSITION)
+    assert len(inspection.final_rows) == 25
+    states = {(row.key.method_id, row.key.seed): row.state for row in inspection.final_rows}
+    assert states[("RSC-PF", 2027)] == "reusable-checkpoint"
+    assert states[("Scheme2R-PTO", 2028)] == "reusable-checkpoint"
+    assert states[("RSC-PF", 2029)] == "retrain-required"
 
 
 def test_recovery_rejects_lineage_contract_mismatch(tmp_path, contract, gate1_data):

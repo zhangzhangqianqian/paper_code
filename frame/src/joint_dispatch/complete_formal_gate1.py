@@ -517,25 +517,57 @@ def train_gate1_matrix(
 
     for seed in (2026, 2027, 2028, 2029, 2030):
         family_method_ids = ("RSC-PF", "Decoupled-RSC-PF", "State-Conditioned-PTO")
-        family_ready = allow_reuse and recovery is not None and all(
-            recovery.final_by_key.get(FinalRowKey(method_id, seed)) is not None
-            and recovery.final_by_key[FinalRowKey(method_id, seed)].state == "reusable-checkpoint"
-            for method_id in family_method_ids
-        )
-        if family_ready:
-            family = {
-                method_id: restore_if_available(method_id, seed)
-                for method_id in family_method_ids
-            }
-            family = {method_id: artifact for method_id, artifact in family.items() if artifact is not None}
+        family = {}
+        family_missing = []
+        if allow_reuse and recovery is not None:
+            for method_id in family_method_ids:
+                artifact = restore_if_available(method_id, seed)
+                if artifact is None:
+                    family_missing.append(method_id)
+                else:
+                    family[method_id] = artifact
+        else:
+            family_missing.extend(family_method_ids)
+
+        if family_missing:
+            # A recovered run can be interrupted after one or two branches of
+            # the shared family have completed.  Train the missing branches in
+            # a staging directory so valid recovered rows are never overwritten.
+            if family:
+                staging_root = rows_root / "_recovery_staging" / str(seed)
+                trained_family = train_rsc_family(
+                    seed, work.legacy, freeze, work.parameters, staging_root, budget=budget,
+                )
+                for method_id in family_missing:
+                    trained = trained_family[method_id]
+                    destination = rows_root / method_id / str(seed)
+                    destination.mkdir(parents=True, exist_ok=False)
+                    shutil.copy2(trained.checkpoint_path, destination / "CHECKPOINT.pt")
+                    shutil.copy2(
+                        trained.checkpoint_path.parent / "TRAINING_RECEIPT.json",
+                        destination / "TRAINING_RECEIPT.json",
+                    )
+                    family[method_id] = trained
+                    recovery_actions.append({
+                        "method_id": method_id, "seed": seed, "action": "trained",
+                        "runtime_seconds_reused": 0.0,
+                        "staging_root": str(staging_root),
+                    })
+            else:
+                family = train_rsc_family(
+                    seed, work.legacy, freeze, work.parameters, rows_root, budget=budget,
+                )
+                recovery_actions.extend({
+                    "method_id": method_id, "seed": seed, "action": "trained",
+                    "runtime_seconds_reused": 0.0,
+                } for method_id in family_method_ids)
+
+        if allow_reuse and recovery is not None and (recovery.source_root / "gate1" / "rows" / "_shared" / str(seed) / "TEACHER.npz").is_file():
             teacher_dispatch = load_recovered_teacher(seed)
         else:
-            family = train_rsc_family(seed, work.legacy, freeze, work.parameters, rows_root, budget=budget)
-            recovery_actions.extend({
-                "method_id": method_id, "seed": seed, "action": "trained",
-                "runtime_seconds_reused": 0.0,
-            } for method_id in ("RSC-PF", "Decoupled-RSC-PF", "State-Conditioned-PTO"))
             teacher_path = rows_root / "_shared" / str(seed) / "TEACHER.npz"
+            if not teacher_path.is_file():
+                teacher_path = rows_root / "_recovery_staging" / str(seed) / "_shared" / str(seed) / "TEACHER.npz"
             with np.load(teacher_path, allow_pickle=False) as teacher_payload:
                 teacher_dispatch = teacher_payload["dispatch"]
         direct = restore_if_available("Direct-Policy", seed)
