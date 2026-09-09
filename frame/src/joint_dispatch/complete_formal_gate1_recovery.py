@@ -14,6 +14,7 @@ import hashlib
 import shutil
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 
+import numpy as np
 import torch
 
 from .complete_formal_contract import CompleteFormalContract, FROZEN_SEEDS
@@ -68,6 +69,8 @@ FINAL_REUSABLE_METHOD_IDS = (
     "State-Conditioned-PTO",
     "Direct-Policy",
     "Scheme2R-PTO",
+    "Official iTransformer-PTO",
+    "Differentiable-LP",
 )
 
 
@@ -336,7 +339,12 @@ def inspect_final_rows(
     )
 
 
-def _restore_optimizer(model: torch.nn.Module, method_id: str) -> torch.optim.Optimizer:
+def _restore_optimizer(
+    model: torch.nn.Module,
+    method_id: str,
+    *,
+    difflp_learning_rate: float = 1.0e-5,
+) -> torch.optim.Optimizer:
     """Recreate the optimizer parameter groups used by the saved artifact."""
 
     weight_decay = 1.0e-4
@@ -353,6 +361,15 @@ def _restore_optimizer(model: torch.nn.Module, method_id: str) -> torch.optim.Op
         return torch.optim.AdamW(model.parameters(), lr=1.0e-3, weight_decay=weight_decay)
     if method_id == "Scheme2R-PTO":
         return torch.optim.AdamW(model.parameters(), lr=1.0e-3, weight_decay=weight_decay)
+    if method_id == "Official iTransformer-PTO":
+        # The official-backbone PTO path uses the fixed forecaster optimizer
+        # in ``_train_forecaster`` (1e-3); its Gate-1 budget does not alter
+        # this legacy baseline optimizer.
+        return torch.optim.AdamW(model.parameters(), lr=1.0e-3, weight_decay=weight_decay)
+    if method_id == "Differentiable-LP":
+        if not np.isfinite(float(difflp_learning_rate)) or float(difflp_learning_rate) <= 0.0:
+            raise ValueError("Differentiable-LP learning rate must be finite and positive")
+        return torch.optim.AdamW(model.parameters(), lr=float(difflp_learning_rate), weight_decay=weight_decay)
     raise ValueError(f"unsupported final row restoration method: {method_id}")
 
 
@@ -362,6 +379,7 @@ def restore_final_artifact(
     contract: CompleteFormalContract,
     output_row: str | Path,
     source_info: Mapping[str, Any] | None = None,
+    difflp_learning_rate: float = 1.0e-5,
 ) -> TrainedMethodArtifact:
     """Copy and restore one validated final checkpoint without an update step."""
 
@@ -387,9 +405,26 @@ def restore_final_artifact(
         model = build_direct_policy_model(data.legacy, data.parameters)
     elif evidence.key.method_id == "Scheme2R-PTO":
         model = Scheme2RModel(exog_dim=12, task_count=4, lookback=24, horizon=4, dropout=0.0)
+    elif evidence.key.method_id == "Official iTransformer-PTO":
+        from .formal_v4_itransformer import OfficialITransformerAdapter
+
+        info = dict(source_info or {})
+        source_root = info.get("resolved_source_root")
+        receipt_path = info.get("adapter_receipt_path")
+        if not source_root or not receipt_path:
+            raise CandidateValidationError(
+                "Official iTransformer restoration requires the verified source root and adapter receipt"
+            )
+        model = OfficialITransformerAdapter(source_root, receipt_path)
+    elif evidence.key.method_id == "Differentiable-LP":
+        model = Scheme2RModel(exog_dim=12, task_count=4, lookback=24, horizon=4, dropout=0.0)
     else:  # pragma: no cover - guarded by FINAL_REUSABLE_METHOD_IDS
         raise ValueError(f"unsupported final row restoration method: {evidence.key.method_id}")
-    optimizer = _restore_optimizer(model, evidence.key.method_id)
+    optimizer = _restore_optimizer(
+        model,
+        evidence.key.method_id,
+        difflp_learning_rate=difflp_learning_rate,
+    )
     checkpoint = load_training_checkpoint(
         destination / "CHECKPOINT.pt",
         model=model,
@@ -674,6 +709,9 @@ def restore_differentiable_lp_artifact(
     row_dir: str | Path,
     data: "Gate1DataBundle",
     contract: CompleteFormalContract,
+    *,
+    learning_rate: float = 1.0e-5,
+    expected_seed: int | None = None,
 ) -> TrainedMethodArtifact:
     """Restore a verified DiffLP model and optimizer without an update step."""
 
@@ -683,12 +721,15 @@ def restore_differentiable_lp_artifact(
     if not receipt_path.is_file() or not checkpoint_path.is_file():
         raise CandidateValidationError("canonical Differentiable-LP checkpoint row is incomplete")
     receipt = load_json_object(receipt_path)
-    if receipt.get("method_id") != "Differentiable-LP" or receipt.get("seed") != 2026 or receipt.get("epochs") != 30:
+    receipt_seed = int(receipt.get("seed", -1))
+    if receipt.get("method_id") != "Differentiable-LP" or receipt_seed < 0 or receipt.get("epochs") != 30:
         raise CandidateValidationError("Differentiable-LP restoration receipt is invalid")
+    if expected_seed is not None and receipt_seed != int(expected_seed):
+        raise CandidateValidationError("Differentiable-LP restoration seed is invalid")
     if receipt.get("checkpoint_sha256") != sha256_file(checkpoint_path):
         raise CandidateValidationError("Differentiable-LP restoration checkpoint hash mismatch")
     model = Scheme2RModel(exog_dim=12, task_count=4, lookback=24, horizon=4, dropout=0.0)
-    budget = StageBudgetV42(forecaster_lr=1.0e-5)
+    budget = StageBudgetV42(forecaster_lr=float(learning_rate))
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=budget.forecaster_lr, weight_decay=budget.weight_decay,
     )
@@ -700,7 +741,7 @@ def restore_differentiable_lp_artifact(
     )
     return TrainedMethodArtifact(
         method_id="Differentiable-LP",
-        seed=2026,
+        seed=receipt_seed,
         model=model,
         checkpoint_path=checkpoint.path,
         checkpoint_sha256=checkpoint.model_sha256,

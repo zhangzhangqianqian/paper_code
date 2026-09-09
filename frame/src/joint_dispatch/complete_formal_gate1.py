@@ -437,7 +437,13 @@ def select_gate1_hyperparameters(
             action = "reused-complete"
         elif evidence is not None and evidence.state == "reusable-checkpoint":
             destination_row = materialize_candidate(evidence, trial_root)
-            artifact = restore_differentiable_lp_artifact(destination_row, work, contract)
+            artifact = restore_differentiable_lp_artifact(
+                destination_row,
+                work,
+                contract,
+                learning_rate=learning_rate,
+                expected_seed=2026,
+            )
             row = evaluate_gate1_row(key, artifact, work, trial_root, contract=contract, paper_result=False)
             action = "reused-training-reran-evaluation"
         else:
@@ -523,7 +529,14 @@ def train_gate1_matrix(
         if evidence is None or evidence.state != "reusable-checkpoint":
             return None
         destination = rows_root / method_id / str(seed)
-        artifact = restore_final_artifact(evidence, work, contract, destination, source)
+        artifact = restore_final_artifact(
+            evidence,
+            work,
+            contract,
+            destination,
+            {**source, "adapter_receipt_path": str(adapter_receipt)},
+            difflp_learning_rate=difflp_lr,
+        )
         recovery_actions.append({
             "method_id": method_id, "seed": seed, "action": "reused-checkpoint",
             "source_row": str(evidence.source_row), "checkpoint_sha256": artifact.checkpoint_sha256,
@@ -609,19 +622,23 @@ def train_gate1_matrix(
         if scheme is None:
             scheme = train_scheme2r_pto(seed, work.legacy, freeze, rows_root / "Scheme2R-PTO" / str(seed), budget=budget)
             recovery_actions.append({"method_id": "Scheme2R-PTO", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
-        official = train_official_itransformer_pto(
-            seed, work.legacy, freeze, source_receipt, rows_root / "Official iTransformer-PTO" / str(seed),
-            source_root=_resolve_itransformer_root(source_receipt),
-            receipt_path=adapter_receipt, budget=budget,
-        )
-        recovery_actions.append({"method_id": "Official iTransformer-PTO", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
-        diff = train_differentiable_lp(
-            seed, work.legacy, freeze, diff_receipt, work.parameters,
-            rows_root / "Differentiable-LP" / str(seed),
-            budget=_budget(contract, multiplier=difflp_lr / 1.0e-5, smoke=smoke),
-            layer=DifferentiableIESLayer(work.parameters), micro_batch_size=1 if smoke else 8,
-        )
-        recovery_actions.append({"method_id": "Differentiable-LP", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
+        official = restore_if_available("Official iTransformer-PTO", seed)
+        if official is None:
+            official = train_official_itransformer_pto(
+                seed, work.legacy, freeze, source_receipt, rows_root / "Official iTransformer-PTO" / str(seed),
+                source_root=_resolve_itransformer_root(source_receipt),
+                receipt_path=adapter_receipt, budget=budget,
+            )
+            recovery_actions.append({"method_id": "Official iTransformer-PTO", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
+        diff = restore_if_available("Differentiable-LP", seed)
+        if diff is None:
+            diff = train_differentiable_lp(
+                seed, work.legacy, freeze, diff_receipt, work.parameters,
+                rows_root / "Differentiable-LP" / str(seed),
+                budget=_budget(contract, multiplier=difflp_lr / 1.0e-5, smoke=smoke),
+                layer=DifferentiableIESLayer(work.parameters), micro_batch_size=1 if smoke else 8,
+            )
+            recovery_actions.append({"method_id": "Differentiable-LP", "seed": seed, "action": "trained", "runtime_seconds_reused": 0.0})
         by_method = {**family, "Direct-Policy": direct, "Scheme2R-PTO": scheme, "Official iTransformer-PTO": official, "Differentiable-LP": diff}
         for method_id in STOCHASTIC_METHOD_IDS:
             artifacts[MethodSeedKey(method_id, seed)] = by_method[method_id]
