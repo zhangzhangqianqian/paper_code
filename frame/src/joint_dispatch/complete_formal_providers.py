@@ -7,15 +7,13 @@ realized labels and sealed evaluation arrays are not part of the provider API.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 import numpy as np
 
 from .complete_formal_contract import CompleteFormalContract, MethodSeedKey, PRIMARY_METHOD_IDS
 from .formal_v4_method_adapter import build_formal_v4_method_adapter
-from .matched_closed_loop import CausalOriginInput
-from .contract import DISPATCH_ORDER
+from .matched_closed_loop import CausalOriginInput, PlannedStep
 
 
 DEPLOYABLE_METHOD_IDS = (
@@ -30,33 +28,13 @@ DEPLOYABLE_METHOD_IDS = (
 REFERENCE_METHOD_IDS = ("Seasonal-Naive-PTO", "Perfect-Information-MPC")
 
 
-@dataclass(frozen=True)
-class CompletePlannedStep:
-    forecast: Optional[np.ndarray]
-    scheduler_demand: np.ndarray
-    renewable_forecast: np.ndarray
-    dispatch: np.ndarray
-    inference_lp_calls: int
+class CompletePlannedStep(PlannedStep):
+    """Planned step accepted directly by the chronological evaluator.
 
-    def __post_init__(self) -> None:
-        if self.forecast is not None:
-            forecast = np.asarray(self.forecast, dtype=np.float64)
-            if forecast.shape != (4, 4) or not np.isfinite(forecast).all():
-                raise ValueError("forecast must have finite shape [4,4] or be None")
-            object.__setattr__(self, "forecast", forecast)
-        for name, shape in (
-            ("scheduler_demand", (4, 4)),
-            ("renewable_forecast", (4, 2)),
-            ("dispatch", (4, len(DISPATCH_ORDER))),
-        ):
-            value = np.asarray(getattr(self, name), dtype=np.float64)
-            if value.shape != shape or not np.isfinite(value).all():
-                raise ValueError(f"{name} must have finite shape {shape}")
-            object.__setattr__(self, name, value)
-        calls = int(self.inference_lp_calls)
-        if calls < 0:
-            raise ValueError("inference_lp_calls must be non-negative")
-        object.__setattr__(self, "inference_lp_calls", calls)
+    The complete-formal registry used to define a structurally identical but
+    unrelated dataclass.  The evaluator intentionally performs a strict
+    ``isinstance`` check, so the formal result must share its concrete type.
+    """
 
 
 class CompleteActionProvider(Protocol):
@@ -122,7 +100,11 @@ class _AdapterProvider:
         if not isinstance(result, Mapping):
             raise TypeError(f"{self.method_id} adapter must return a mapping")
         forecast_value = result.get("forecast")
-        forecast = None if forecast_value is None else np.asarray(forecast_value, dtype=np.float64)
+        # Decision-only policies have no forecast metric contract, but the
+        # shared rollout transport still requires a finite [H,4] array.  The
+        # evaluator uses the method contract to omit forecast metrics for this
+        # family; zeros are only a transport placeholder.
+        forecast = np.zeros((4, 4), dtype=np.float64) if forecast_value is None else np.asarray(forecast_value, dtype=np.float64)
         dispatch = result.get("dispatch", result.get("planned_dispatch"))
         if dispatch is None:
             raise ValueError(f"{self.method_id} adapter did not return dispatch")

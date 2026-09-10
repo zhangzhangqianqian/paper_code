@@ -10,7 +10,11 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .contract import DISPATCH_ORDER, EXOG_ORDER, STATUS_ORDER, TASK_ORDER
-from .formal_v4_4_contract import METHODS
+METHODS = (
+    "RSC-PF", "Decoupled-RSC-PF", "Direct-Policy", "Scheme2R-PTO",
+    "State-Conditioned-PTO", "Official iTransformer-PTO", "Differentiable-LP",
+    "Perfect-Information-MPC", "Seasonal-Naive-PTO",
+)
 
 
 SCHEMA_VERSION = "joint-forecast-dispatch-formal-v4.6"

@@ -125,6 +125,7 @@ def synthetic_rows(contract: CompleteFormalContract, stage: str = "gate1", origi
             "seed": key.seed,
             "stage": stage,
             "synthetic": True,
+            "paper_result": False,
             "complete": True,
             "origin_count": count,
             "inference_lp_calls": spec.inference_lp_calls_per_origin * count,
@@ -255,7 +256,10 @@ def _write_row_artifacts(stage_dir: Path, key: MethodSeedKey, row: Any) -> None:
         _write_json(receipt_path, training_receipt)
     checkpoint = row_dir / "checkpoint.pt"
     if not checkpoint.exists():
-        checkpoint.write_bytes(b"synthetic-checkpoint-placeholder\n")
+        if bool(row_payload.get("synthetic", False)):
+            checkpoint.write_bytes(b"synthetic-checkpoint-placeholder\n")
+        else:
+            raise PermissionError(f"real row is missing its checkpoint: {checkpoint}")
     evaluation_receipt = {"method_id": key.method_id, "seed": key.seed, "stage": row_payload.get("stage"), "metrics_status": "metadata-only" if row_payload.get("synthetic", False) else "provided"}
     evaluation_path = row_dir / "EVALUATION_RECEIPT.json"
     if evaluation_path.exists():
@@ -292,16 +296,28 @@ def run_gate1(contract: CompleteFormalContract, output_dir: str | Path, rows: Op
 
     payload = rows if rows is not None else synthetic_rows(contract, "gate1")
     decision, audit, stage_dir = _run_gate(contract, output_dir, payload, stage="gate1", run_id=run_id)
-    transition = {"schema_version": "rsc-pf-complete-formal-gate1-transition-v1", "contract_sha256": contract.contract_sha256, "authorized_gate2": True, "evaluation_year_accessed": False, "test_set_accessed": False, "execution_receipt_sha256": decision.receipt_sha256, "audit_status": audit.status, "synthetic": all(bool(_row_value(row, "synthetic", False)) for row in _normalize_rows(payload).values())}
+    normalized = _normalize_rows(payload)
+    synthetic = any(_row_value(row, "synthetic", True) is not False for row in normalized.values())
+    paper_result = all(_row_value(row, "paper_result", False) is True for row in normalized.values())
+    authorized_gate2 = bool(audit.status == "pass" and not synthetic and paper_result)
+    transition = {"schema_version": "rsc-pf-complete-formal-gate1-transition-v1", "contract_sha256": contract.contract_sha256, "authorized_gate2": authorized_gate2, "evaluation_year_accessed": False, "test_set_accessed": False, "execution_receipt_sha256": decision.receipt_sha256, "audit_status": audit.status, "synthetic": synthetic, "paper_result": paper_result}
     _write_json(stage_dir / "GATE1_TRANSITION.json", transition)
-    return decision, audit, stage_dir
+    guarded_decision = GateDecision(decision.stage, authorized_gate2, decision.expected_rows, decision.missing_rows, decision.failures, decision.receipt_sha256)
+    return guarded_decision, audit, stage_dir
 
 
 def run_gate2(contract: CompleteFormalContract, output_dir: str | Path, gate1_transition_path: str | Path, rows: Optional[Mapping[Any, Any]] = None, *, run_id: str = "complete_formal_gate2_synthetic") -> tuple[GateDecision, AuditReceipt, Path]:
-    """Run Gate 2 only after the signed Gate 1 transition is accepted."""
+    """Run Gate 2 only after a real, audited Gate 1 transition is accepted."""
 
     contract.authorize_evaluation(gate1_transition_path)
-    payload = rows if rows is not None else synthetic_rows(contract, "gate2")
+    if rows is None:
+        raise PermissionError("Gate 2 requires explicit non-synthetic evaluated rows")
+    normalized = _normalize_rows(rows)
+    if any(_row_value(row, "synthetic", True) is not False for row in normalized.values()):
+        raise PermissionError("Gate 2 refuses synthetic rows")
+    if any(_row_value(row, "paper_result", False) is not True for row in normalized.values()):
+        raise PermissionError("Gate 2 requires paper-result rows")
+    payload = rows
     return _run_gate(contract, output_dir, payload, stage="gate2", run_id=run_id)
 
 

@@ -52,6 +52,7 @@
       "method_id": "Direct-Policy",
       "display_name": "Direct Policy",
       "role": "direct_policy",
+      "feasibility_adapter_id": "state_conditioned_chp_ramp_projection_v1",
       "stochastic": true,
       "deployable": true,
       "forecast_metrics_applicable": false,
@@ -174,7 +175,7 @@
   "source_contracts": {
     "formal_v46_config": {
       "path": "configs/joint_forecast_dispatch_formal_v4_6.json",
-      "sha256": "e0825de59e79dae97f89957c21ad23c1c49049764c0377822260512d4952e8f7"
+      "sha256": "a9b38eddb431233ec97d023518ac448be71d132c2a3f987a01c8013cdff086d1"
     },
     "search_budget_v4": {
       "path": "configs/joint_dispatch_search_budget_v4.json",
@@ -187,6 +188,55 @@
     "closed_loop_audit": {
       "path": "reports/rsc_pf_matched_closed_loop_2019/v2/MATCHED_CLOSED_LOOP_AUDIT.json",
       "sha256": "6f0cafd497b4b367c03fa2207589e6dcf1f6f76f3b6562eed98dc98c9284caf7"
+    }
+  },
+  "capacity_binding": {
+    "schema_version": "rsc-pf-complete-formal-capacity-binding-v1",
+    "status": "pass",
+    "fit_years": [2015, 2016, 2017, 2018],
+    "selection_influenced_capacity": false,
+    "evaluation_year_accessed": false,
+    "selected_multiplier": 2.7,
+    "thresholds": {
+      "cooling_shortage_energy_ratio_max": 0.005,
+      "cooling_shortage_hour_rate_max": 0.01
+    },
+    "chronological_audit": {
+      "solves": 35007,
+      "meets_threshold": true
+    },
+    "benchmark_values": {
+      "grid_import_capacity": 1930.5,
+      "chp_electric_capacity": 450.45,
+      "chp_heat_capacity": 579.15,
+      "gas_boiler_capacity": 1148.2812,
+      "electric_chiller_capacity": 802.26,
+      "absorption_chiller_capacity": 802.26,
+      "bess_power_capacity": 257.4,
+      "bess_energy_capacity": 1029.6,
+      "pv_capacity": 3504.9640567560473,
+      "wt_capacity": 4990.254431841916,
+      "chp_electric_efficiency": 0.35,
+      "chp_heat_efficiency": 0.45,
+      "gas_boiler_efficiency": 0.9,
+      "electric_chiller_cop": 3.5,
+      "absorption_chiller_cop": 0.75,
+      "bess_roundtrip_efficiency": 0.9,
+      "bess_throughput_cost": 0.000001,
+      "grid_energy_price": 1.0,
+      "gas_energy_price": 0.6,
+      "grid_emission_factor": 0.5,
+      "gas_emission_factor": 0.25,
+      "carbon_price_default": 0.0,
+      "unserved_penalty": 100.0,
+      "surplus_penalty": 0.1,
+      "chp_ramp_fraction": 0.5
+    },
+    "provenance": {
+      "rules_sha256": "9b5dbef27b82039ad4559f3c8b895c2824e2cf4d2bacc5ca6ff2060915c34053",
+      "ledger_sha256": "a0f442d94c37c21fde7af6fb91b5db54b1042f3d92d9b4c6a67f8f8acd280ffb",
+      "upstream_contract_path": "configs/joint_forecast_dispatch_formal_v4_2.json",
+      "upstream_contract_sha256": "c4d207b7f1ac7dac5fa0f687d0542f70dc5e5ceca3dca132fa59a5d94f8bbc6e"
     }
   },
   "output": {

@@ -21,6 +21,7 @@ from src.joint_dispatch.formal_v4_2_gate2_training import (
 )
 from src.joint_dispatch.formal_v4_2_training import StageBudgetV42
 from src.joint_dispatch.formal_v4_data import FormalV4WindowSplit
+from src.joint_dispatch.formal_v4_models import DirectPolicyModel
 from src.models import Scheme2RModel
 
 
@@ -183,6 +184,22 @@ def test_direct_policy_has_no_forecast_training(tmp_path: Path) -> None:
     assert row.training_receipt["optimizer_steps"] > 0
 
 
+def test_direct_policy_projection_preserves_chp_ramp_feasibility_and_gradient() -> None:
+    parameters = _parameters()
+    parameters["chp_ramp_fraction"] = 0.2
+    model = DirectPolicyModel(decoder_parameters=parameters, dropout=0.0)
+    planning = torch.zeros((2, 4, 3), dtype=torch.float32, requires_grad=True)
+    previous_chp = torch.tensor([[9.0], [0.0]], dtype=torch.float64)
+    projected = model._project_planning_demand(planning, previous_chp)
+    # The first sample must retain enough electric demand for the 9 -> 7
+    # ramp-down interval; the second sample remains at the numerical margin.
+    assert projected[0, 0, 0].item() >= 7.0
+    assert projected[1, 0, 0].item() > 0.0
+    projected.sum().backward()
+    assert planning.grad is not None
+    assert torch.isfinite(planning.grad).all().item()
+
+
 class _TinyITransformer(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -237,3 +254,5 @@ def test_diff_lp_training_is_real_and_complete(tmp_path: Path) -> None:
     assert evidence["failed_solves"] == 0
     assert evidence["effective_batch_size"] == 64
     assert evidence["training_solver_calls"] > 0
+    assert evidence["solver_inaccurate_warning_count"] == 0
+    assert evidence["solver_quality_status"] == "no_inaccurate_warning"

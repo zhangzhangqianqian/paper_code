@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 import time
+import warnings
 from typing import Any, Iterator, Mapping
 
 import numpy as np
@@ -679,6 +680,9 @@ def train_differentiable_lp(
     expected_exposures = len(data.train) * active_budget.max_epochs
     sample_exposures = training_solver_calls = failed_solves = optimizer_steps = 0
     maximum_gradient_norm = 0.0
+    solver_warning_count = 0
+    solver_warning_categories: dict[str, int] = {}
+    solver_inaccurate_warning_count = 0
     history: list[float] = []
     started = time.perf_counter()
     for _epoch in range(active_budget.max_epochs):
@@ -709,10 +713,18 @@ def train_differentiable_lp(
                 torch.zeros_like(prices[..., 0]), prices[..., 2],
             ), dim=-1)
             try:
-                dispatch = layer(
-                    forecast_physical[..., :3], batch["renewable_forecast"], lp_prices,
-                    batch["initial_soc"], batch["previous_chp"],
-                )
+                with warnings.catch_warnings(record=True) as caught_warnings:
+                    warnings.simplefilter("always")
+                    dispatch = layer(
+                        forecast_physical[..., :3], batch["renewable_forecast"], lp_prices,
+                        batch["initial_soc"], batch["previous_chp"],
+                    )
+                solver_warning_count += len(caught_warnings)
+                for warning in caught_warnings:
+                    category = warning.category.__name__
+                    solver_warning_categories[category] = solver_warning_categories.get(category, 0) + 1
+                    if "inaccurate" in str(warning.message).lower():
+                        solver_inaccurate_warning_count += 1
             except Exception:
                 failed_solves += len(part.indices)
                 raise
@@ -755,6 +767,11 @@ def train_differentiable_lp(
             "effective_batch_size": 64,
             "micro_batch_size": int(micro_batch_size),
             "training_solver_calls": training_solver_calls,
+            "solver_warning_count": solver_warning_count,
+            "solver_warning_categories": solver_warning_categories,
+            "solver_inaccurate_warning_count": solver_inaccurate_warning_count,
+            "solver_quality_status": "inaccurate_warning" if solver_inaccurate_warning_count else "no_inaccurate_warning",
+            "solver_backend": "cvxpylayers-diffcp-SCS",
             "runtime_seconds": time.perf_counter() - started,
             "test_set_accessed": False,
         },

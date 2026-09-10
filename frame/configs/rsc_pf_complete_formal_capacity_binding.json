@@ -1,0 +1,59 @@
+{
+  "schema_version": "rsc-pf-complete-formal-capacity-binding-v1",
+  "status": "pass",
+  "fit_years": [2015, 2016, 2017, 2018],
+  "selection_influenced_capacity": false,
+  "evaluation_year_accessed": false,
+  "selected_multiplier": 2.7,
+  "thresholds": {
+    "cooling_shortage_energy_ratio_max": 0.005,
+    "cooling_shortage_hour_rate_max": 0.01
+  },
+  "capacity_scenario_hash": "9bb1e3d1d3d3e67cbb99f6684cc09eb65c3bdaae4563ffe75c2235b4b4f220fd",
+  "solver_identity": "src.scheduling.dispatch_lp.solve_dispatch_lp",
+  "chronological_audit": {
+    "solves": 35007,
+    "cooling_shortage_energy_ratio": 0.0023658570982440547,
+    "cooling_shortage_hour_rate": 0.0016568114948438883,
+    "meets_threshold": true
+  },
+  "provenance": {
+    "rules_sha256": "9b5dbef27b82039ad4559f3c8b895c2824e2cf4d2bacc5ca6ff2060915c34053",
+    "ledger_sha256": "a0f442d94c37c21fde7af6fb91b5db54b1042f3d92d9b4c6a67f8f8acd280ffb",
+    "upstream_contract_path": "configs/joint_forecast_dispatch_formal_v4_2.json",
+    "upstream_contract_sha256": "c4d207b7f1ac7dac5fa0f687d0542f70dc5e5ceca3dca132fa59a5d94f8bbc6e",
+    "capacity_freeze_source": "formal_v4_2_20260905_g/gate0/CAPACITY_FREEZE.json",
+    "capacity_freeze_sha256": "a0ba1f86365aaa68a3f6a54b4f07f2c79e9e184f95122e0c543453dfe87004af",
+    "capacity_freeze_schema": "formal-v4.2-capacity-freeze-v1",
+    "source_base_sha256": "6b1f69ae3f04f98ec518f752de4f121a2ba9247bf9675f471e265eef7f4e94c9",
+    "origin_manifest_sha256": "31d8090ebecfcc93c35bf0f6b62aac88da428e321cb62f8695e9f5e5145c9b81",
+    "resolved_parameter_sha256": "bf79d6a70ac6a0b1b3982762344de3f9b5621d4c9e93991ead3c16ff1bef5853"
+  },
+  "benchmark_values": {
+    "grid_import_capacity": 1930.5,
+    "chp_electric_capacity": 450.45,
+    "chp_heat_capacity": 579.15,
+    "gas_boiler_capacity": 1148.2812,
+    "electric_chiller_capacity": 802.26,
+    "absorption_chiller_capacity": 802.26,
+    "bess_power_capacity": 257.4,
+    "bess_energy_capacity": 1029.6,
+    "pv_capacity": 3504.9640567560473,
+    "wt_capacity": 4990.254431841916,
+    "chp_electric_efficiency": 0.35,
+    "chp_heat_efficiency": 0.45,
+    "gas_boiler_efficiency": 0.9,
+    "electric_chiller_cop": 3.5,
+    "absorption_chiller_cop": 0.75,
+    "bess_roundtrip_efficiency": 0.9,
+    "bess_throughput_cost": 1.0e-6,
+    "grid_energy_price": 1.0,
+    "gas_energy_price": 0.6,
+    "grid_emission_factor": 0.5,
+    "gas_emission_factor": 0.25,
+    "carbon_price_default": 0.0,
+    "unserved_penalty": 100.0,
+    "surplus_penalty": 0.1,
+    "chp_ramp_fraction": 0.5
+  }
+}

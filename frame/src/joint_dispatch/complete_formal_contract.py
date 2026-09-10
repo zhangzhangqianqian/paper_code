@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple
@@ -125,6 +126,16 @@ class CompleteFormalContract:
     def excluded_years(self) -> Tuple[int, ...]:
         return tuple(int(value) for value in self.payload["data_boundary"]["excluded_years"])
 
+    @property
+    def capacity_binding(self) -> Mapping[str, Any]:
+        return _require_mapping(self.payload.get("capacity_binding"), "capacity_binding")
+
+    @property
+    def capacity_parameters(self) -> Mapping[str, float]:
+        binding = self.capacity_binding
+        values = _require_mapping(binding.get("benchmark_values"), "capacity_binding.benchmark_values")
+        return MappingProxyType({str(key): float(value) for key, value in values.items()})
+
     def method(self, method_id: str) -> MethodSpec:
         for row in self.payload["methods"]:
             if row["method_id"] == method_id:
@@ -168,6 +179,14 @@ class CompleteFormalContract:
             raise PermissionError("Gate 1 transition does not authorize this contract")
         if payload.get("authorized_gate2") is not True:
             raise PermissionError("sealed evaluation requires an authorized Gate 1 transition")
+        # Synthetic/tiny matrices are useful for testing the protocol, but can
+        # never authorize access to the sealed evaluation split.  Require an
+        # explicit paper-result marker so an omitted field cannot be treated as
+        # a real experiment by default.
+        if payload.get("synthetic") is not False or payload.get("paper_result") is not True:
+            raise PermissionError("sealed evaluation requires a non-synthetic paper-result Gate 1 transition")
+        if payload.get("audit_status") != "pass":
+            raise PermissionError("sealed evaluation requires a passing Gate 1 audit")
         if payload.get("evaluation_year_accessed") is not False:
             raise PermissionError("Gate 1 transition reports evaluation-year access")
         if payload.get("test_set_accessed") is not False:
@@ -179,6 +198,7 @@ class CompleteFormalContract:
             raise ValueError("complete formal schema required")
         if self.payload.get("protocol_status") != "frozen":
             raise ValueError("complete formal contract must be frozen")
+        frame_root = _frame_root(self.source_path)
 
         architecture = _require_mapping(self.payload.get("architecture"), "architecture")
         if architecture.get("lookback") != 24 or architecture.get("horizon") != 4:
@@ -219,6 +239,9 @@ class CompleteFormalContract:
                 raise ValueError(f"{method_id} stochastic flag is invalid")
         if self.method("Direct-Policy").forecast_metrics_applicable:
             raise ValueError("Direct-Policy must report forecast metrics as not applicable")
+        direct_policy_row = next(row for row in self.payload["methods"] if row["method_id"] == "Direct-Policy")
+        if direct_policy_row.get("feasibility_adapter_id") != "state_conditioned_chp_ramp_projection_v1":
+            raise ValueError("Direct-Policy feasibility adapter is not frozen")
         if self.method("Differentiable-LP").reproduction_level != "cvxpylayers_methodology_adaptation":
             raise ValueError("Differentiable-LP reproduction level is invalid")
         if self.method("Differentiable-LP").inference_lp_calls_per_origin != 1:
@@ -227,6 +250,48 @@ class CompleteFormalContract:
             raise ValueError("RSC-PF must declare no inference LP call")
         if self.method("Perfect-Information-MPC").deployable:
             raise ValueError("Perfect-Information-MPC is a reference, not a deployable model")
+
+        capacity = self.capacity_binding
+        if capacity.get("schema_version") != "rsc-pf-complete-formal-capacity-binding-v1":
+            raise ValueError("capacity binding schema is invalid")
+        if capacity.get("status") != "pass":
+            raise ValueError("capacity binding must be a passing artifact")
+        if tuple(int(value) for value in capacity.get("fit_years", [])) != self.train_years:
+            raise ValueError("capacity binding must use the frozen training years")
+        if capacity.get("selection_influenced_capacity") is not False:
+            raise ValueError("selection data must not influence capacity binding")
+        if capacity.get("evaluation_year_accessed") is not False:
+            raise ValueError("capacity binding reports evaluation-year access")
+        if not math.isfinite(float(capacity.get("selected_multiplier", float("nan")))):
+            raise ValueError("capacity binding multiplier is invalid")
+        chronological = _require_mapping(capacity.get("chronological_audit"), "capacity_binding.chronological_audit")
+        if chronological.get("meets_threshold") is not True or int(chronological.get("solves", 0)) <= 0:
+            raise ValueError("capacity chronological audit is not passing")
+        thresholds = _require_mapping(capacity.get("thresholds"), "capacity_binding.thresholds")
+        if float(thresholds.get("cooling_shortage_energy_ratio_max")) != 0.005 or float(thresholds.get("cooling_shortage_hour_rate_max")) != 0.01:
+            raise ValueError("capacity thresholds are not frozen")
+        provenance = _require_mapping(capacity.get("provenance"), "capacity_binding.provenance")
+        upstream = _resolve_frame_path(frame_root, str(provenance.get("upstream_contract_path")))
+        if not upstream.is_file() or hashlib.sha256(upstream.read_bytes()).hexdigest() != str(provenance.get("upstream_contract_sha256")).lower():
+            raise ValueError("capacity upstream contract provenance is invalid")
+        benchmark_path = _resolve_frame_path(frame_root, "configs/standard_ies_benchmark_formal_v4_complete.json")
+        if not benchmark_path.is_file():
+            raise ValueError("current formal benchmark binding is missing")
+        benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
+        if benchmark.get("schema_version") != "standard-ies-benchmark-v4.1" or tuple(int(value) for value in benchmark.get("source_years", [])) != self.train_years:
+            raise ValueError("current formal benchmark is not training-only")
+        benchmark_values = _require_mapping(benchmark.get("values"), "benchmark.values")
+        declared_values = _require_mapping(capacity.get("benchmark_values"), "capacity_binding.benchmark_values")
+        required_capacity_keys = ("grid_import_capacity", "chp_electric_capacity", "chp_heat_capacity", "gas_boiler_capacity", "electric_chiller_capacity", "absorption_chiller_capacity", "bess_power_capacity", "bess_energy_capacity")
+        for key in required_capacity_keys:
+            actual = float(benchmark_values.get(key, float("nan")))
+            declared = float(declared_values.get(key, float("nan")))
+            if not math.isfinite(actual) or not math.isfinite(declared) or actual != declared or actual <= 0.0:
+                raise ValueError(f"capacity benchmark value is invalid: {key}")
+        for name, relative in (("rules_sha256", "configs/standard_ies_formal_v4_rules.yaml"), ("ledger_sha256", "configs/scheduling_parameter_ledger_v2.csv")):
+            path = _resolve_frame_path(frame_root, relative)
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != str(provenance.get(name)).lower():
+                raise ValueError(f"capacity {name} provenance is invalid")
 
         seeds = tuple(int(value) for value in _require_sequence(self.payload.get("seeds"), "seeds"))
         if seeds != FROZEN_SEEDS:
@@ -266,7 +331,6 @@ class CompleteFormalContract:
             raise ValueError("primary contrast is invalid")
 
         source_contracts = _require_mapping(self.payload.get("source_contracts"), "source_contracts")
-        frame_root = _frame_root(self.source_path)
         for name, item in source_contracts.items():
             record = _require_mapping(item, f"source_contracts.{name}")
             source = _resolve_frame_path(frame_root, str(record["path"]))

@@ -36,10 +36,12 @@ def test_gate1_rejects_one_missing_difflp_seed(contract, fake_rows):
 
 def test_gate1_writes_transition_only_after_independent_audit(contract, tmp_path):
     decision, audit, stage_dir = run_gate1(contract, tmp_path)
-    assert decision.authorized_next_gate is True
+    assert decision.authorized_next_gate is False
     assert audit.status == "pass"
     transition = json.loads((stage_dir / "GATE1_TRANSITION.json").read_text(encoding="utf-8"))
-    assert transition["authorized_gate2"] is True
+    assert transition["authorized_gate2"] is False
+    assert transition["synthetic"] is True
+    assert transition["paper_result"] is False
     assert transition["evaluation_year_accessed"] is False
     assert transition["test_set_accessed"] is False
     assert (stage_dir / "EXECUTION_RECEIPT.json").is_file()
@@ -53,12 +55,10 @@ def test_gate2_refuses_rejected_gate1(contract, tmp_path):
         run_gate2(contract, tmp_path, rejected)
 
 
-def test_gate2_accepts_only_contract_bound_transition(contract, tmp_path):
+def test_gate2_rejects_synthetic_transition(contract, tmp_path):
     _, _, stage_dir = run_gate1(contract, tmp_path, run_id="gate1")
-    decision, audit, gate2_dir = run_gate2(contract, tmp_path, stage_dir / "GATE1_TRANSITION.json", run_id="gate2")
-    assert decision.authorized_next_gate is True
-    assert audit.status == "pass"
-    assert gate2_dir.name == "gate2"
+    with pytest.raises(PermissionError, match="authorized Gate 1|non-synthetic"):
+        run_gate2(contract, tmp_path, stage_dir / "GATE1_TRANSITION.json", run_id="gate2")
 
 
 def test_gate1_rejects_future_or_excluded_access(contract, fake_rows):

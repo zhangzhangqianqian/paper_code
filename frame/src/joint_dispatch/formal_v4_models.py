@@ -337,9 +337,75 @@ class RegimeAwareRSCPFModel(_FormalV4Base):
 class DirectPolicyModel(_FormalV4Base):
     """Decision-only comparator with no supervised forecast output or loss."""
 
+    FEASIBILITY_ADAPTER_ID = "state_conditioned_chp_ramp_projection_v1"
+
     def __init__(self, *, decoder_parameters: Mapping[str, Any] | None = None, dropout: float = 0.0, **normalization: Any) -> None:
         super().__init__(decoder_parameters=decoder_parameters, dropout=dropout, **normalization)
         self.planning_head = nn.Sequential(nn.Linear(32 + 6, 64), nn.GELU(), nn.Linear(64, 3))
+
+    def _project_planning_demand(self, planning: Tensor, previous_chp: Tensor) -> Tensor:
+        """Project latent demand onto the decoder's CHP-ramp-feasible set.
+
+        Direct-Policy has no forecast bottleneck, so its randomly initialized
+        demand head can output values close to zero while the carried CHP state
+        is still near its previous operating point.  With no export variable in
+        the frozen 21-variable IES topology, that combination would make the
+        physical decoder's ramp interval empty.  This projection is a
+        differentiable, state-conditioned feasibility step: it raises only the
+        electric-demand component needed to make every future ramp interval
+        reachable, using the same cooling allocation bounds as the decoder.
+        It does not use future realized load or an optimizer.
+        """
+
+        if planning.ndim != 3 or tuple(planning.shape[1:]) != (4, 3):
+            raise ValueError("planning must have shape [B,4,3]")
+        if previous_chp.ndim != 2 or previous_chp.shape != (planning.shape[0], 1):
+            raise ValueError("previous_chp must have shape [B,1]")
+        p = self.core.decoder_parameters
+        ac_capacity = planning.new_tensor(float(p["absorption_chiller_capacity"]))
+        cop_ac = planning.new_tensor(float(p["absorption_chiller_cop"]))
+        boiler_capacity = planning.new_tensor(float(p["gas_boiler_capacity"]))
+        ec_capacity = planning.new_tensor(float(p["electric_chiller_capacity"]))
+        cop_ec = planning.new_tensor(float(p["electric_chiller_cop"]))
+        chp_capacity = planning.new_tensor(float(p["chp_electric_capacity"]))
+        ramp = planning.new_tensor(float(p["chp_ramp_fraction"]) * float(p["chp_electric_capacity"]))
+        # The decoder performs its interval audit in float64 while the policy
+        # head is float32.  Keep a tiny physical-unit margin so a boundary
+        # projection cannot be overturned by the float32-to-float64 cast.
+        projection_margin = planning.new_tensor(1.0e-3)
+
+        demand_c = planning[..., 1]
+        demand_h = planning[..., 2]
+        qac_safe = torch.minimum(ac_capacity, cop_ac * (boiler_capacity - demand_h).clamp_min(0.0))
+        cooling_served = torch.minimum(demand_c, ec_capacity + qac_safe)
+        # The decoder's electric-chiller allocation is never below this value.
+        lower_ec = (cooling_served - qac_safe).clamp_min(0.0)
+        # This is a safe upper bound for the same allocation when bounding the
+        # maximum CHP output that can be reached at the next step.
+        upper_ec = torch.minimum(cooling_served, ec_capacity)
+
+        projected_electric: list[Tensor] = []
+        previous_bound = previous_chp.to(dtype=planning.dtype)[:, 0].clamp_min(0.0).clamp_max(chp_capacity)
+        for index in range(4):
+            lower_chp = (previous_bound - ramp).clamp_min(0.0)
+            guaranteed_ec_power = lower_ec[:, index] / cop_ec
+            electric_floor = (lower_chp - guaranteed_ec_power + projection_margin).clamp_min(0.0)
+            current_electric = torch.maximum(planning[:, index, 0], electric_floor)
+            projected_electric.append(current_electric)
+
+            # Bound the largest CHP output the decoder could choose at this
+            # step; the next step must be reachable from that bound as well.
+            maximum_net_before_chp = current_electric + upper_ec[:, index] / cop_ec
+            previous_bound = torch.minimum(
+                torch.minimum(chp_capacity, previous_bound + ramp),
+                maximum_net_before_chp,
+            )
+        projected = planning.clone()
+        projected = torch.cat(
+            (torch.stack(projected_electric, dim=1).unsqueeze(-1), projected[..., 1:]),
+            dim=-1,
+        )
+        return projected
 
     def forward(self, **inputs: Tensor) -> FormalV4ForwardOutput:
         self._validate_common(inputs)
@@ -347,6 +413,7 @@ class DirectPolicyModel(_FormalV4Base):
         state_horizon = state.unsqueeze(1).expand(-1, 4, -1)
         planning = self.planning_head(torch.cat((state_horizon, inputs["scheduler_context"]), dim=-1))
         planning = F.softplus(planning)
+        planning = self._project_planning_demand(planning, inputs["previous_chp"])
         gas_zeros = planning.new_zeros((*planning.shape[:2], 1))
         physical_features = self.core._raw_physical_features(torch.cat((planning, gas_zeros), dim=-1), inputs["scheduler_context"])
         controls, dispatch = self._schedule(physical_features, state, inputs["previous_chp"])

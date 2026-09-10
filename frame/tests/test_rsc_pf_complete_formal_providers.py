@@ -11,7 +11,7 @@ from src.joint_dispatch.complete_formal_providers import (
     REFERENCE_METHOD_IDS,
     build_complete_provider_registry,
 )
-from src.joint_dispatch.matched_closed_loop import CausalOriginInput
+from src.joint_dispatch.matched_closed_loop import CausalOriginInput, PlannedStep
 from src.joint_dispatch.contract import DISPATCH_ORDER
 
 
@@ -46,7 +46,7 @@ class _CausalProbe:
             with pytest.raises(AttributeError):
                 getattr(origin, forbidden)
         _ = origin.load_history, origin.device_history, origin.scheduler_context
-        forecast = None if self.method_id == "Direct-Policy" else np.zeros((4, 4), dtype=np.float64)
+        forecast = np.zeros((4, 4), dtype=np.float64)
         return CompletePlannedStep(
             forecast=forecast,
             scheduler_demand=np.zeros((4, 4), dtype=np.float64),
@@ -84,11 +84,9 @@ def test_provider_receives_only_causal_origin(method_id, registry):
     registry.validate(CompleteFormalContract.from_path(CONTRACT_PATH))
     provider = registry.build(MethodSeedKey(method_id, 2026), fixture_resources())
     step = provider.plan(_origin())
+    assert isinstance(step, PlannedStep)
     assert step.dispatch.shape == (4, 21)
-    if method_id == "Direct-Policy":
-        assert step.forecast is None
-    else:
-        assert step.forecast.shape == (4, 4)
+    assert step.forecast.shape == (4, 4)
 
 
 def test_reference_row_is_registered_but_not_deployable(registry):

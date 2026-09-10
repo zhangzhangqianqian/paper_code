@@ -15,6 +15,7 @@ from .contract import DISPATCH_ORDER
 from .formal_v4_models import DirectPolicyModel, RSCPFModel
 from .formal_v4_diffopt import DifferentiableIESLayer
 from .formal_v4_itransformer import OfficialITransformerAdapter
+from .reference_data import seasonal_naive_24h
 
 
 def _array(window: Mapping[str, Any], name: str, shape: tuple[int, ...]) -> np.ndarray:
@@ -237,7 +238,11 @@ class SeasonalNaivePTOAdapter(_BaseAdapter):
         started = time.perf_counter()
         loads, _, _, _, soc, previous = self._window(window)
         renew, prices, _ = self._context(window, soc)
-        forecast = np.repeat(loads[:4, :], 1, axis=0)
+        # The 24-hour window is ordered as the preceding daily cycle.  Use the
+        # explicit causal helper rather than relying on a positional slice so
+        # the baseline's seasonal semantics are auditable and shared with the
+        # standalone formal baseline descriptor.
+        forecast = seasonal_naive_24h(loads, origin_index=24, horizon=4, task_count=4)
         context = dict(self.parameters); context["grid_energy_price"] = prices[:, 0]; context["gas_energy_price"] = prices[:, 1]; context["carbon_price"] = prices[:, 2]
         solved = solve_dispatch_lp(DispatchInputs(forecast[:, :3], renew[:, 0], renew[:, 1], context, soc, previous))
         if not solved.success:
@@ -248,6 +253,7 @@ class SeasonalNaivePTOAdapter(_BaseAdapter):
 
 class DirectPolicyAdapter(_BaseAdapter):
     method_id = "Direct-Policy"
+    feasibility_adapter_id = DirectPolicyModel.FEASIBILITY_ADAPTER_ID
     online_exact_lp = False
     online_optimizer_calls_per_window = 0
     forecast_metrics_applicable = False

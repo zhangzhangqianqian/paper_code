@@ -123,7 +123,7 @@ def freeze_v46_candidate(candidate: CalibratedCandidateV46) -> FrozenCandidateV4
     if candidate.pair.joint.model is None or candidate.pair.decoupled.model is None:
         raise ValueError("calibrated candidate must contain both models")
     if candidate.pair.joint.parent_sha256 != candidate.pair.decoupled.parent_sha256:
-        raise ValueError("Joint and Fair Decoupled parents differ")
+        raise ValueError("Joint and Decoupled-RSC-PF parents differ")
     return FrozenCandidateV46(
         risk_multiplier=float(candidate.risk_multiplier),
         joint_model=candidate.pair.joint.model,
